@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==1:
+	print "Fills gaps in alignments in a completely <<debile>> :-) fashion: "
+	print "         - iterate over all positions in the given multi-fasta-file"
+        print "		- We count if at a given position only x% of all sequences contain"
+	print "           a gap and FILL it with the consensus of the other sequences"
+	print "         - If there are gaps in all but x sequences, we simply DELETE"
+	print "           the symbol completely in all sequences."
+        print " SYNTAX: "
+        print " fillGaps <fa-filename> <gap fill threshold> <gap delete threshold>"
+	print "OPTIONS:"
+	print "status=true:   will print some status messages"
+	print "EXAMPLE:"
+	print " fillGaps Alignment-1.fa 50 50 --> Make sure there are no more gaps, will rather fill than delete"
+        exit() 
+
+def sort_by_value(d):
+     """ Returns the keys of dictionary d sorted by their values """
+     items=d.items()
+     backitems=[ [v[1],v[0]] for v in items]
+     backitems.sort()
+     return [ backitems[i][1] for i in range(0,len(backitems))]
+
+f = open(argv[1], 'r')
+fillThreshold = float(argv[2])
+delThreshold = float(argv[3])
+status=False
+print argv
+if (len(argv)>=5):
+  status=True
+
+lines = f.readlines()
+
+seqnames=[]
+seqs=[]
+seqcount = -1
+#read in sequences and seqnames
+for line in lines:
+     # filter out newlines
+     if line.strip()=="":
+       continue
+      
+     if line.strip().startswith(">"):
+       seqcount=seqcount+1
+       seqs.append("")
+       seqnames.append(line)
+       continue
+
+     #line has to be a sequence
+     seqs[seqcount]=seqs[seqcount]+line.strip().lower()
+
+
+del lines
+#now we have the seqs in memory
+# we iterate over all positions
+delCount = 0
+fillCount = 0
+
+for pos in reversed(range(len(seqs[0]))):
+      letterCount = {'a':0, 'c':0, 't':0, 'g':0, '-':0} 
+      for seq in seqs:
+	l = seq[pos].lower()
+        letterCount[l]=letterCount[l]+1 
+      gapsPercent = (float(letterCount['-']) / float(seqcount+1))*100.0
+      #if not gapsPercent == 0:
+#	      print "Percent:", gapsPercent
+#	      print "Position:", pos
+      # we are under fillThreshold gaps -> fill them
+      if (not gapsPercent == 0) and gapsPercent < fillThreshold:
+         fillCount = fillCount+1
+	 del letterCount['-']
+	 consensus=sort_by_value(letterCount)[-1]
+         for i in range(len(seqs)):
+            if seqs[i][pos]=='-':
+               seqs[i]=seqs[i][:pos]+consensus.upper()+seqs[i][pos+1:]
+      # if we're over delThreshold gaps -> delete position in all seqs
+      if gapsPercent > delThreshold:
+         delCount = delCount+1
+	 for a in range(len(seqs)) :
+              oldseq = seqs[a]
+	      seqs[a]=oldseq[:pos]+oldseq[pos+1:]
+if status:
+  print "Processed "+str(seqcount+1)+" sequences."
+  print "Deleted at "+str(delCount)+" positions and filled at "+str(fillCount)+" positions."
+
+for i in range(len(seqs)):
+  print seqnames[i]+seqs[i]

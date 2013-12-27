@@ -1,0 +1,108 @@
+#!/usr/bin/python
+
+from sys import *
+from re import * 
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] <infile> <baseseq> : convert gumby to fasta")
+parser.add_option("-b", "--baseAll", dest="baseAll", action="store_true", help="report for all non-base sequences in every block not their own coordinates but those from the base sequence", default=False)
+parser.add_option("-e", "--exons", dest="exonFile", action="store", help="filter out all gumby-regions that start at positions specified by gff-features in the given exon-file")
+
+(options, args) = parser.parse_args()
+baseAll = options.baseAll
+exonFile = options.exonFile
+
+if len(args) < 2:
+    parser.print_help()
+    exit(1)
+
+baseseq=args[1].lower()
+
+# -------- FUNCTIONS ------------------
+def outseq(name, seq, pos):
+    print ">" + name + " range=%s:%d-%d" % (pos[0], pos[1], pos[2])
+    print seq
+
+def output(seqs, pos):
+    if len(seqs)==0:
+        return
+
+    if overlapped(pos[baseseq], exons):
+        stderr.write("warning: dropping complete block with sequence %s:%s because baseseq has overlapping exon annotation.\n" % (baseseq, pos[baseseq]))
+        return
+    if seqs[baseseq].count("-")==len(seqs[baseseq]):
+        stderr.write("warning: dropping complete block with sequence %s:%s because baseseq contains only '-'-characters\n" % (baseseq, pos[baseseq]))
+        return
+    if seqs[baseseq].count("N")==len(seqs[baseseq]):
+        stderr.write("warning: dropping complete block with sequence %s:%s because baseseq contains only N-characters\n" % (baseseq, pos[baseseq]))
+        return
+    outseq(baseseq, seqs[baseseq], pos[baseseq])
+
+    for n,s in seqs.iteritems():
+        if n==baseseq:
+            continue
+        if baseAll:
+            outseq(n, s, pos[baseseq])
+        else:
+            outseq(n, s, pos[name])
+
+
+def overlapped(pos, exons):
+    f1name, f1start, f1end = pos
+    if f1name != baseseq:
+        return False
+    for e in exons:
+        f2start, f2end = e 
+        # print "checking %d -- %d, %d" % (start, f2start, f2end)
+        result = (( f2start <= f1start and f2end > f1start) or \
+            (f2start < f1end and f2end >= f1end) or (f2start >= f1start and f2end <= f1end))
+        if result == True:
+            return True
+    return False
+
+# ----- MAIN -------------------
+if args[0]=="stdin":
+    infile = stdin
+else:
+    infile = open(args[0], "r")
+
+exons = []
+if exonFile!=None:
+    fh = open(exonFile, "r")
+    for l in fh:
+        fs = l.split()
+        if fs[0].lower()!=baseseq:
+            continue
+        exons.append([ int(fs[3]), int(fs[4]) ] )
+# print exons
+
+re1 = compile("[a-z]+[ ]+[0-9]+[ ]+[0-9]+")
+seqs = {}
+pos = {}
+
+for l in infile:
+    l = l.replace("*","-")
+    l = l.replace("<", "-")
+    l = l.replace(">", "-")
+    if l.startswith("start"):
+        output(seqs, pos)
+        seqs={}
+
+    if re1.match(l):
+        f = l.split()
+        name = f[0]
+        #if name != baseseq and not baseAll:
+            #continue
+        start = int(f[1])-1
+        end = int(f[2])-1
+        seq = f[3]
+        if name not in seqs:
+            seqs[name] = seq
+        else:
+            seqs[f[0]] += f[3]
+
+        # update only if we're on baseseq if baseAll set
+        pos[name] = (name, start,end)
+
+output(seqs, pos)

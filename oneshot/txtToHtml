@@ -1,0 +1,10 @@
+#!/usr/bin/gawk -f
+BEGIN { 
+        print "<html><head></head><body><nobr><TT><PRE>";
+      }
+
+// {
+   print $0; 
+}
+
+END { print "</PRE></TT></nobr></body></html>";} 

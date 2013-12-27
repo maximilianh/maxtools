@@ -1,0 +1,72 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] EmbossRestrictFile EmbossRestrictFile2 - finds restriction sites that are present in file1 but not in file2") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+class RestrSite:
+    def __init__(self, start, end, enzName, site, fivep, threep, fiveprev, threeprev, seqname=None):
+	self.seqname=seqname
+	self.start=start
+	self.end=end
+	self.enzName=enzName
+	self.site=site
+	self.fivep=fivep
+	self.threep=threep
+	self.fiveprev=fiveprev
+	self.threeprev=threeprev
+
+    def __str__(self):
+	return "\t".join([self.seqname, self.start, self.end, self.enzName+"/"+self.site])
+
+def parseRestrict(fname):
+    """ parse emboss restriction file"""
+    stderr.write("Reading %s...\n" %fname)
+    hash = {}
+    seqname="UnknownSeq"
+    if fname=="stdin":
+	f = stdin
+    else:
+	f = open(fname, "r")
+
+    for l in f:
+	if l.startswith("# Sequence:"):
+		seqname = l.strip().split()[2]
+		continue
+	if l.startswith("#"):
+	    continue
+	l= l.strip()
+	if l.startswith("Start") or len(l)==0:
+	    continue
+	fs = l.split()
+	resSite = RestrSite(fs[0], fs[1], fs[2], fs[3], fs[4], fs[5], fs[6], fs[7], seqname)
+	enzName = fs[2]
+	if enzName not in hash:
+	    hash[enzName] = []
+	hash[enzName].append(resSite)
+    return hash
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+file1, file2 = args
+r1, r2 = parseRestrict(file1), parseRestrict(file2)
+
+sites1, sites2 = set(r1), set(r2)
+onlyr1 = sites1.difference(sites2)
+
+for enzName in onlyr1:
+    for s in r1[enzName]:
+	print str(s)
+
+

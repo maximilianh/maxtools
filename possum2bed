@@ -1,0 +1,13 @@
+#!/usr/bin/gawk -f
+# max, 3/2006
+
+BEGIN { FS = "\t"; }
+
+  {
+       if ($8=="f")
+           strand = "+";
+       else
+           strand = "-";
+       split($17,seq,".")
+       print seq[1], $6, $6+$7, $1, $10, strand;
+  }

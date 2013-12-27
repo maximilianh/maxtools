@@ -1,0 +1,381 @@
+#!/cluster/software/bin/python2.7
+
+# parse apache logfiles map/reduce style on the swarm cluster
+
+import glob, shlex, urlparse, gzip, marshal, os, shutil, gc, tempfile, types
+
+from collections import namedtuple, Counter, defaultdict
+from os.path import basename, join, abspath, isfile
+import optparse, logging, sys
+
+baseLogDir = "/hive/data/inside/wwwstats/RR"
+
+#years = ["2012", "2013"]
+years = ["2013"]
+
+# change these for debugging or if need to focus on single servers
+servNames = ["hgw1", "hgw2", "hgw3", "hgw4", "hgw5", "hgw6", "hgw7", "hgw8"]
+
+# directory for temporary cluster job output
+jobOutDir = "/hive/data/inside/wwwstats/logParseTmp"
+
+class ApacheParser(object):
+    " a class to parse a single apache log line and expose info as attributes"
+    # actually python "slots" => "attributes"
+    __slots__=['ip', 'time', 'req', 'status', 'referer', 'agent', 'speed']
+
+    def __init__(self, line):
+
+        self.ip = None
+        try:
+            fields = shlex.split(line.strip()) # very handy python parser, handles quotes
+        except ValueError:
+            print "quoting problem", line
+            return
+
+        if len(fields)<9:
+            logging.warn("not enough fields, %s" % line)
+            return
+
+        try:
+            self.ip = fields[0]
+            self.time = fields[3].strip("[")
+            self.req = fields[5]
+            self.status = fields[6]
+            self.referer = fields[8]
+            self.agent = fields[9]
+            if len(fields)>10:
+                self.speed = fields[10]
+            else:
+                self.speed = 0
+        except IndexError:
+            self.ip = None
+            raise
+
+    def __repr__(self):
+        " for debugging, print all attributes "
+        strL = []
+        for i in self.__slots__:
+            strL.append(i+"="+ self.__dict__[i] )
+        return ", ".join(strL)
+        
+def printBest(ofh, counts, topX=100000):
+    " print top 10000 names and their counts "
+    #ofh.write("- %s\n" % title)
+    for name, count in counts:
+        ofh.write("%s\t%s\n" % (name, count))
+
+def isBot(agent):
+    a = agent.lower()
+    if "google." in a or "yahoo." in a or "bing." in a or "baidu." in a \
+            or "bot" in a or "spider" in a or "slurp" in a or "crawler" in a or \
+            "Commons-HttpClient" in a or "HTTPGrab" in a or \
+            a.startswith("google") or a.startswith("yahoo") or a.startswith("bing"):
+        return True
+    else:
+        return False
+
+def parseFile(inFname):
+    " parse apache log file and return as dict "
+    botCounts     = Counter()
+    ipCounts      = Counter()
+    geneCounts    = Counter()
+    trackCounts   = Counter()
+    trackUiCounts = Counter()
+    staticCounts  = Counter()
+    ipHgsids = {}
+    ipAgents = {}
+    trackMonthIps = defaultdict(set)
+    trackUiIps = defaultdict(set)
+    trackUiHgsids = defaultdict(set)
+    #agentIpCounts = Counter()
+
+    # extract date from filename
+    # access_log.20130106.gz
+    #            012345678
+    dateStr = basename(inFname).split(".")[1]
+    year = int(dateStr[:4])
+    month = int(dateStr[4:6])
+    day  = int(dateStr[6:8])
+
+    # open file
+    print "Reading", inFname
+    if inFname.endswith(".gz"):
+        ifh = gzip.open(inFname)
+    else:
+        ifh = open(inFname)
+
+    # parse file
+    for line in ifh:
+        # parse apache log line
+        if "internal dummy connection" in line:
+            continue
+        a = ApacheParser(line)
+        if a==None or a.ip==None:
+            print "parse error:", line
+            continue
+
+        # parse http request: typically something like
+        # GET cgi-bin/hgTracks?hgsid=xxxx&xxx HTTP1.1
+        reqFields = a.req.split()
+        if len(reqFields)!=3:
+            continue
+        reqType, reqUrl, httpVer = reqFields
+        # split into cgi and the params, e.g. cgi-bin/hgXXX and hgsid=1233
+        filePath, paramStr = urlparse.urlsplit(reqUrl)[2:4]
+        cgi = basename(filePath)
+
+        params = urlparse.parse_qs(paramStr)
+        # now put the data into various hashes
+
+        # count the number of times we got a request from an agent,
+        # behind an IP, with a certain request
+        #agentIp = "%s|%s|%s|%s" % (a.agent, a.ip, cgi, a.referer)
+        #agentIpCounts[agentIp]+=1
+
+        # skip any further analysis if it's a bot
+        if isBot(a.agent):
+            botCounts[a.agent]+=1
+            continue 
+
+        # counts for some static files
+        if "goldenPath" in filePath or "ENCODE" in filePath:
+            staticCounts[filePath] += 1
+
+        # genes
+        if cgi=="hgGene":
+            geneIds = params.get("hgg_gene", None)
+            if geneIds!=None:
+                geneId = geneIds[0]
+                geneCounts[geneId] += 1
+            else:
+                logging.debug( "hgGene without hgg param, url: %s"% str(reqUrl))
+        # track clicks
+        if cgi=="hgc":
+            trackNames = params.get("g", None)
+            if trackNames != None:
+                trackName = trackNames[0]
+                trackCounts[trackName] += 1
+                trackMonth = "%s_%d-%d" % (trackName, year, month)
+                trackMonthIps[trackMonth].add(a.ip)
+            else:
+                logging.debug("hgc without g param: %s" % reqUrl)
+        # IP <-> hgsid assignment
+        if cgi=="hgTracks":
+            ipCounts[a.ip]+=1
+            ipAgents.setdefault(a.ip, set()).add(a.agent)
+            if "hgsid" in params:
+                ipHgsids.setdefault(a.ip, set()).add(params["hgsid"][0])
+        # track reconfigs
+        if cgi=="hgTrackUi":
+            trackNames = params.get("g", None)
+            if trackNames != None:
+                trackName = trackNames[0]
+                trackUiCounts[trackName] += 1
+                trackUiIps.setdefault(trackName, set()).add(a.ip)
+                if "hgsid" in params:
+                    ipHgsids.setdefault(trackName, set()).add(params["hgsid"][0])
+
+    res = {}
+    res["botCounts"] = botCounts.most_common()
+    res["staticCounts"] = staticCounts.most_common()
+    res["genes"] = geneCounts.most_common()
+    res["tracks"] = trackCounts.most_common()
+    res["trackUiCounts"] = trackUiCounts.most_common()
+    res["trackMonthIpSet"] = trackMonthIps.items()
+    res["ips"] = ipCounts.most_common()
+    #res["agentIpCounts"] = [(x, y) for x,y in agentIpCounts.most_common() if y==1]
+
+    res["trackUiIpSet"] = trackUiIps.items()
+    res["trackUiHgsidSet"] = trackUiHgsids.items()
+    
+    # count the number of hgsids (per week)
+    ipHgsidCounts = {}
+    for ip, sids in ipHgsids.iteritems():
+        ipHgsidCounts[ip] = len(sids)
+    res["ipSidsWeekMax"] = ipHgsidCounts.items()
+
+    # the number of agents per IP (per week)
+    ipAgentCounts = {}
+    for ip, agents in ipAgents.iteritems():
+        ipAgentCounts[ip] = len(agents)
+    res["ipAgentsWeekMax"] = ipAgentCounts.items()
+
+    return res
+
+def runMapJobs(headNode, jobOutDir, runOne):
+    """ map logfile data to marshalled dictionaries on cluster named headNode and write
+    them to jobOutDir. this reduces file size and speeds up parsing """
+
+    # clear joboutdir
+    if os.path.isdir(jobOutDir):
+        os.system("rm -f %s/*" % jobOutDir)
+    else:
+        os.makedirs(jobOutDir)
+
+    # find log files, write to list of tuple
+    # (inFname, outFname)
+    fnames = []
+    for year in years:
+        yearDir = join(baseLogDir, year)
+        for servName in servNames:
+            servDir = join(yearDir, servName)
+            inFnames = glob.glob(join(servDir, "access_log.*"))
+            for inFname in inFnames:
+                # access_log.20130317.gz
+                day =os.path.basename(inFname).split(".")[1]
+                outFname = "%s_%s_%s.marshal" % (year,servName,day) 
+                fnames.append ( (inFname, outFname) )
+
+    print "Found %d logfiles in %s" % (len(fnames), yearDir)
+
+    if runOne:
+        logging.info("Running only one job")
+        inFname, outFname = fnames[0]
+        cmd = "%s mapJob %s %s" % (__file__, inFname, "temp.marshal")
+        ret = os.system(cmd)
+        if ret!=0:
+            print "return code %d" % ret
+            return
+        logging.info("Running reduce on single file %s" % outFname)
+        runReduce(jobOutDir, True)
+        sys.exit(0)
+
+    # create joblist file
+    jlName = join(jobOutDir, "jobList")
+    jlf = open(jlName, "w")
+    lastLine = None
+    for inFname, outFname in fnames:
+        outPath = join(jobOutDir, outFname)
+        cmdLine = "%s %s mapJob %s {check out exists %s}\n" % \
+                (sys.executable, abspath(__file__), inFname, outPath)
+        jlf.write(cmdLine)
+    jlf.close()
+
+    # submitting joblist
+    print("Running jobs in dir %s" % jobOutDir)
+    cmd = "ssh %s 'cd %s; para freeBatch; para resetCounts; para clearSickNodes; para make jobList'" % \
+        (headNode, jobOutDir)
+    print("Command: %s" % cmd)
+    os.system(cmd)
+
+def getKgIdToSym():
+    "use hgsql to get mapping kgId -> symbol "
+    tmpFh = tempfile.NamedTemporaryFile()
+    cmd = 'hgsql hg19 -NB -e "select kgId, geneSymbol from kgXref;" > %s' % tmpFh.name
+    os.system(cmd)
+    res = {}
+    for line in open(tmpFh.name).read().splitlines():
+        kgId, sym = line.split("\t")
+        res[kgId] = sym
+    return res
+
+def writeCounts(allCounts):
+    kgIdToSym = getKgIdToSym()
+    for dataType, counter in allCounts.iteritems():
+        ofh = open(dataType+".tab", "w")
+        if dataType.endswith("Set"):
+            for id, val in counter.iteritems():
+                row = [id, str(len(val)), ",".join(val)]
+                ofh.write("\t".join(row)+"\n")
+        else:
+            for id, count in counter.most_common():
+                if dataType=="genes":
+                    row = [id, kgIdToSym.get(id, ""), str(count)]
+                else:
+                    row = [id, str(count)]
+                ofh.write("\t".join(row)+"\n")
+        ofh.close()
+        print "wrote %s" % ofh.name
+
+def postProcess(allCounts):
+    """ assume allCounts is a dict with name -> someVariable 
+        if sameVariable is a set, replace it with its length
+        return the result
+    """
+
+    newDict = {}
+    for name, var in allCounts.iteritems():
+        if name.endswith("Set"):
+            counter = Counter()
+            for key, dataSet in var.iteritems():
+                counter[key] = len(dataSet)
+            newDict[name] = counter
+        else:
+            newDict[name] = var
+    return newDict
+
+def runReduce(jobOutDir, runOne):
+    ""
+    gc.disable() # obscure setting to make script a lot faster, disables GC
+    if isfile(jobOutDir):
+       inFnames = [jobOutDir] # for debugging, we can do this
+    else:
+        inFnames = glob.glob(join(jobOutDir, "*.marshal"))
+
+    if runOne:
+        #inFnames = [inFnames[0]] # debugging on a single file is faster
+        inFnames = ["temp.marshal"]
+
+    print("Found %d input files" % len(inFnames))
+    allCounts = defaultdict(Counter)
+
+    for inFname in inFnames:
+        print("Reading %s" % inFname)
+        mapData = marshal.load(open(inFname))
+        #printBest(sys.stdout, mapData["genes"])
+        for dataType, counts in mapData.iteritems():
+            if dataType.endswith("Set") and dataType not in allCounts:
+                allCounts[dataType] = defaultdict(set) # special case, not a counter but a set
+                
+            print dataType
+            dataCounter = allCounts[dataType]
+            for id, val in counts:
+                if dataType.endswith("Max"):
+                    dataCounter[id]=max(dataCounter[id], val)
+                elif dataType.endswith("Set"):
+                    dataCounter[id].update(val)
+                else:
+                    dataCounter[id]+=val
+
+    #allCounts = postProcess(allCounts)
+    writeCounts(allCounts)
+
+def main(args, options):
+    step = args[0]
+    if step=="map":
+        # submit jobs to parasol
+        runMapJobs(options.cluster, jobOutDir, options.runOne)
+    elif step=="reduce":
+        # collect the parasol data and write to tab files
+        runReduce(jobOutDir, options.runOne)
+    elif step=="mapJob":
+        # run by parasol, parse a single file and dump the result as a binary
+        # hash to outFname
+        inFname, outFname = args[1], args[2]
+        data = parseFile(inFname)
+        logging.info("Dumping data to %s" % outFname)
+        marshal.dump(data, open(outFname, "w"))
+    else:
+        raise Exception("Unknown command %s" % step)
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] map|reduce - parse apache logfiles and write results to various .tab files in current directory")
+
+# define options
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-c", "--cluster", dest="cluster", action="store", help="cluster to use for mapping step, default %default", default="swarm")
+parser.add_option("", "--runOne", dest="runOne", action="store_true", help="run only one single map job, for debugging")
+(options, args) = parser.parse_args()
+if len(args)==0:
+    parser.print_help()
+    sys.exit(0)
+
+# python way of activating debug log mode
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+main(args, options)
+

@@ -1,0 +1,82 @@
+#!/usr/bin/python
+import os
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] infile name1col name2col dataCol - get two names and one value from each row of a table and write out as matrix, name1 and name2 being the rows/columns") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# read in the various *.summary.lst-files and generate a similarity-matrix from them
+
+# ----------- MAIN ----------------------------
+if len(args)==0:
+    parser.print_help()
+    exit(1)
+
+infile, name1Col, name2Col, dataCol = args
+if infile=="stdin":
+    lines = stdin.readlines()
+else:
+    lines = open(infile).readlines()
+
+matrix = {}
+name1Col = int(name1Col)
+name2Col = int(name2Col)
+dataCol= int(dataCol)
+
+allnames1, allnames2 = [], []
+
+# parse into dict of dicts
+for line in lines:
+    if line.startswith("#"):
+        continue
+    row = line.strip().split("\t")
+    name1, name2, value = row[name1Col], row[name2Col], row[dataCol]
+    matrix.setdefault(name1, {})
+    matrix.setdefault(name2, {})
+    matrix[name1][name2] = value
+    matrix[name2][name1] = value
+    if name1 not in allnames1:
+        allnames1.append(name1)
+    if name2 not in allnames2:
+        allnames2.append(name2)
+
+# check if names are the same
+#if set(allnames1)!=set(allnames2):
+    #stderr.write("error: the names in the two columns are different\n")
+    #stderr.write("difference: %s\n" % set(allnames2).difference(set(allnames1)))
+ #   #exit(1)
+
+
+# the last element occurs only in allnames2
+missing = set(allnames2).difference(set(allnames1))
+allnames= allnames1
+allnames.append(missing.pop())
+#print "\n".join(allnames)
+
+# check if all names are associated to all other names
+for n1 in allnames:
+    for n2 in allnames:
+        if n1==n2:
+            continue
+        if matrix.get(n1, {}).get(n2, None)==None and \
+            matrix.get(n2, {}).get(n1, None)==None:
+            stderr.write("No data for keys %s and %s\n" % (n1, n2))
+
+# reparse into list of lists
+print "\t".join(("dataset", ) +tuple(allnames))
+for name1 in allnames:
+    values = []
+    for name2 in allnames:
+        value = str(matrix.get(name1, {}).get(name2, 1.0)) # default value is 1.0!!
+        #if value=="None":
+            #value = str(matrix[name2].get(name1, 1.0))
+        values.append(value)
+    line = "\t".join((name1,)+tuple(values))
+    print line

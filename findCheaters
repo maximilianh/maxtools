@@ -1,0 +1,81 @@
+#!/usr/bin/python
+# try to identify which sentences from a pdf where copied from the internet
+# Maximilian Haeussler, maximilianh@gmail.com Jan 2008
+
+# === LIBRARIES (all included with python)
+from sys import *
+from optparse import OptionParser
+import tempfile
+import os
+import urllib2
+import urllib
+import re
+import time
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] pdfFile - convert pdf to text, run every sentence through google and display which sentences were found in google. Useful for correcting reports handed in by students. :-)") 
+
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+
+# ==== FUNCTIONs =====
+    
+def getHitsFromGoogle(text):
+    text = '"' + text + '"'
+    phrase = urllib.quote(text)
+    url = "http://www.google.com/search?&q=" + phrase
+    req = urllib2.Request(url)
+    req.add_header('User-Agent', 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.8) Gecko/20050524 Fedora/1.5 Firefox/1.5')
+    html = urllib2.urlopen(req)
+
+    hitRegex = re.compile("of about <b>([0-9,])*</b> for")
+    hitRegex2 = re.compile("Results <b>([0-9,])*</b> - <b>[0-9,]*</b>")
+    for line in html:
+	if line.find("No standard web pages containing all your search terms were found")!=-1:
+	    return None
+	if line.find("of about")!=-1:
+	    return hitRegex.findall(line)
+	hits = hitRegex2.findall(line)
+	if len(hits)!=0:
+	    return hits
+
+# ----------- MAIN --------------
+(options, args) = parser.parse_args()
+if len(args)==0: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+# convert pdf to text
+stderr.write("Running pdftotext...\n")
+tmpFh, tmpFname = tempfile.mkstemp()
+cmd = "pdftotext -layout %s %s" % (filename, tmpFname)
+print cmd
+ret = os.system(cmd)
+if ret != 0:
+    stderr.write("Could not execute command: %s\n" % cmd)
+    exit(1)
+
+# read in text, remove linebreaks, split on .
+tmpFh = open(tmpFname, "r")
+lines = tmpFh.readlines()
+lines = [l.strip() for l in lines]
+#text = "".join(lines) # the google pdf converter does not ignore linebreaks
+phrases = list()
+for line in lines:
+    fs = line.split(".")
+    phrases.extend(fs)
+phrases = [p.strip() for p in phrases if len(p) > 40] # remove short phrases
+stderr.write("Found %d phrases in file longer than 40 characters.\n" % len(phrases))
+
+# run phrases though google
+for phrase in phrases:
+    hits = getHitsFromGoogle(phrase)
+    if hits!=None and len(hits)!=0:
+	print phrase
+	print "was found %s times" % hits[0]
+	time.sleep(0.5)
+
+
+
+

@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+
+from optparse import OptionParser
+import logging, sys, gzip
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - output only a column specified by name or index") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-k", "--colIndex", dest="colIndex", action="store", help="numerical index of column, 0-based, comma-sep", default=None) 
+parser.add_option("-n", "--colName", dest="colName", action="store", help="name of column, comma-sep", default=None) 
+parser.add_option("-e", "--emptyCols", dest="emptyCols", action="store_true", help="skip rows with any empty columns") 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[] and options.colIndex==None and options.colName==None: 
+    parser.print_help()
+    exit(1)
+
+filenames = args
+if len(filenames)==0:
+    filenames=["stdin"]
+
+for filename in filenames:
+    if filename=="stdin":
+        fileObj = sys.stdin
+    elif filename.endswith(".gz"):
+        fileObj = gzip.open(filename)
+    else:
+        fileObj = open(filename)
+    if options.colName:
+        headers = fileObj.readline().strip("\n#").split("\t")
+
+    # get list of column indexes
+    colIndexList = []
+    if options.colIndex:
+        colIndexString = options.colIndex
+        for colIndex in colIndexString.split(","):
+            colIndexList.append(int(colIndex))
+    else:
+        colName = options.colName
+        for colName in colName.split(","):
+            colIndex = headers.index(colName)
+            colIndexList.append(int(colIndex))
+
+    if options.colName:
+        outHeaders = [headers[i] for i in colIndexList]
+        print "\t".join(outHeaders)
+        
+    for l in fileObj:
+        if l.startswith("#"):
+            continue
+        else:
+            data = []
+            for colIndex in colIndexList:
+                data.append(l.strip("\n").split("\t")[colIndex])
+            if options.emptyCols:
+                emptyCols = [f for f in data if len(f)==0]
+                if len(emptyCols)>0:
+                    continue
+            print "\t".join(data)

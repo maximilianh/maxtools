@@ -1,0 +1,142 @@
+#!/usr/bin/python
+#fastaMotifOverrep fa/positive.fa GATTA forebrain midbrain hindbrain limb dorsal
+
+from sys import *
+from optparse import OptionParser
+import Fasta
+import re, util
+import random, os.path
+
+RNDSEQ=100 # how often to run the monte carlo procedure
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] fastaFile motif tissue1 tissue2 tissue3 ...- separate sequences into tissue-specific subsets and search them for number of matches of motifs per bp, run monte carlo on this and display overrepresentation relative to the null model") 
+
+parser.add_option("-w", "--winSize", dest="winSize", action="store", help="if copies: size of the window", type="int", metavar="NUMBER", default=250) 
+parser.add_option("-c", "--motifCount", dest="motifCount", action="store", help="search for X copies in a row and report the number of sequences with at least on cluster of x copies, default %default", metavar="NUMBER", default=1, type="int") 
+parser.add_option("", "--randomSeq", dest="randomSeq", action="store_true", help="use random sequences of same length instead of shuffled sequences", default=False) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def searchSeq(seq, motifRegex, motifCount, winSize):
+    matches = [m for m in motifRe.finditer(seq)] # non-overlapping
+    if motifCount==1:
+        return matches
+    else:
+        mids = []
+        # make a list of all midpoints
+        for m in matches:
+            start, end = m.span()
+            mid = start + ((end-start)/2)
+            mids.append(mid)
+        #print "mids", mids
+        # shift of window of size motifCount over list of midpoints 
+        # keep only midpoints that are part of a window
+        newMids=set()
+        #print "winLastIdx", len(mids)-motifCount
+        winLastIdx = len(mids)-motifCount
+        for winStart in range(0, winLastIdx):
+            winEnd = winStart+motifCount-1
+            #print "winStart, winEnd", winStart, winEnd
+            #print "winEndMid, winStartMid", mids[winEnd], mids[winStart]
+            if mids[winEnd]-mids[winStart] < winSize:
+                for i in range(winStart, winEnd+1): # we have to INCLUDE the value AT winEnd
+                    #print "adding value to newmids:", mids[i]
+                    newMids.add(mids[i])
+        #print "newMids", newMids
+        return newMids
+
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+motifCount = options.motifCount
+winSize = options.winSize
+randomSeq = options.randomSeq
+
+filename = args[0]
+motif = args[1]
+if len(args)>2:
+    tissues = args[2:]
+    tissuesSpecified=True
+else:
+    fileBase = os.path.splitext(os.path.basename(filename))[0]
+    tissues = [fileBase]
+    tissuesSpecified=False
+    stderr.write("No tissues specified, will use all fasta filename as description and all sequences\n")
+
+stderr.write("Reading maf/fasta sequences...\n")
+seqs = Fasta.readFasta(filename)
+
+# separate seqs by keywords into tissue-categories
+tissue2Seqs = {}
+if tissuesSpecified:
+    for t in tissues:
+        tissRe = re.compile(".*%s.*" % t)
+        for seq in seqs.values():
+            seqId=seq.fullid
+            if tissRe.match(seqId):
+                tissue2Seqs.setdefault(t, []).append(seq)
+else:
+    tissue2Seqs[fileBase]=seqs.values()
+
+# report numbers of seqs per tissue
+for t, seqs in tissue2Seqs.iteritems():
+    stderr.write("Got %d sequences for tissue %s\n" % (len(seqs), t))
+
+# prep regex
+reStr = util.resolveIupac(motif)+"|"+util.resolveIupac(util.revComp(motif))
+stderr.write("Regular expression: %s\n" % reStr)
+motifRe=re.compile(reStr, flags=re.IGNORECASE)
+
+# search 
+stderr.write("randomizing...\n")
+headers=["tissue", "SeqCount", "obsSeqLen", "avgSeqLen", "obsMatchCount", "obsMatchSeqs", "observedMatchPerBp", "obsMatchingSeqsPercentage", "rndMatchCount", "rndSeqLen", "rndMatchPerBp", "rndMatchSeqsPercentage", "overrepMatchesPerBp", "overrepMatchingSeqs"]
+print "\t".join(headers)
+
+for tissue in tissues:
+    seqs = tissue2Seqs[tissue]
+
+    matchSeqs=0
+    totalMatchCount=0
+    seqLen=0
+    rndMatchSeqs=0
+    rndTotalMatchCount=0
+    rndSeqLen=0
+    for seq in seqs:
+        seqNucl = seq.nucl
+        seqLen+=len(seqNucl)
+        matches = searchSeq(seqNucl, motifRe, motifCount, winSize)
+        if len(matches)!=0:
+            matchSeqs+=1
+        totalMatchCount+=len(matches)
+
+        # randomize sequence RNDSEQ times
+        rndSeq = list(seqNucl)
+        for i in range(0, RNDSEQ):
+            if not randomSeq:
+                random.shuffle(rndSeq)
+            else:
+                nucl = list("ACTG")
+                rndSeq = [random.choice(nucl) for i in range(0,len(rndSeq))]
+            rndSeqLen += len(rndSeq)
+            rndSeqStr = "".join(rndSeq)
+            rndMatchCount = len(searchSeq(rndSeqStr, motifRe, motifCount, winSize))
+            if rndMatchCount!=0:
+                rndMatchSeqs+=1
+            rndTotalMatchCount+=rndMatchCount
+
+    obsRatio = float(totalMatchCount) / float(seqLen)
+    obsSeqRatio = float(matchSeqs) / float(len(seqs))
+    rndRatio = float(rndTotalMatchCount) / float(rndSeqLen)
+    rndSeqRatio = float(rndMatchSeqs) / float(len(seqs)*RNDSEQ)
+
+    LL = obsRatio / rndRatio
+    LL_seqs = obsSeqRatio / rndSeqRatio
+    data = [tissue, len(seqs), seqLen, seqLen/len(seqs), totalMatchCount, matchSeqs, obsRatio, obsSeqRatio, rndMatchCount, rndSeqLen, rndRatio, rndSeqRatio, LL, LL_seqs]
+    data = [str(d) for d in data]
+    print "\t".join(data)

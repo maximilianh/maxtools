@@ -1,0 +1,19 @@
+#!/usr/bin/gawk -f
+BEGIN { 
+if (ARGV[2]=="-h") {
+print "maf2html: formats a maf file nicely as html and adds anchors to every block";
+print "maf2html filename [anchorprefix, default is JSCNS]"
+exit(1);
+}
+else {
+if (ARGV[2]=="")
+{ prefix = "JSCNS"; }
+else { prefix = ARGV[2]; }
+IFS=":"; print "<html><head></head><body><nobr><TT><PRE>";
+i = 1;
+} 
+
+}
+/^a/ {print "<a name=\""prefix i"\">"prefix i "</a>"; i+=1; print $0; next;} 
+// {print $0;} 
+END { print "</PRE></TT></nobr></body></html>";} 

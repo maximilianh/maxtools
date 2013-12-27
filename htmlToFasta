@@ -1,0 +1,103 @@
+#!/usr/bin/python
+from sys import *
+from optparse import OptionParser
+import dircache
+import os
+import re
+
+# convert html files stored in xxxxx_iiii_Dir/*.html (xxxxx = pmid, iiii=page)
+# to fasta files in fasta/<pmid>_suffix.fa
+
+# suffix is one of:
+# a) fig - figures, converted with gocr and extracted nucleotides(lines)
+# b) supxxx - supplemental data, converted with antiword / ssconvert and 
+#             checked for nucleotides(words)
+# c) full - full text, split by words and checked for nucleotides
+
+# fasta ids are : 
+# a) pmid_fig_<pageNumber>_<count>
+# b) pmid_sup_<suppFilename>
+# c) pmid_full_<pageNumber>
+
+# PARAMETERS
+
+BASE = '/heap/pdfToGenome/'
+INDIR = 'html/'
+OUTDIR = 'fasta/'
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] ") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def getPmidDirs(path):
+    """ get dict: pmid -> list of (page, dir) for this pmid"""
+    dirs = dircache.listdir(path)
+    dirs = dirs[:] 
+    dircache.annotate(path, dirs)
+    dirs = [ d for d in dirs if d.endswith("_Dir/") ]# filter
+
+    dirDict = {}
+    for d in dirs:
+        fs = d.split("_")
+        pmid = fs[0]
+        page = int(fs[1])
+        dirDict.setdefault(pmid, []).append( (page , path+d) )
+    return dirDict
+    
+def getJpegs(path):
+    """ return list of tuples: (number of figure, filename) """
+    files = dircache.listdir(path)
+    jpegs = [path+f for f in files if f.endswith(".jpg")]
+    numbers = [f.split("_")[-1].split(".")[0]]
+    return zip(numbers, jpegs)
+            
+def gocrToFasta(fastaId,filename):
+    """ given a file 
+     iterate over lines, calculate "dna content of lines" and 
+     if it is higher than MINDNA and linlength > MINLEN
+     generate a fasta sequence from it
+     removing all non-dna characters """
+
+    MINLEN = 10
+    MINDNA = 0.4
+    nucl = re.compile("[actgACTG]")
+    nonNucl = re.compile("[^actgACTG]")
+    lno = 0
+    outLines = []
+    for line in open(filename, "r"):
+        lno +=1
+        if len(line) > MINLEN:
+            dnaContent = float(len(nucl.findall(line))) / len(line)
+            #print dnaContent
+            if dnaContent > MINDNA:
+                seq = nonNucl.sub("", line)
+                outLines.append(">%s_%d filename=%s line=%d dnaContent=%.2f\n%s" % (fastaId,lno, filename, lno,dnaContent, seq))
+    return "\n".join(outLines)
+
+# ----------- MAIN --------------
+#if args==[]: 
+#    parser.print_help()
+#    exit(1)
+
+
+# -- iterate over directories for fulltext and figures
+for pmid, dirList in getPmidDirs(INDIR).iteritems():
+    outfh = open(OUTDIR+pmid+"fig.fa", "w") 
+    for page, dir in dirList:
+        for figNo, jpeg in getJpegs(dir):
+            print "OCRing:", jpeg
+            gocrfile = jpeg+".gocr"
+            os.system("jpegtopnm %s 2> /dev/null | gocr - > %s 2> /dev/null" % (jpeg, gocrfile) )
+            faId = "%s_fig_%s" % (pmid, page)
+            fastaString = gocrToFasta(faId, gocrfile)
+            print fastaString
+            outfh.write(fastaString+"\n")
+    outfh.close()
+
+

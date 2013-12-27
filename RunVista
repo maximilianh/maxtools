@@ -1,0 +1,5 @@
+#!/bin/bash
+export LIB_PATH=/home/max/usr/vista
+export CLASSPATH="$LIB_PATH/Vista.jar:$LIB_PATH/retepPDF2.jar"
+#export PATH="$JAVA_HOME/"
+java -mx64m Vista $*

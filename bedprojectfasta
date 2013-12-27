@@ -1,0 +1,100 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] bed-file [fasta-file]: lift coordinates of bed files by start position extracted from fasta-file.") 
+parser.add_option("-s", "--substract", dest="substract", action="store_true", help="substract startpos instead of adding it", metavar="", default="False") 
+parser.add_option("-b", "--browser", dest="browser", action="store_true", help="add a 'browser position' line to the file", metavar="", default="False") 
+parser.add_option("-o", "--output", dest="stdout", action="store_true", help="do not overwrite file but write to stdout instead", metavar="", default="False") 
+
+(options, args) = parser.parse_args()
+
+if len(args)==0:
+  parser.print_help()
+  print " reads a file and changes it."
+  print " Will modify the contents of a bed file: Will add a 'browser position'-line"
+  print " with the 'range='-position of a fasta-file that is supposed to have the same"
+  print " basename as the bed-file. (UCSC-style fasta files contain coordinates)"
+  print " In addition, will add the minimum position of the UCSC-range-entry to every"
+  print " start-field of the bed-file."
+
+  print " Syntax: "
+  print "  bedfastaadapt hg17_pitx2.bed pitx2.fa "
+  print "  This will scan pitx2.fa for the 'range='-entry in the seqname"
+  print "  and modify the bedfile's seqname, browser position and feature positions accordingly"
+  print " Alternative Syntax:"
+  print "  bedprojectfasta pitx2.bed"
+  print "  - Will search for pitx2.fa in the current directory and will use it for the data"
+  exit() 
+# -----------------
+
+def readBed(lines):
+	features = []
+	for line in lines:
+          if len(line.strip())==0:
+                  continue
+	  if line.startswith("#"):
+		  continue
+	  if line.startswith("track"):
+		  features.append([line])
+		  continue
+	  if line.startswith("browser"):
+		  continue
+	  parts = line.split()
+	  seq = parts[0]
+	  start = int(parts[1])
+	  end = int(parts[2])
+	  score = parts[3]
+          rest = []
+          if (len(parts)>4):
+              strand = parts[4]
+              rest = parts[3:]
+	  features.append([seq,start,end,rest])
+	return features
+
+
+# get startpos from fasta file
+if len(args)==1:
+	# split off last extension and add .fa
+	faFileName = args[0].rsplit(".",1)[0]+".fa"
+else:
+	faFileName = args[1]
+f = open(faFileName, 'r')
+# extract info from range-field of fasta file
+line = f.readline()
+range = line.split(" ")[1].split("=")[1]
+f.close()
+chrstart= range.split("-")[0]
+chrom = chrstart.split(":")[0]
+start = int(chrstart.split(":")[1])
+end = int(range.split("-")[1])
+
+# read bed-file into memory
+f = open(args[0], 'r')
+features = readBed(f.readlines())
+lines = f.readlines()
+del lines
+f.close()
+
+# re-open bed-file, overwrite now with changed data
+if options.stdout==False:
+    file = open(argv[1], 'w')
+else:
+    file=sys.stdout
+if options.browser==True:
+    file.write("browser position "+ chrom +":"+ str(start) +"-"+ str(end)+"\r\n")
+for f in features:
+	if f[0].startswith("track"):
+		file.write(f[0])
+		continue
+        if options.substract:
+            if f[1]-start>0:
+                file.write(chrom+"\t"+str(f[1]-start) + "\t"+str(f[2]-start)+"\t"+"\t".join(f[3])+"\r\n")
+        else:
+            file.write(chrom+"\t"+str(f[1]+start) + "\t"+str(f[2]+start)+"\t"+"\t".join(f[3])+"\r\n")
+
+

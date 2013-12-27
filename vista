@@ -1,0 +1,23 @@
+#!/bin/bash
+if [ "$1" = "-h" ]; then 
+echo vista: align sequences and run vista on them, display pdf, delete vista garbage
+exit 1;
+fi
+
+if ["$2" -n ]; then 
+echo error: remember the tree! your tree: \"$2\"; 
+echo example invocation: vista seqs.fa \"'(human (mouse rat))'\"; 
+exit 1;
+fi
+
+mkdir temp.vista
+cp $1 temp.vista/
+cd temp.vista
+~/usr/lagan/utils/mrun.pl $1 -tree "$2";
+mv `basename $1 .fa`_.pdf ../`basename $1 .fa`.pdf
+cd ..
+echo $_
+#rm -rf temp.vista
+xpdf `basename $1 .fa`.pdf
+
+

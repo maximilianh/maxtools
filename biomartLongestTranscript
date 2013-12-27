@@ -1,0 +1,63 @@
+#!/usr/bin/python
+
+# reads a file in format
+# <gene> <transcript> <chrom> <start> <end> <strand>
+# and prints only the longest transcript of every gene to stdout in bed-format, adding "chr" if gene doesn't start with "scaffold"
+# example: ENSCING00000013876	ENSCINT00000002299	1p	9137	32616	-1 protein_coding
+# FILE HAS TO BE SORTED BY GENE ID !
+
+# syntax: longestTranscript <infile> 
+
+import sys
+from optparse import OptionParser
+
+# -------- OPTIONS ------------
+parser = OptionParser("usage: %prog [options] args\nConverts raw biomart format to bed but only longest transcripts fr given gene id") 
+parser.add_option("-p", "--onlyCoding", dest="onlyCoding", action="store_true", help="only use lines which have protein_coding as their last field",default=False) 
+(options, args) = parser.parse_args()
+onlyCoding = options.onlyCoding
+if len(args)==0:
+    parser.print_help()
+    sys.exit(1)
+
+# ------ MAIN -----------------
+
+lastgene = ""
+geneList = [] 
+fname = args[0]
+if fname=="stdin":
+    fh = sys.stdin
+else:
+    fh = open(fname, "r")
+for line in fh:
+    # parse line
+    #if line.find("Ensembl")!=-1: ????
+        #$continue
+    fs = line.split()
+    gene, trans, chrom, start, end, strand = fs[:6]
+    if not (onlyCoding and fs[-1]=="protein_coding"):
+        continue
+    if int(strand)==1:
+        strand="+"
+    else:
+        strand="-"
+    if not chrom.startswith("chr") and not chrom.startswith("scaffold") and not chrom.startswith("contig") and not chrom.startswith("reftig"):
+        chrom = "chr"+chrom
+    rec = [chrom, start,end,gene+"___"+trans,"0",strand]
+
+    # start processing
+    if gene == lastgene or lastgene=="":
+        geneList.append(rec)
+    else: 
+        # gene != lastgene: sort by size and output longest one
+        geneList.sort(key= lambda record: int(record[2]) - int(record[1]), reverse=True)
+        print "\t".join(geneList[0])
+        geneList=[]
+        geneList.append(rec)
+
+    lastgene = gene
+        
+# flush last line
+if geneList!=[]:
+    geneList.sort(key= lambda record: int(record[2]) - int(record[1]), reverse=True)
+    print "\t".join(geneList[0])

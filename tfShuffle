@@ -1,0 +1,60 @@
+#!/usr/bin/python
+
+import PWM
+import copy
+from sys import *
+from optparse import OptionParser
+import random
+
+# --------- FUNCTIONS ---------
+# check if probablities (dict actg -> prob) are the same of a single column in a matrix 
+def probsIdentical(dict1, dict2):
+    for n in ['a', 'c', 'g', 't']:
+        if not dict1[n]==dict2[n]:
+            return False
+    return True 
+
+# check if matrices are the same (matrix = list of probablity-vectors)
+def matIdentical(weights1, weights2):
+    print weights1
+    print weights2
+    for probs1, probs2 in zip(weights1,weights2):
+        print "testing column"
+        if not probsIdentical(probs1, probs2):
+            print "Not Identical"
+            return False
+    print "Identical"
+    return True
+
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] transfac-file: Shuffle the columns of a Transfac-style matrix") 
+(options, args) = parser.parse_args()
+
+#parser.add_option("", "--idfile", dest="idfile", action="store", help="same as i, but here you can specify a file with one ID per line", type="string", metavar="'FILENAME'") 
+
+if len(args)==0:
+    parser.print_help()
+    exit(1)
+
+# - MAIN -
+stderr.write("Parsing matrix file...\n")
+pwms = PWM.readMatrices(args[0])
+if len(pwms)==0:
+   stderr.write("Could not parse matrix.dat-file from "+matrixfile+"\n")
+   exit(1)
+
+print pwms
+for p in pwms.values():
+    repeat=True
+    while repeat==True:
+        #print p.weights
+        weights2 = copy.copy(p.weights)
+        random.shuffle(p.weights)
+        if not matIdentical(p.weights, weights2):
+            repeat=False
+        #p.weights = newweights
+        #print newweights
+
+for p in pwms.values():
+    print p

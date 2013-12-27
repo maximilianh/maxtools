@@ -1,0 +1,313 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import array
+import re
+import util
+import bed
+import iupacSearch, os.path
+
+# jit compiler for python, remove these lines if you get an error here, it is no
+try:
+    import psyco
+except (ImportError, ):
+    pass
+else:
+    psyco.full()
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] motifListFile mafFile outFile - search maf file for conserved motifs; format of motifListFile is <motif>tab<description>, mafFile is a standard UCSC maf file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-b", "--bed", dest="bed", action="store", help="create bed file of matches") 
+parser.add_option("-g", "--genes", dest="geneFile", action="store", help="annotate with flanking genes/exons from this file") 
+parser.add_option("-c", "--conservation", dest="conservation", action="store", help="block has to contain at least x sequences to be scanned for motifs, default %default", default=2, type="int") 
+parser.add_option("-s", "--sequences", dest="sequences", action="store_true", help="add sequences to words file using s/c - lines") 
+parser.add_option("", "--onlyBase", dest="onlyBase", action="store_true", help="scan only base sequence for matches to motifs") 
+parser.add_option("", "--noUcscTools", dest="noUcscTools", action="store_true", help="work around the UCSC tools mafToAxt and axtToBed with gawk") 
+parser.add_option("", "--pseudoFlank", dest="pseudoFlank", action="store_true", help="instead of flanking gene info with -g, use the sequence names from the first species as 'pseudo'-flanking information") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+# copied from alignmentViewer.py
+def gappedToUngapped(seqstr, pos):
+    """ convert coords to an ungapped coord system"""
+    gapped = 0
+    ungapped = 0
+    maxpos = 1 + len(seqstr)
+    uToG = array.array("L", maxpos * [0]) # ungapped to gapped array
+
+    for c in seqstr:
+        if c!="-":
+            uToG[gapped] = ungapped
+            ungapped += 1
+        gapped += 1
+
+    newPos = []
+    for s,strand in pos:
+        if s < maxpos:
+            newPos.append((uToG[s],strand))
+        else:
+            stderr.write("warning: cannot put onto seq, feature pos too high: %s"% str(s))
+    return newPos
+
+def makeIupac(chars):
+    table = {
+            "CT"             :  "Y" ,
+            "AG"             :  "R" ,
+            "AC"             :  "M" ,
+            "GT"             :  "K" ,
+            "CG"             :  "S" ,
+            "AT"             :  "W" ,
+            "ACT"            :  "H" ,
+            "CGT"            :  "B" ,
+            "ACG"            :  "V" ,
+            "AGT"            :  "D" ,
+            "ACGT"           :  "N" 
+            }
+    schars = list(chars)
+    schars.sort()
+    string = "".join(schars)
+    return table[string]
+
+def makeConsensus(seqs):
+    #print 'lenseqs', len(seqs)
+    consensus = []
+    refChrom = seqs[0][0]
+    if "." in refChrom:
+        refChrom = refChrom.split(".")[1]
+    refStart = int(seqs[0][1])
+    alnLen   = len(seqs[0][5])
+    #print "alnLen", alnLen
+    score=0
+    #print seqs
+    for pos in range(0, alnLen):
+        #print 'pos', pos
+        lastChar = seqs[0][5][pos].upper()
+        #print lastChar
+        if lastChar =="-": # leave gaps in base sequence as they are
+            consensus.append("-")
+        elif lastChar =="N": # leave Ns in base sequence as they are
+            consensus.append("N")
+        else: 
+            chars=set()
+            chars.add(lastChar)
+            diffChars = False
+            for seq in range(1, len(seqs)):
+                #print "current seqlen", len(seqs[seq][5])
+                #print seqs[seq][5][pos]
+                currChar = seqs[seq][5][pos].upper()
+                #print currChar
+                if currChar=="-":
+                    lastChar = "#" # no motif should overlap a position that is a gap in the homologous sequences
+                    break
+                if lastChar != currChar and currChar!="N":
+                    #consensus.append("N")
+                    #break
+                    chars.add(currChar)
+                    diffChars=True
+                lastChar=currChar
+
+            if not diffChars:
+                score+=1
+                consensus.append(lastChar)
+            else:
+                if "." in chars: # this can only happen in mafFrag output file
+                    consensus.append(".")
+                else:
+                    x = makeIupac(chars)
+                    #print x
+                    consensus.append(x)
+    #print "--CONSENSUS--"
+    #for s in seqs:
+        #print s[5]
+    #print "-------------"
+    #return "".join(consensus)
+    #print "-------------"
+    #print "".join(consensus)
+    return ("".join(consensus), score)
+                
+def getCoord(seq):
+    org = "unknown"
+    chrom = seq[0]
+    if "." in chrom:
+        org = chrom.split(".")[0]
+        chrom = chrom.split(".")[1]
+    return org, chrom, int(seq[1]), int(seq[1]) + int(seq[2])
+
+def ungap(seq, pos):
+    #i = gapRe.finditer(seq[:pos])
+    #leni = sum(1 for _ in l)
+    return pos+len(gapRe.findall(seq[:pos]))
+
+def searchMotifs(seqs, regExList, outf, bedfile, flanking, \
+    onlyBase, addSeqs, pseudoFlank):
+
+    if bedfile!=None:
+        if bedfile=="stdout":
+            bedfile=stdout
+        else:
+            bedfile = open(bedfile, "w")
+
+    cons, score = makeConsensus(seqs)
+    if onlyBase:
+        cons = seqs[0][5]
+    org, chrom, start, end = getCoord(seqs[0])
+    headPrinted = False
+    for (motif, regEx, revCompRegEx) in regExList:
+        mLen = len(motif)
+        posList = []
+        iupacSearch.findRegex(regEx, cons, posList, "+")
+        if revCompRegEx!=None:
+            iupacSearch.findRegex(revCompRegEx, cons, posList, "-")
+        posListU = gappedToUngapped(seqs[0][5], posList) # XX improve: cache translation table
+        posListU.sort(key=lambda (p,strand): p)
+
+        if len(posListU)!=0:
+            if not headPrinted:
+                # print pos
+                outf.write("b\t%s\t%d\t%d\n" % (chrom, start, end))
+                if addSeqs:
+                    for s in seqs:
+                        seqOrg, seqChrom, seqStart, seqEnd = getCoord(s)
+                        outf.write("d\t%s\t%s\t%d\t%d\t%s\n" % (seqOrg, seqChrom, seqStart, seqEnd, s[5]))
+                    outf.write("c\t\t\t\t\t%s\n" % (cons))
+                # print flanking info
+                leftGene = None
+                if pseudoFlank:
+                    leftGene, leftDist, rightGene, rightDist = chrom, 0, chrom, 0
+                    upstream = 2
+                elif flanking!=None:
+                    chromFlank = flanking.get(chrom, None)
+                    upstream=0
+                    if chromFlank==None:
+                        leftGene, leftDist, rightGene, rightDist = "Na", -1, "Na", -1
+                        upstream=-1
+                    else:
+                        leftGene, leftDist, rightGene, rightDist = chromFlank.get(start, ("Na", -1, "Na", -1))
+                        if leftGene.startswith("*"):
+                            upstream=1
+                        if rightGene.startswith("*"):
+                            if upstream==1:
+                                upstream=3
+                            else:
+                                upstream=2
+                        leftGene=leftGene.strip("*")
+                        rightGene=rightGene.strip("*")
+                if leftGene!=None:
+                    outf.write("f\t%s\t%s\t%s\t%s\t%d\n"% (leftGene, leftDist, rightGene, rightDist, upstream))
+                # print score info
+                outf.write("s\t%d\n" % score)
+
+                headPrinted = True
+            outf.write("w\t%s\t" % (motif))
+
+        linePrinted=False
+        for p,strand in posListU:
+            if bedfile!=None:
+                bedfile.write("\t".join([chrom, str(start+p), str(start+p+mLen), motif, "0", strand])+"\n")
+            outf.write("%d/%s," % (p,strand) )
+            linePrinted=True
+        if linePrinted:
+            outf.write("\n")
+    if headPrinted:
+        outf.write("\n")
+
+
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+motifname = args[0]
+mafname = args[1]
+outfile = args[2]
+bedfile = options.bed
+geneFile = options.geneFile
+conservation = options.conservation
+onlyBase = options.onlyBase
+addSeqs = options.sequences
+noUcscTools = options.noUcscTools
+pseudoFlank = options.pseudoFlank
+
+if geneFile is not None and not os.path.isfile(geneFile):
+    stderr.write("error: gene file not found!")
+    exit(1)
+
+if outfile == "stdout":
+    outf = stdout
+else:
+    outf = open(outfile, "w")
+
+# read and compile motifs
+motifStrings = tabfile.slurpdict(motifname, comments=True, doNotCheckLen=True)
+motifRegex, motRegexStr, descList = iupacSearch.compileMotifs(motifStrings)
+
+flanking = None
+if geneFile!=None:
+    # extract maf regions to bed, annotate with neighboring genes, read and index
+    f = open(mafname, "r")
+    l = f.readline() # header
+    l = f.readline() # a line
+    l = f.readline() # first s line
+    fs = l.split()
+    org1 = fs[1].split(".")[0]
+    l = f.readline() # 2nd s line
+    org2 = l.split()[1].split(".")[0]
+
+    if noUcscTools:
+        cmd = """cat %s | grep %s | tr -s ' ' | tr '.' ' ' | tr ' ' '\t' | cut -f3-5 | gawk 'BEGIN {OFS="\t"} {print $1,$2,$2+$3}' > /tmp/mafScan_mafRegions.bed""" % (mafname, org1)
+    else:
+        cmd = 'mafToAxt %s %s %s stdout -stripDb | axtToBed stdin /tmp/mafScan_mafRegions.bed' % (mafname, org1, org2)
+
+    util.execCmdLine(cmd)
+    cmd = 'bedFindNeighbors --keepOverlaps -d /tmp/mafScan_mafRegions.bed %s > /tmp/mafScan_flanking.bed' % geneFile
+    util.execCmdLine(cmd)
+
+    # index beds by chrom first and then by start position (hash)
+    bedChrom = bed.indexBedsChrom('/tmp/mafScan_flanking.bed')
+    for c,beds in bedChrom.iteritems():
+        hash = {}
+        for b in beds:
+            fs = b.name.split("|") 
+            hash[b.start]=(fs[1], fs[3], fs[2], fs[4]) # left gene, left dist, right gene, dist to right gene
+        bedChrom[c]=hash
+    flanking = bedChrom
+    #print flanking
+
+
+stderr.write("Scanning maf/fasta sequences...\n")
+outf.write("##words1\n")
+# write motifs to outfile
+for ms,desc in zip(motifStrings, descList):
+    if desc==None:
+        desc=ms
+    outf.write("m\t%s\t%s\n" % (ms, desc))
+outf.write("\n")
+
+f = open(mafname, "r")
+
+# write blocks
+seqs = []
+nblocks = 0
+dblocks = 0
+for l in f:
+    if l.startswith("a ") and len(seqs)>0:
+        if len(seqs)<conservation:
+            seqs = []
+            dblocks+=1
+            continue
+        searchMotifs(seqs, motifRegex, outf, bedfile, flanking, onlyBase, addSeqs, pseudoFlank)
+        seqs = []
+        nblocks += 1
+    if l.startswith("s "):
+        fields = l.split()
+        seqs.append(fields[1:])
+if len(seqs)>0:
+    searchMotifs(seqs, motifRegex, outf, bedfile, flanking, onlyBase, addSeqs, pseudoFlank)
+stderr.write("Scanned %d conserved blocks, dropped %d blocks as they are not conserved in %d genomes.\n" % (nblocks+1, dblocks, conservation))

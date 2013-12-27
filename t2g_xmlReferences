@@ -1,0 +1,260 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+from xml.sax import make_parser
+from xml.sax.handler import ContentHandler
+import xml.sax.handler, os.path
+import glob, re
+import util
+
+nonLetterRe = re.compile('\W', re.U) # non-alphanumeric character in unicode set, uff.
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filesExpression - parse PMC journal references to tab-file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("", "--onlyResearchArticles", dest="onlyResearchArticles", action="store_true", help="output only data for research articles") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+class ArticleHandler(ContentHandler):
+    def __init__ (self, uniqueIdCounts): 
+        self.uniqueIdCounts = uniqueIdCounts
+        self.surnames = []
+        self.givenNames = []
+        self.isJournalTitle = False
+        self.isJournalId = False
+        self.isPmid = False
+        self.isSubject = False
+        self.isArticleTitle= False
+        self.isSurname = False
+        self.isGivenNames = False
+        self.isPubDate=False
+        self.isMonth=False
+        self.isYear=False
+        self.isVolume=False
+        self.isIssue=False
+        self.isFpage=False
+        self.isLpage=False
+        self.isFront=False
+        self.isAbstract=False
+        self.isArticle=False
+
+        self.subject = "";
+        self.journalTitle = ""
+        self.journalId = ""
+        self.pmid=""
+        self.abstract=""
+        self.articleTitle = "";
+        self.month = ""
+        self.lpage = ""
+        self.years = []
+        self.volume = ""
+        self.issue = ""
+        self.fpage = ""
+
+    def startElement(self, name, attrs):
+       if name == 'article':
+           self.isArticle=True
+
+       if name == 'front':
+           self.isFront = True;
+
+       if self.isFront and name=='abstract':
+            self.isAbstract = True
+
+       if self.isAbstract:
+           if name == 'title':
+               self.abstract += '<b>'
+
+       if self.isFront:
+           if name == 'journal-title':     
+             self.isJournalTitle = True
+           elif name == 'journal-id' and attrs.get("journal-id-type", "")=="nlm-ta":     
+             self.isJournalId = True
+           elif name == 'article-id':
+             if attrs.get("pub-id-type", "")=="pmid":
+                self.isPmid=True
+           elif name == 'subject':
+             self.isSubject = True;
+           elif name == 'article-title':
+             self.isArticleTitle = True;
+           elif name == 'contrib' and attrs.get("contrib-type", "")=="author":
+             self.isContrib = True;
+           elif name == 'surname':
+             self.isSurname = True;
+             self.surnames.append("")
+           elif name == 'given-names':
+             self.isGivenNames = True;
+             self.givenNames.append("")
+           elif name == 'volume':
+             self.isVolume = True;
+           elif name == 'issue':
+             self.isIssue = True;
+           elif name == 'fpage':
+             self.isFpage = True;
+           elif name == 'lpage':
+             self.isLpage = True;
+           elif name == 'pub-date' and (attrs.get("pub-type","")=="ppub" or attrs.get("pub-type", "")=="epub"):
+             self.isPubDate = True
+           elif self.isPubDate:
+               if name == 'month':
+                 self.isMonth = True;
+               elif name == 'year':
+                 self.isYear = True;
+
+    def endElement(self, name):
+       if name == 'journal-id':
+         self.isJournalId = False
+       if name == 'abstract' and self.isFront:
+         self.isAbstract = False
+       if self.isAbstract and name=="title":
+         self.abstract += "</b> "
+       if name == 'journal-title':
+         self.isJournalTitle = False
+       if name == 'article-id':
+         self.isPmid = False
+       if name == 'subjet':
+         self.isSubject = False
+       if name == 'front':
+         self.isFront = False
+       if name == 'article-title':
+         self.isArticleTitle = False
+       if name == 'contrib':
+         self.isContrib = False
+       if name == 'surname':
+         self.isSurname = False
+       if name == 'given-names':
+         self.isGivenNames = False
+       if name == 'pub-date':
+         self.isPubDate = False
+       if name == 'month':
+         self.isMonth = False
+       if name== 'year':
+         self.isYear = False
+       if name=='volume':
+           self.isVolume = False
+       if name=='issue':
+           self.isIssue = False
+       if name=='fpage':
+           self.isFpage = False
+       if name=='lpage':
+           self.isLpage = False
+
+    def characters (self, ch):
+        if self.isFront:
+           ch = ch.strip("\n")
+           ch = ch.replace("\t"," ")
+           if     self.isJournalTitle:
+                  self.journalTitle += ch
+           if     self.isAbstract:
+                  self.abstract += ch
+           if     self.isJournalId:
+                  self.journalId += ch
+           if     self.isPmid:
+                  self.pmid = str(int(ch)) # strip leading 000 from pmid
+           if     self.isSubject:
+                  self.subject += ch
+           if     self.isArticleTitle:
+                  self.articleTitle += ch
+           if     self.isSurname:
+                  self.surnames[-1]+=ch
+           if     self.isGivenNames:
+                  self.givenNames[-1]+=ch
+           if     self.isPubDate:
+               if self.isMonth:
+                  self.month = ch
+               if self.isYear:
+                  self.years.append(ch)
+           if     self.isVolume:
+                  self.volume += ch
+           if     self.isIssue:
+                  self.issue += ch
+           if     self.isFpage:
+                  self.fpage += ch
+           if     self.isLpage:
+                  self.lpage += ch
+
+    def toString(self, pmcId):
+        authors = []
+        for i in range(0, min(len(self.surnames), len(self.givenNames))):
+            authors.append(self.surnames[i]+", "+self.givenNames[i])
+        authorsStr = "|".join(authors)
+
+        if "journalId" in self.__dict__:
+            journal = self.journalId
+        else:
+            journal = self.journalTitle
+
+        if "volume" not in self.__dict__:    
+            pages = ""
+        elif "issue" not in self.__dict__:
+            pages = "%s" % self.volume
+        elif "fpage" not in self.__dict__:
+            pages = "%s(%s)" % (self.volume, self.issue)
+        elif "lpage" not in self.__dict__:
+            pages = "%s(%s):%s" % (self.volume, self.issue, self.fpage)
+        else:
+            pages = "%s(%s):%s-%s" % (self.volume, self.issue, self.fpage, self.lpage)
+
+        years = [int(y) for y in self.years if y!='']  # try to find year when article was first published
+        #stderr.write(pmcId+years)
+        if len(years)>0:
+            minYear = str(min(years))
+        else:
+            minYear=0
+
+        # create a unique id which does not exist yet
+        if len(authors)==0:
+            uniqueId = pmcId
+        else:
+            if len(self.surnames)>0:
+                firstAuthor = self.surnames[0]
+                firstAuthor = nonLetterRe.sub("", firstAuthor) # remove nonalphanumeric characters
+                firstAuthor = util.remove_accents(firstAuthor) # remove accents
+            else:
+                firstAuthor = "NoAuthor"
+            stem = firstAuthor+minYear
+            stemCount = self.uniqueIdCounts.get(stem, 0)
+            if stemCount == 0:
+                self.uniqueIdCounts[stem]=1
+                suffix=""
+            else:
+                count   = uniqueIdCounts[stem]
+                self.uniqueIdCounts[stem]+=1 
+                suffix = util.baseN(count) 
+            uniqueId = stem+suffix
+
+        # print result
+        line = [pmcId, uniqueId, authorsStr, self.articleTitle, journal, minYear, pages, self.pmid, self.abstract]
+        return "\t".join(line)
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+paths = args
+uniqueIdCounts={}
+
+for path in paths:
+    stderr.write("Processing xml files in all subdirs of %s\n" % path)
+    for filePath in util.findSubdirFiles(path, ".xml"):
+        artHandler = ArticleHandler(uniqueIdCounts)
+        pmcId = os.path.splitext(os.path.basename(filePath))[0].replace("PMC","")
+
+        parser = make_parser()   
+        parser.setFeature(xml.sax.handler.feature_validation, 0) 
+        parser.setFeature(xml.sax.handler.feature_namespaces, 0) 
+        parser.setFeature(xml.sax.handler.feature_external_pes, 0) 
+        parser.setFeature(xml.sax.handler.feature_external_ges, 0) 
+
+        parser.setContentHandler(artHandler)
+        try:
+            parser.parse(open(filePath)) 
+            if artHandler.isArticle:
+                print artHandler.toString(pmcId).encode("utf-8")
+        except :
+            stderr.write("error: exception %s, details %s, when processing file %s\n" % (exc_info()[0],exc_info()[1], filePath))

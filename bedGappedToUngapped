@@ -1,0 +1,144 @@
+#!/usr/bin/python
+
+import PWM
+import bed
+import re
+from Fasta import *
+from SeqWindow import *
+from MultiAlign2Block import *
+from sys import *
+from optparse import OptionParser
+import WindowIterator
+import itertools
+from os import environ
+import copy
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] maf-file/fasta-files\nList words/oligos that are almost 100% conserved in alignment and occur more than x times.") 
+
+parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-n", "--nchars", dest="noN", action="store", help="number of N-characters allowed in one word [default: %default]", type="int", metavar="NUMBER", default="1") 
+
+parser.add_option("-c", "--conservation", dest="conservation", action="store", help="word has to be conserved in x sequences [default: %default]", default="15", type="int", metavar="NUMBER") 
+parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+parser.add_option("-b", "--base", dest="base", action="store", help="base sequence name [default: %default]", default="hg17") 
+parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="when outputting the motif found, add the reverse complement for every word", default=False) 
+
+parser.add_option("-g", "--nogenomecoords", dest="genomeCoords", action="store_false", help="do not try to parse UCSC-style genome coords from sequences, simply return the position of matches on the sequences [default: will return genome coods]", metavar="", default="True") 
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def calcCounts(alignment):
+    """ 
+    list the number of occuring nucleotides/symbols at every position:
+    Given alignment (=dict seqname => FastaSequence), build a new dict
+    (sequenceposition => countdict), where countdict contains: 'most'=>nucleotide
+    that occurs most often, 'a'=> number of a's in alignment, 'c'=>number of
+    c's in alignment, etc... also '-' and 'n'
+    """
+    length = len(alignment.values()[0].nucl)
+    counts = {}
+    for pos in xrange(length-1,-1,-1):
+        poscount = {}
+        for seq in alignment.values():
+            c = seq.nucl[pos].lower()
+            poscount[c]=poscount.get(c,0)+1
+        # convert dict to list of tuples,sort
+        l = []
+        for k,v in poscount.iteritems():
+            l.append( (k,v) )
+        l.sort( key= lambda (x,y): y, reverse=True)
+        nuc,count = l[0]
+        # put mostconserved into dict
+        poscount['most']=nuc
+        counts[pos]=poscount
+    return counts
+
+def conservedWord(counts, pos, minConserv, wordSize, maxNumN):
+    """
+    return the string that describes this conserved word or None if the current word
+    is not conserved well enough 
+    """
+    nN = 0 # number of N characters so far
+    nConservNucl = 0
+    word = []
+    for i in xrange(pos, pos+wordSize):
+        mostConserved = counts[i]['most']
+        # break if dominant gap or dominant n in word
+        if mostConserved=='-' or mostConserved=='n':
+            #print "dominant gap at pos %u" % i
+            return None
+        countMost = counts[i][mostConserved]
+        if countMost >= minConserv:
+            word.append(mostConserved.upper())    
+        else:
+            # break if more than 1 non-dominant pos found
+            if nN==maxNumN:
+                #print "max N limit reached at pos %u" % i
+                #print "MostConserved: %s occuring %u times" % (mostConserved, countMost)
+                return None 
+            else:
+                nN+=1
+                word.append('N')
+    return word
+
+def revComp(seq):
+    table = { "a" : "t", "A" : "T", "t" : "a", "T" : "A", "c" : "g", "C":"G", "g":"c", "G":"C", "-":"-" , "N":"N", "n":"n"}
+    newseq = ""
+    for nucl in reversed(seq):
+       newseq += table[nucl]
+    return newseq
+    
+# ----------- MAIN --------------
+if args==[]: 
+    sys.stderr.write("\nNo sequence files specified. Use -h for help.\n") 
+    exit(1)
+
+filename = args[0]
+sys.stderr.write("Reading maf/fasta sequences...\n")
+f = open(filename, "r")
+goOn=True
+addReverse=options.reverse
+
+while goOn==True:
+    # parse files
+    if options.maf==True:
+       align = readMafNext(f)
+    else:
+       align = readFasta(f.name)
+       goOn=False
+
+    if align==None:
+        sys.stderr.write("OK, EOF reached.\n")
+        break
+
+    baseseq = copy.copy(align[options.base])
+
+    # count nucleotides per position
+    #sys.stderr.write("Counting nucleotides...\n")
+    counts = calcCounts(align)
+
+    i=0
+    motifSize = options.motiflength
+    conserv = options.conservation
+    basepos = baseseq.start
+    #print counts
+    while i < len(counts.keys())-motifSize:
+        count = counts[i]
+        word = conservedWord(counts,i,conserv,motifSize,1)
+        if word!=None:
+            print "%s\t%u\t%u\t%s" % (baseseq.chrom, basepos, basepos+motifSize, "".join(word))
+            if addReverse==True:
+                word = revComp(word)
+                print "%s\t%u\t%u\t%s" % (baseseq.chrom, basepos, basepos+motifSize, "".join(word))
+        i+=1
+        # skip to next if non-degenerate match otherwise AAAAA will always
+        # trigger AAAAN as next match
+        if word!=None and not 'N' in word:
+            i+=1
+        if baseseq.nucl[i].lower()!='-':
+            basepos+=1
+
+     

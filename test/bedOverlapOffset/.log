@@ -1,0 +1,4 @@
+bedOverlapOffsetDiagram -a cbpL1.bed rnd.contemplate.bed rnd.contemplate -R --deltas
+bedOverlapOffsetDiagram -a cbpL1.bed contemplate.bed contemplate -R --deltas
+for i in *.deltas.pdf; do xpdf $i; done
+

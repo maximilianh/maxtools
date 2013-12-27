@@ -1,0 +1,48 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+import popen2
+
+def readfasta(lines):
+  ## will read from lines
+  ## will return a list of n seqs
+  ## seq[n][0] is the seqname
+  ## seq[n][1] is the sequence
+  seqs = []
+  for line in lines:
+	  if line.startswith(">"):
+	    seqs.append([line, ""])
+	  else:
+            seqs[-1][1]+=line.strip()
+  return seqs
+
+
+
+if len(argv)==1:
+  print "Iterates over a multi-fasta-file."
+  print " Will take the fasta file from stdin and will execute <cmd> on every"
+  print " part separately."
+  print " (Thanks to Clemens Hintze for his post on the python mailinglist)"
+  print
+  print " syntax: "
+  print " iterateFasta <cmd>"
+  exit() 
+
+lines = sys.stdin.readlines()
+
+seqs = readfasta(lines)
+del lines
+
+cmd = argv[1]
+
+for parts in seqs:
+  seqname = parts[0]
+  seq = parts[1]
+  r, w = popen2.popen2(cmd)
+  w.write(seqname+seq)
+  w.close()
+  lines = r.readlines()
+  for line in lines:
+	  print line,

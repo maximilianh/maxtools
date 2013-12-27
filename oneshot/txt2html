@@ -1,0 +1,11 @@
+#!/usr/bin/gawk -f
+
+BEGIN {
+print "<html><head></head><body><pre>";
+}
+
+// { print }
+
+END {
+print "</pre></body></html>";
+}

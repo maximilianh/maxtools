@@ -1,0 +1,442 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, os, types, math
+import tempfile
+
+# import bed.py  # dependency removed by including classes and functions, see below
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] assembly refBedFile lociBedFile predBed1 predBed2 ... - compare reference bed track against predictions within given loci, create SN/SP/PPV table, uses overlapSelect and featureBits. Loci are needed as SP needs FN/TN estimates.") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-t", "--type", dest="type", action="store", help="type of predictions, will just replace some description in text, default: CRM", default="CRM")
+parser.add_option("", "--onlyOverlapSelect", dest="onlyOverlapSelect", action="store_true", help="only determine feature-level metrics, not nucleotide level")
+parser.add_option("", "--minOverlap", dest="minOverlap", action="store", help="minimum number of nucleotides to consider element-level overlaps", type="int")
+parser.add_option("", "--minLen", dest="minLen", action="store", help="minimum length of all predicted features, default %default", type="int", default=50)
+parser.add_option("", "--noraAlg", dest="noraAlg", action="store_true", help="use nora pierstorff's definition of overlap")
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ----------- BEGIN: BED FEATURE ROUTINES, from bed.py, to remove the dependency -------
+def parseBedFilename(fname, reqSorted=False, quiet=False, reqNoOverlaps=False):
+    if not quiet:
+        sys.stderr.write("Reading %s...\n" % fname)
+    if fname=="stdin":
+        return parseBedFile(sys.stdin, reqSorted, reqNoOverlaps)
+    else:
+        return parseBedFile(open(fname,"r"), reqSorted, reqNoOverlaps)
+
+def parseBedFile(lines, reqSort=False, reqNoOverlaps=False):
+    """ will return a Features() object """
+    features = Features()
+    lastStart = -1
+    for l in lines:
+        l = l.strip()
+        if l.startswith("track") or l.startswith("browser") or l.startswith("#") or l=="":
+            continue
+        f = parseBedLine(l)
+        if reqSort and lastStart > f.start:
+            sys.stderr.write("error: bed file is not sorted, violating feature: %s" % str(f))
+            sys.exit(1)
+        features.append(f)
+
+    if reqNoOverlaps:
+        assert(features.anyFlankingOverlap()==False)
+
+    return features
+
+class Features(list):
+    def __repr__(self):
+        buf = []
+        for i in self:
+            buf.append(repr(i))
+        return "\n".join(buf)
+    def __sort__(self):
+        self.sort(sort)
+
+    def writeToFileHandle(self, fh):
+        for b in self:
+            fh.write(str(b)+"\n")
+
+    def writeToFile(self, fname):
+        if fname!="stdout":
+            fh = open(fname, "w")
+        else:
+            fh = sys.stdout
+        self.writeToFileHandle(fh)
+        fh.close()
+
+    def getChromosomes(self):
+        chroms = set()
+        for b in self:
+            chroms.add(b.chrom)
+        return chroms
+
+    def countChromosomes(self):
+        return len(self.getChromosomes())
+
+    def bedsOutsideChrom(self, chromSizes):
+        """ check if all features are within the limits of the chromSizes dictionary """
+        for b in self:
+            if int(b.end) > int(chromSizes[b.chrom]):
+                return b
+        return False
+
+    def anyFlankingOverlap(self):
+        """ is there is any overlap between any two subsequent features ? """
+        lastB = None
+        for b in self:
+            if lastB!=None and b.overlaps(lastB):
+                return b
+            else:
+                lastB = b
+        return False
+
+    def totalLength(self):
+        """ get total lengths of all features added together """
+        sum = 0
+        for b in self:
+            sum+=(b.end-b.start)
+        return sum
+
+    def avgLength(self):
+        return self.totalLength() / len(self)
+
+class Feature:
+    def __init__(self, line=None, fields=None):
+        if fields==None:
+            fields = line.split()
+        self._initFromFields(l)
+
+    def _initFromFields(self, fields):
+        count = len(fields)
+        self.chrom = fields[0]
+        self.start = int(fields[1])
+        self.end = int(fields[2])
+        if count >= 4:
+            self.name = fields[3]
+        if count >= 5:
+            self.strand= fields[4] 
+        if count >= 6:
+            self.score = int(fields[5])
+        return self
+
+    def __init__(self,seqid="",start=0,end=0,name="",score=0,strand="+"):
+        self.chrom = seqid
+        self.start = int(start)
+        self.end = int(end)
+        self.name = name
+        self.score = int(score)
+        self.strand = strand
+
+    def __repr__(self):
+        fields = [self.chrom,str(self.start),str(self.end)]
+        if "name" in self.__dict__:
+            fields.append(self.name)
+        if "score" in self.__dict__:
+            fields.append(str(self.score))
+        if "strand" in self.__dict__:
+            fields.append(self.strand)
+        if "blockStarts" in self.__dict__:
+            fields.append(str(self.thickStart))
+            fields.append(str(self.thickEnd))
+            fields.append(self.itemRgb)
+            fields.append(str(self.blockCount))
+            fields.append(self.blockSizes)
+            fields.append(self.blockStarts)
+
+        return "\t".join(fields)
+
+    def includes(self, f, tol=0):
+        if self.chrom!=f.chrom:
+            return False
+        else:
+            if self.start-tol <= f.start and self.end+tol >= f.end:
+                return True
+
+    def overlaps(self, f1):
+        """ returns true if two Features overlap """
+        return overlap(self,f1)
+
+    def toString(self):
+        return repr(self)
+
+    def joinBlocks(self):
+        """ join all blocks with 0-spacers between them into longer ones """
+        newStarts = []
+        newSizes = []
+
+        starts = self.blockStarts.strip(",").split(",")
+        sizes  = self.blockSizes.strip(",").split(",")
+        starts = [int(x) for x in starts]
+        sizes = [int(x) for x in sizes]
+
+        lastStart = 0
+        lastEnd   = 0
+        for i in range(0, len(starts)):
+            start = starts[i]
+            end   = starts[i]+sizes[i]
+            #print "start, end", start, end
+
+            if lastEnd != 0:
+                if start!=lastEnd:
+                    #print "start==lastEnd"
+                    newStarts.append(lastStart)
+                    newSizes.append(lastEnd-lastStart)
+                    lastStart = start
+                else:
+                    pass
+                    # do not change lastStart
+            lastEnd   = end
+        newStarts.append(lastStart)
+        newSizes.append(lastEnd-lastStart)
+
+        self.blockCount  = len(newSizes)
+        self.blockStarts = ",".join([str(x) for x in newStarts])
+        self.blockSizes  = ",".join([str(x) for x in newSizes])
+
+# ================== END BED FEATURE ROUTINES, from bed.py
+
+# ==== FUNCTIONs =====
+    
+tableHeaders = ("algorithm,predFeatCount,predFeatHits,SN(%s),PPV(%s),coverage_nuc,SP_nuc,SN_nuc,PPV_nuc,CC,Hit_%ss,Missed_%ss" % (options.type, options.type, options.type, options.type)).split(',')
+rowFieldOrder = "algName,predCount,predHits,snFeat,ppvFeat,predCoverage,spNuc,snNuc,ppvNuc,CC,hitFeats,missedFeats".split(",")
+
+# empty object, attributes will be added below
+class Row:
+    pass
+
+def createEmptyRow():
+    newRow = Row()
+    for field in rowFieldOrder:
+        newRow.__dict__[field]=""
+    return newRow
+
+def runCmd(cmd):
+    logging.debug("Running "+cmd)
+    ret = os.system(cmd)
+    if ret!=0:
+        logging.info("Could not run %s" % cmd)
+        exit(1)
+
+def fileLineCount(filename):
+    lineCount = len(open(filename).readlines())
+    return lineCount
+
+def overlapSelectCount(selectFilename, inFilename, minOverlap=None):
+    """ return number of overlapping features from inFilename """
+    tmpFilename = "/tmp/bedBenchmark.tmp"
+    cmd = "overlapSelect %(pred)s %(ref)s %(tmp)s" % \
+        {"ref":selectFilename, "pred":inFilename, "tmp":tmpFilename}
+    if minOverlap:
+       cmd += " -overlapBases=%d" % minOverlap
+    runCmd(cmd)
+    overlapCount = fileLineCount(tmpFilename)
+    return overlapCount
+
+def calcElementLevelOverlap(filenameRows, refBedFilename, minOverlap, minLen, noraMethod=False):
+    refCount = fileLineCount(refBedFilename)
+    for filename, row in filenameRows.iteritems():
+        deleteFile=False
+        if minLen is not None:
+            filename = filterBed(filename, minLen=minLen)
+            deleteFile = True
+        predCount = fileLineCount(filename)
+        logging.log(5, "file %s, count %d" % (filename, predCount))
+        overlapCountRef  = overlapSelectCount(refBedFilename, filename, minOverlap = minOverlap)
+        overlapCountPred = overlapSelectCount(filename, refBedFilename, minOverlap = minOverlap)
+        logging.debug("refCount %d, predCount %d, overlapCountRef %d, overlapCountPred %d" % \
+            (refCount, predCount, overlapCountRef, overlapCountPred))
+        row["hitFeats"] = overlapCountRef
+        row["missedFeats"] = refCount - overlapCountRef
+
+        #TP  = float(overlapCountPred)
+        #FP  = predCount - overlapCountPred
+        TP  = float(overlapCountRef)
+        FP  = refCount - overlapCountRef
+
+        SN  = overlapCountRef / float(refCount)
+        if noraMethod:
+            PPV = overlapCountRef / float(predCount)
+        else:
+            PPV = overlapCountPred / float(predCount)
+
+        row["predCount"] = predCount
+        row["predHits"]  = overlapCountPred
+        row["snFeat"]    = SN
+        row["ppvFeat"]   = PPV
+
+        if "P" in row:
+            P    = row["P"]
+            N    = row["N"]
+            logging.debug("P: %d , N: %d" % (P,N))
+            if N!=0:
+                logging.debug("TP %d, P %d, FP %d, N %d" % (TP, P, FP, N))
+                PPV2 = (float(TP)/float(P)) / ((float(TP)/float(P)) + (float(FP)/float(N)))
+                row["PPV2"] = PPV2
+            else:
+                row["PPV2"] = "N.a."
+
+        if deleteFile:
+            os.remove(filename)
+    return filenameRows
+
+def runCmdFirstWord(cmdLine, useStdout=False):
+    # run command and return first word from output as a number
+    logging.debug("Running "+cmdLine)
+    stdin, stdout, stderr = os.popen3(cmdLine)
+    if useStdout:
+        inFh = stdout
+    else:
+        inFh = stderr
+    line1 = inFh.readline().strip()
+    logging.debug("Got raw line: "+line1)
+    number1 = line1.split()[0]
+    logging.debug("Got "+number1)
+    return int(number1)
+
+def featureBits(assembly, filenames):
+    cmd = "featureBits %s %s" % (assembly, " ".join(filenames))
+    overlapBp = runCmdFirstWord(cmd)
+    return overlapBp
+
+def calcNuclLevelOverlap(filenameRows, refBedFilename, lociBedFilename, assembly, noraMethod=False):
+    logging.debug("Nucleotide level analysis")
+    refCount = featureBits(assembly, [refBedFilename])
+    lociCount = featureBits(assembly, [lociBedFilename])
+
+    for filename, row in filenameRows.iteritems():
+        predCount = featureBits(assembly, [filename])
+        overlapCount = featureBits(assembly, [filename, refBedFilename])
+        logging.debug("filename %s, refCount %d, predCount %d, overlapCount %d" % \
+            (filename, refCount, predCount, overlapCount))
+
+        #  Locus    |---------------------------------|
+        #  Pred          |=============|
+        #  Ref                   |==============|
+        #           |----|-------|-----|--------|-----|
+        #             TN   FP      TP      FN     TN
+        #
+        TP  = float(overlapCount)
+        TN  = float(lociCount + overlapCount - predCount - refCount)
+        FP  = float(predCount - overlapCount)
+        FN  = float(refCount  - overlapCount)
+        logging.debug("TP %f, TN %f, FP %f, FN %f" % (TP, TN, FP, FN))
+
+        if (TN+FP)==0:
+            logging.warning("TN+FP is negative, setting SP to -100")
+            SP = -100
+        else:
+            SP  = TN / (TN + FP)
+
+        SN  = TP / (TP + FN)
+        PPV = TP / (TP + FP)
+
+        CC_top    = float(TP * TN - FN * FP)
+        underSqrt = (TP+FN)*(TN+FP)*(TP+FP)*(TN+FN)
+        logging.debug("under sqrt is %s" % str(underSqrt))
+        if underSqrt<0:
+            logging.warning("SQRT on negative number, setting CC to -100")
+            CC = -100
+        else:
+            CC_bottom = math.sqrt(underSqrt)
+            if CC_bottom > 0:
+                CC = CC_top / CC_bottom
+            else:
+                CC = -100
+        row["CC"]  = CC
+
+        if noraMethod:
+            # for calculation of modified PPV (Pierstorff)
+            row["P"]  = refCount
+            row["N"]  = lociCount - refCount
+        else:
+            # normal PPV
+            row["P"]  = predCount
+            row["N"]  = lociCount - predCount
+
+
+        row["predCoverage"] = predCount
+        row["snNuc"]  = SN
+        row["spNuc"]  = SP
+        row["ppvNuc"] = PPV
+
+    return filenameRows
+
+def writeOutData(filenameOrder, filenameRows, fileObj):
+    """ write out rows """
+    print "\t".join(tableHeaders)
+    for filename in filenameOrder:
+        logging.debug(filename)
+        row = filenameRows[filename]
+        rowData = []
+        for field in rowFieldOrder:
+            if field not in row:
+                #logging.debug("%s not in row" % field)
+                continue
+            value = row[field]
+            if type(value)==types.FloatType:
+                value = "%2.2f" % value # convert to string
+            else:
+                value = str(value)
+            rowData.append(value)
+        line = "\t".join(rowData)+"\n"
+        logging.debug(line)
+        fileObj.write(line)
+
+def filterBed(filename, minLen):
+    """ Remove all features shorter than minLen bp from 
+    filename and return new temp filename """
+    newFileName = "/tmp/"+os.path.basename(filename)
+    newFile = open(newFileName, "w")
+    for line in open(filename):
+        chrom, start, end = line.split("\t")[:3]
+        length = int(end) - int(start)
+        if length >= minLen:
+            newFile.write(line)
+    return newFileName
+
+def calcOverlaps_Nora(filenameRows, refBedFilename, lociBedFilename):
+    refBeds = bed.parseBed(refBedFilename)
+    lociBed = bed.parseBed(refBedFilename)
+    for filename, row in filenameRows.iteritems():
+        predBed = bed.parseBed(filename)
+        overlapCount = featureBits(assembly, [filename, refBedFilename])
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+# parse aguments
+assembly, refBedFilename, lociBedFilename = args[:3]
+predBedFilenames = args[3:]
+onlyOverlapSelect = options.onlyOverlapSelect
+minOverlap = options.minOverlap
+minLen = options.minLen
+noraAlg = options.noraAlg
+
+# create a data dictionary filename -> dictionary of data
+filenameRows = {}
+filenameOrder = []
+for filename in predBedFilenames:
+    basename = os.path.basename(filename).split(".")[0]
+    filenameRows[filename] = {"algName":basename}
+    filenameOrder.append(filename)
+
+logging.debug("Running on filenames %s" % str(filenameOrder))
+
+# nucl-level stats
+if not onlyOverlapSelect:
+    filenameRows = calcNuclLevelOverlap(filenameRows, refBedFilename, lociBedFilename, assembly, noraMethod=noraAlg)
+
+# element-level stats
+filenameRows = calcElementLevelOverlap(filenameRows, refBedFilename, minOverlap, minLen)
+
+writeOutData(filenameOrder, filenameRows, stdout)

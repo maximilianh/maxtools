@@ -1,0 +1,37 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import glob
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - parse blast files and print all pmids that match somewhere and the genome where they match") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+files = args
+#files = glob.glob(wildcard)
+stderr.write("Reading blast files...\n")
+data = {}
+for fname in files:
+    f = open(fname, "r")
+    genome = os.path.basename(fname).split(".")[0]
+    for l in f:
+        pmid = l.split()[0].split("|")[0]
+        data.setdefault(pmid, set()).add(genome)
+
+for pmid, genomes in data.iteritems():
+    for g in genomes:
+        print pmid+"\t"+g
+        

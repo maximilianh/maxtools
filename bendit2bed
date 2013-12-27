@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==1:
+  print "converts bend.it predictions to UCSC bed format."
+  print " syntax: "
+  print " bendit2bed <filename> <chromosome> <chrom-pos> "
+  exit() 
+
+scoreField = 3
+
+startpos = int(argv[3])
+chrom = argv[2]
+f = open(argv[1], 'r')
+
+lines = f.readlines()
+
+# remove header
+stop=0
+while not stop:
+  stop=lines.pop(0).startswith("------")
+# remove footer
+if lines[-1].startswith("------"):
+   lines.pop()
+
+
+# print bed track header
+print 'track name="Bendability" description="Bend.it prediction" visibility="dense" useScore=1'
+
+# find min and max of score field and calc scale factor to scale to range 0,1000
+maxscore, minscore = 0.0,1000.0
+for line in lines:
+   score = float(line.split()[scoreField])
+   maxscore = max(maxscore, score)
+   minscore = min(minscore, score)
+#print maxscore, minscore
+scale = 1000/(maxscore-minscore)
+#print scale
+
+#convert lines
+for line in lines:
+     fields = line.split()
+     currpos = int(fields[0])
+     score = (float(fields[scoreField])-minscore)*scale 
+     print chrom, currpos+startpos, currpos+startpos+1, "Bend.it", "%.2f" % score, "+"     

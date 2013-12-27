@@ -1,0 +1,22 @@
+#!/bin/bash
+
+if test $# -eq 0 
+  then  
+	  echo
+	  echo 'plotfasta: plot nucl. distribution a of a given multi-fasta file (length of all seqs has to be identical)'
+	  echo
+	  echo SYNTAX:
+	  echo   plotfasta '<filename> '
+	  echo 
+	  echo EXAMPLE:
+	  echo   plotfasta test.fa
+	  exit 1
+fi	  
+
+
+FILE=`pwd`/$1
+echo $FILE
+cat $1 | fasta2plot > $FILE.temp
+
+echo set xtics 1 \; plot \"$FILE.temp\" using 1 with lines title \"A\", \"$FILE.temp\" using 2 with lines title \"C\", \"$FILE.temp\" using 3 with lines title \"T\", \"$FILE.temp\" using 4 with lines title \"G\" | gnuplot -persist
+#echo plot \"$FILE.temp\" using 1 with lines title \"A\", \"$FILE.temp\" using 2 with lines title \"C\", \"$FILE.temp\" using 3 with lines title \"T\", \"$FILE.temp\" using 4 with lines title \"G\" | gnuplot -persist

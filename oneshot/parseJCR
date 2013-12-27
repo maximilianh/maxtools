@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+# parse journal citation reports html to tab sep file
+# get: ISSN and impact factor
+
+import fileinput, re 
+
+headers = ["#ISSN", "impact", "fiveYearImpact"]
+print "\t".join(headers)
+
+#		<td align="left" valign="middle">0098-3500</td>
+#			<td align="right" valign="middle">2111</td>
+#			<td align="right" valign="middle">2.197</td>
+#			<td align="right" valign="middle">3.361</td>
+#			<td align="right" valign="middle">0.526</td>
+#			<td align="right" valign="middle">38</td>
+#			<td align="right" valign="middle">&gt;10.0</td>
+#			<td align="right" valign="middle">0.00581</td>
+#			<td align="right" valign="middle">1.820</td>
+issnRe = re.compile("[0-9*]{4}-[0-9*]{3}[0-9X*]")
+impactRe = re.compile(">([0-9]+[.][0-9]+)<")
+
+inRow = False
+dataCount = 0
+for line in fileinput.input():
+    if line.startswith('\t\t<td align="left" valign="middle">'):
+        issn = issnRe.search(line).group(0)
+        inRow=True
+    if line.startswith('\t\t\t<td align="right" valign="middle">'):
+        if dataCount==1:
+            match = impactRe.search(line)
+            if match!=None:
+                impact = match.group(1)
+            else:
+                impact = 0
+        if dataCount==2:
+            match = impactRe.search(line)
+            if match!=None:
+                fiveImpact = match.group(1)
+            else:
+                fiveImpact = 0
+        if dataCount==4:
+            fields = [issn, str(impact), str(fiveImpact)]
+            print "\t".join(fields)
+        dataCount += 1
+    if line.startswith('    </tr>'):
+        inRow=False
+        dataCount = 0
+
+

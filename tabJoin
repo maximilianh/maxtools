@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] file1(small) column1 file2(big) column2 - join two tab-sep-tables on given columns (0-based)") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("", "--outer", dest="outer", action="store_true", help="outer join: add NONE if not found") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+def openFile(fname):
+    if fname=="stdin":
+        return sys.stdin
+    else:
+        return open(fname)
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename1, file1Idx, filename2, file2Idx = args
+
+file1Idx, file2Idx = int(file1Idx), int(file2Idx)
+
+file1Data = {}
+# parse file1 into dict
+for line in openFile(filename1):
+    fs = line.strip("\n").split('\t')
+    indexVal = fs[file1Idx]
+    otherVals = fs[0:file1Idx]
+    otherVals.extend(fs[file1Idx+1:])
+    otherLine = "\t".join(otherVals)
+
+    file1Data.setdefault(indexVal, []).append(otherLine)
+
+# iterate over lines in file2
+for line in openFile(filename2):
+    line = line.strip("\n")
+    fs = line.strip("\n").split('\t')
+    indexVal = fs[file2Idx]
+    if indexVal in file1Data:
+        otherLines = file1Data[indexVal]
+    elif options.outer:
+        otherLines = ["NONE"]
+    else:
+        otherLines = []
+    for otherLine in otherLines:
+        print line+"\t"+otherLine

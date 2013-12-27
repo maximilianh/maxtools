@@ -1,0 +1,67 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+from bed import *
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] bedfile chromSizes.lst - get upstream regions given a list of genes") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+bedFile, chromSizeFile = args
+chromBeds = indexBedsChrom(bedFile)
+chromSizes = tabfile.slurpdict(chromSizeFile)
+
+newbeds = Features()
+for chrom, beds in chromBeds.iteritems():
+    # first feature
+    b = beds[0]
+    if b.strand=="+" and b.start!=0:
+        newbed=Feature(chrom, 0, b.start, b.name, 0, "+")
+        newbeds.append(newbed)
+        
+    # other intergenic regions
+    for i in range(0, len(beds)-1):
+        b1 = beds[i]
+        b2 = beds[i+1]
+        names = []
+        if b1.overlaps(b2):
+            continue
+        if b1.strand=="-":
+            #names.append(b1.name)
+            #strand = "-"
+            newbed = Feature(chrom, b1.end+1, b2.start, b1.name, 0, b1.strand)
+            newbeds.append(newbed)
+        if b2.strand=="+":
+            #names.append(b2.name)
+            #strand = "+"
+            newbed = Feature(chrom, b1.end+1, b2.start, b2.name, 0, b2.strand)
+            newbeds.append(newbed)
+        #if len(names)==2 or len(names)==0:
+            #strand="."
+        #name = "|".join(names)
+        #if name=="":
+            #name="NoGene"
+        #newbed = Feature(chrom, b1.end+1, b2.start, name, 0, strand)
+        #newbeds.append(newbed)
+            
+    #last regions      
+    b = beds[-1]
+    if b.strand=="-":
+        newbed=Feature(chrom, b.end, chromSizes[chrom], b.name, 0, "-")
+        newbeds.append(newbed)
+
+print newbeds
+

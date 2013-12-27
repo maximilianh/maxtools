@@ -1,0 +1,54 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - given two blast -m8 files, print only the best reciprocal matches") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-m", "--minEval", dest="minEval", action="store", type="int", help="filter out all matches where eVal is greater than this in both directions", default=10) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def readToDict(fname):
+    f = open(fname, "r")
+    dict = {}
+    for l in f:
+        fs = l.split()
+        if fs[0] in dict and dict[fs[0]][0]==fs[1]:
+            stderr.write( "error: this script accepts only blast outputs with best matches\n")
+            exit(1)
+        dict[fs[0]] = fs[1], float(fs[10])
+    return dict
+
+    
+# ----------- MAIN --------------
+MINEVAL = options.minEval
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+fname1, fname2 = args
+stderr.write("Reading first file...\n")
+homol1 =readToDict(fname1)
+stderr.write("Reading second file...\n")
+homol2 =readToDict(fname2)
+
+count = 0
+# first file:
+# a1 -> b1
+# second file:
+# b1 -> a2
+for a1 in homol1:
+    b1, eval1 = homol1[a1]
+    a2, eval2 = homol2.get(b1, (None,None) )
+    if a2!=None and a1==a2:
+        if eval1 < MINEVAL and eval2 < MINEVAL:
+            count += 1
+            print "\t".join([a1, b1, str(eval1), str(eval2)])
+
+stderr.write( "%d best matches found \n" % count)
+

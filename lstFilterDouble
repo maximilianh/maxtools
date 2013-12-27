@@ -1,0 +1,52 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - given a table, print only values from column1 that are associated to x (def: 2) different values in column 2") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-c", "--count", dest="count", action="store", help="minimum count to print, default is 2", default=2, type="int") 
+parser.add_option("-s", "--printSecond", dest="printSecond", action="store_true", help="do not print first column but rather second column", default=False) 
+parser.add_option("", "--maxcount", dest="maxcount", action="store", help="maximum count to print, default is infinite", default=None, type="int") 
+parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="reverse key-value relationship in table", default=False) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def slurpdictlist(fname, reverse):
+    dict = {}
+    for l in open(fname, "r"):
+        fs = l.split()
+        if len(fs)>1:
+            if not reverse:
+                key = fs[0]
+                val = fs[1]
+            else:
+                key = fs[1]
+                val = fs[0]
+            dict.setdefault(key, []).append(val)
+    return dict
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+reverse = options.reverse
+stderr.write("Make sure that table does not include double pairs!\n (uniq,wc)\n")
+stderr.write("Reading table...\n")
+table = slurpdictlist(filename, reverse)
+for key,list in table.iteritems():
+    if len(list)>=options.count:
+        if options.maxcount != None and len(list) > options.maxcount:
+            continue
+        if not options.printSecond:
+            print "\t".join([key, str(list)])
+        else:
+            print "\t".join([list[0], key, str(list[1:])])
+    
+

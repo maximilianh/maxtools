@@ -1,0 +1,58 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==2:
+	print " "
+	print " Will read bed bed file from stdin and return all"
+	print " TFactors that are mentioned in the bed file."
+        print 
+        print " EXAMPLE: "
+        print " cat test.bed test1.bed test2.bed | bedlisttf"
+        exit() 
+
+
+def getTFs(name):
+	# convert name-field of bed into list of TFs
+	# format it: comment=TF/TF2/TF3...
+	parts = name.split("=")	
+	if len(parts)==1:
+		return []
+        names = parts[1]	
+	names = names.split(",")
+	names = [x.strip().strip("!") for x in names]
+	return names
+
+def feat2str(x):
+	# converts a list to a string 
+	# does not care about included ints or included lists
+        res = str(x[0])
+	res += " "
+	res += str(x[1])
+	res += " "
+	res += x[2]
+	res += " "
+        res += " ".join(x[3])
+	return res
+
+# read features from stdin
+lines = sys.stdin.readlines()
+# remove header
+while lines[0].startswith("track") or lines[0].startswith("browser") or lines[0].startswith("#"):
+  lines.pop(0)
+factors = set()
+for line in lines:
+  line = line.strip()
+  if line=="":
+	continue
+
+  names = getTFs(line.split()[3])
+  for name in names:
+	  factors.add(name)
+del lines
+
+for f in factors:
+	print f

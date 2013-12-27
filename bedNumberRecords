@@ -1,0 +1,39 @@
+#!/usr/bin/gawk -f
+BEGIN { 
+	if (ARGC==1 || ARGC>3 || ARGV[1]=="-h") {
+          print "bedNumberRecords: Adds a counter to every bed-name-field."
+	  print;
+	  print "EXAMPLE:";
+	  print " cat test.bed | bedNumberRecords 0 _CNS" ;
+          print " ... will start numbering at 0, adding _CNS to every name";
+          exit 1
+        }
+	
+	if (ARGC == 3) {
+            prefix=ARGV[2]
+            ARGC-=1;
+        }
+        else
+            prefix="";
+
+	if (ARGC == 2) {
+            no=ARGV[1]
+            ARGC-=1;
+        }
+
+        OFS="\t";
+        IFS="\t";
+    }
+
+/^track/ { next; }
+/^browser/ { next; }
+/^#/ { next; }
+/^$/ { next; }
+
+// {
+    if ($4!="") 
+    print $1,$2,$3, prefix no "_"$4"";
+    else
+    print $1,$2,$3, prefix no;
+    no += 1;
+} 

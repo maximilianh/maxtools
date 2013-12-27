@@ -1,0 +1,93 @@
+#!/usr/bin/gawk -f
+# maximilian, 6/06
+
+BEGIN { 
+	if (ARGC==1 || ARGC>4) {
+	  print;
+	  print "Will change the seqname-fields of a bed file and"
+	  print "and will add a given offset to both start- and end-pos"
+	  print "fields of bed. Is used to project results from a program"
+	  print "that returned coordinates from 0...x to a given chromosome"
+	  print "If you specify a fasta-file as parameter, we will "
+	  print "read seqname/offset from the seqname-line of the fasta-file"
+	  print "It has to be in UCSC-style format, eg:"
+	  print "  >seqname range=chr4:1012-1050"
+	  print "In this case seqname would be 'chr4' and offset '1012'. "
+          print "If you add -r at the end, coordinates will be SUBSTRACTED"
+          print "offset instead of added!"
+	  print ""
+	  print "SYNTAX:"
+	  print " bedproject <seqname> <offset>" 
+	  print " bedproject <seqname> <offset> -r" 
+	  print " bedproject <fasta-file>"
+	  print " bedproject <fasta-file> -r"
+	  print "EXAMPLE:"
+	  print " cat bla.bed | bedproject chr4 1204"
+	  print " cat bla.bed | bedproject bla.fa"
+          exit 1
+        }
+	
+        OFS="\t"
+	if (ARGV[ARGC-1]=="-r") {
+            rev=1;
+            ARGC-=1;
+        }
+
+	if (ARGC==3) {
+	 seqname = ARGV[1]
+	 offset = ARGV[2]
+	 revOffset = ARGV[2]
+        }
+
+	if (ARGC==2) {
+	 FS = " "
+	 getline < ARGV[1]
+	 split($2, range, "=")
+	 split(range[2], coords, ":")
+	 seqname = coords[1]
+	 split(coords[2], positions, "-")
+	 offset = positions[1]
+         revOffset = positions[2]
+	}
+
+	 ARGV[1]="-"
+	 ARGC=2
+      }
+
+/track/ { print; next;}
+/browser/ {print; next;}
+
+/.*[a-z]+.*/	{ 
+	 if ($2 < 0) {
+	    print "bedproject Error: negative position found!"  > "/dev/stderr"
+	    exit 1
+         }
+	if (rev==1) {
+            if ($6=="+") {
+                $6="-"
+            }
+            else if ($6=="-") {
+                $6="+"
+            }
+            if (revOffset-$3 < 0) {
+                dropped+=1;
+                next
+                }
+            print seqname, revOffset-$3, revOffset-$2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13;
+        }
+        else { 
+        if (offset+$2 < 0) {
+            print "warning: dropping negative startpos feature" > "/dev/stderr"
+            next
+        }
+	if (NF>7) 
+	    print seqname, offset+$2, offset+$3, $4, $5, $6, offset+$7, offset+$8, $9, $10, $11, $12, $13;
+	else
+	    print seqname, offset+$2, offset+$3, $4, $5, $6;
+    }
+       	}
+
+END { if (dropped!=0) { 
+                print "warning: dropped "dropped" negative startpos features" > "/dev/stderr"
+            }
+        }

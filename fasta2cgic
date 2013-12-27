@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+import re
+from math import log
+
+def readfasta(lines):
+  ## will read from lines
+  ## will return a list of n seqs
+  ## seq[n][0] is the seqname
+  ## seq[n][1] is the sequence
+  seqs = []
+  for line in lines:
+	  if line.startswith(">"):
+	    seqs.append([line.strip(">").split()[0], ""])
+	  else:
+            seqs[-1][1]+=line.replace(" ","").strip()
+  return seqs
+
+def revComp(seq):
+	table = { "a" : "t", "A" : "T", "t" : "a", "T" : "A", "c" : "g", "C":"G", "g":"c", "G":"C", "-":"-" }
+	newseq = ""
+        for nucl in reversed(seq):
+           newseq += table[nucl]
+	return newseq
+
+
+def p(x,n):
+	# return x/n as a string
+	return "%.2f" % (x / float(n))
+
+#calculate IC from four probabilities
+def IC(plist):
+	sum = 0
+	for p in plist:	
+		if p==0:
+			continue
+		sum+=p*log(p,2)
+	return 2+sum
+
+if len(argv)>1:
+  print " Will plot the IC of c+g and a+t from a multi fasta file."
+  print " The position will be on x-axis, and the number of nucleotides of every type"
+  print " (a,c,t,g,-) on the y-axis."
+  print " Will read file from stdin."
+  print
+  print " syntax: "
+  print " plotfasta "
+  exit() 
+
+lines = sys.stdin.readlines()
+
+seqs = readfasta(lines)
+del lines
+print "# number of a,c,t,g,-"
+n = len(seqs)
+
+for pos in range(0, len(seqs[0][1])):
+	c = {'a':0, 'c':0,'t':0,'g':0,'-':0}
+	for seq in seqs:
+		c[seq[1][pos].lower()]+=1
+	counts = [c['a'],c['c'],c['t'],c['g']]
+	ccounts = [counts[0]+counts[2], counts[1]+counts[3]]
+	probs = [float(x)/n for x in ccounts]
+	strings = [str(x) for x in counts]
+	# print " ".join(strings)
+	print IC(probs)
+	  
+   

@@ -1,0 +1,3 @@
+faSize -detailed ../../fastaFragments/dm3droVir3/fasta/*.fa > fastaSizes.tab
+for i in ../dm3droVir3/bed/*.bed; do echo -e `basename $i .bed`'\t'`head -n1 $i | cut -f1`; done | grep fragment > fileToFrag.tab 
+for i in ../dm3droVir3/blocks/*.blocks; do contemplateToPsl droVir3 dm3 fileToFrag.tab fastaSizes.tab $i | pslToBed stdin stdout; done 2>&1 | less

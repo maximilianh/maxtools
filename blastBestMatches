@@ -1,0 +1,88 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - given a blast -m8 file, print only the best n matches") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-n", "", dest="nMatches", action="store", help="number of matches to report [default: %default]", default=1, type="int") 
+parser.add_option("-b", "", dest="blastFormat", action="store_true", help="output in blast format, default is a more compact format (eval, rank)", default=False) 
+parser.add_option("-m", "--minEval", dest="minEval", action="store", type="float", help="filter out all matches where eVal is greater than this in both directions", default=10) 
+parser.add_option("-i", "--minId", dest="minId", action="store", type="float", help="filter out all matches where percentage identity is lower than this", default=None) 
+parser.add_option("-r", "--noRank", dest="noRank", action="store_true", help="do not print the rank of the matches", default=False) 
+parser.add_option("-f", "--field", dest="field", action="store", type="int", help="field to use to parse e-value, default is 10, the inparanoid-parser uses 3, default %default ", default=10) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def readToDict(fname, field, speed=False):
+    if fname!="stdin":
+        f = open(fname, "r")
+    else:
+        f = stdin
+    dict = {}
+    for l in f:
+        fs = l.split()
+	if not speed:
+	    dict.setdefault(fs[0],[]).append( (fs[1], float(fs[field]), fs) )
+	else:
+	    dict.setdefault(fs[0],[]).append( (fs[1], float(fs[field]), None) )
+    return dict
+
+    
+# ----------- MAIN --------------
+minEval = options.minEval
+nMatches = options.nMatches
+blastFormat = options.blastFormat
+minId = options.minId
+noRank = options.noRank
+field = options.field
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+if noRank:
+    stderr.write("NoRank specified, setting nMatches to 1000000\n")
+    nMatches=1000000
+fname1 = args[0]
+stderr.write("Reading blast file...\n")
+speed = not blastFormat and not minId
+homol1 =readToDict(fname1, field, speed)
+
+stderr.write("Indexing and sorting...\n")
+count = 0
+deb=False
+for id1 in homol1:
+    matches = homol1[id1]
+    if not noRank:
+	matches.sort(key = lambda (x,y,fs): y, reverse=False)
+    alreadyOutput = {}
+    n = 0
+    #print matches
+    for m in matches:
+        id2, eVal, allFields = m
+        if n==nMatches and not noRank:
+		break
+	if not eVal<=minEval:
+		#print eVal, minEval
+		continue	
+	if minId:
+	    if not float(allFields[2])>=minId:
+		    continue
+
+        if id2 not in alreadyOutput and id2 != id1:
+            alreadyOutput[id2]=True
+            n+=1
+            count+=1
+            if not blastFormat:
+		if not noRank:
+			print "\t".join([id1, id2, str(eVal)+"_(rank="+str(n)+")"])
+		else:
+			print "\t".join([id1, id2, str(eVal)])
+            else:
+                print "\t".join(allFields)
+
+stderr.write( "%d best matches found \n" % count)
+

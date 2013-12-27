@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import bed
+
+# ====== CONSTANTS =======
+BEDDIR = "bed/"
+CUTOFF=10
+BINSIZE=10000
+genomes={"hg18" : "http://genome.ucsc.edu/cgi-bin/hgTracks?db=hg18&position=chr1:1-10000&hgt.customText=http://genome.ciona.cnrs-gif.fr/biofiles/textToGenome/",
+        "mm9": "http://genome.ucsc.edu/cgi-bin/hgTracks?db=mm9&position=chr1:1-10000&hgt.customText=http://genome.ciona.cnrs-gif.fr/biofiles/textToGenome/",
+        "rn4" : "http://genome.ucsc.edu/cgi-bin/hgTracks?db=rn4&position=chr1:1-10000&hgt.customText=http://genome.ciona.cnrs-gif.fr/biofiles/textToGenome/",
+        "ce4" : "http://genome.ucsc.edu/cgi-bin/hgTracks?db=ce4&position=chrI:13467950-13545949&hgt.customText=http://genome.ciona.cnrs-gif.fr/biofiles/textToGenome/",
+        "ecoli" : "http://archaea.ucsc.edu/cgi-bin/hgGateway?db=eschColi_K12&position=chr:0-40000&hgt.customText=http://genome.ciona.cnrs-gif.fr/biofiles/textToGenome/",
+        "dm3" : "http://genome.ucsc.edu/cgi-bin/hgTracks?db=dm3&position=chr3L:1-10000&hgt.customText=http://genome.ciona.cnrs-gif.fr/biofiles/textToGenome/"}
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] - Create index.html for textToGenome, has to be run from t2g-directory") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def binBed(filename, binSize, cutoff):
+    beds = bed.parseBedFilename(filename)
+    chromBins = {}
+    for b in beds:
+        bin = b.start / binSize
+        chromBins.setdefault(b.chrom, {}).setdefault(bin, set()).add(b.name)
+
+    goodBins = []
+    for chrom, bins in chromBins.iteritems():
+        for bin, binSet in bins.iteritems():
+            binFeats = len(binSet)
+            if binFeats >= cutoff:
+                start = int(bin)*int(binSize)
+                end = start + binSize
+                goodBins.append([chrom, start, end])
+    return goodBins
+
+            #fields = [str(chrom), str(bin*100000), str(binSize)]
+            #print "\t".join(fields)
+
+def writeHeader(fh):
+    fh.write("""
+<html>
+    <head>
+        <title>Text2Genome manual inspection of results</title>
+    </head>
+    <body>
+<h4>Text2Genome manual inspection of results</h4>
+Links to load custom tracks:<p>
+""")
+
+def writeFooter(fh):
+    fh.write("""</body></html>""")
+
+# ----------- MAIN --------------
+#if args==[]: 
+    #parser.print_help()
+    #exit(1)
+
+writeHeader(stdout)
+for genome, url in genomes.iteritems():
+    print '<a href="%s%s.bed">%s</a><br>' % (url, genome, genome)
+
+for genome in genomes:
+    print '<p>Regions with more than %d features in genome %s:<br>' % (CUTOFF, genome)
+    regions = binBed(BEDDIR+'%s.bed' % genome, BINSIZE, CUTOFF)
+    for r in regions:
+        print "%s:%d-%d<br>" % (r[0], r[1], r[2])
+writeFooter(stdout)
+
+

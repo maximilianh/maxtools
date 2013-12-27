@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+import bed, tabfile, os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] chromSizesFile bedFile1 bedFile2 ... - check if coordinates in bedfiles are > than chromSize" ) 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-o", "--output", dest="output", action="store_true", help="output the good features to stdout") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+chromSizesFilename = args[0]
+filenames = args[1:]
+output = options.output
+
+chromSizes = tabfile.slurpdict(chromSizesFilename, asInt=True)
+
+for filename in filenames:
+    logging.info("File: %s" % os.path.basename(filename))
+    beds = bed.parseBedFilename(filename, fieldCount=4)
+    for b in beds:
+        hasError=False
+        chrom = b.chrom
+        size  = int(chromSizes[chrom])
+        if int(b.start) > size:
+            logging.info( "Start is > %s: %s" %(size, b))
+            hasError=True
+        if int(b.end) > chromSizes[chrom]:
+            logging.info("End is > %s: %s" %(size, b))
+            hasError=True
+        if not hasError and output:
+            print b

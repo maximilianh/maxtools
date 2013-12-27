@@ -1,0 +1,36 @@
+#!/usr/bin/python
+
+import sys
+from optparse import OptionParser
+import gbparsy # import GBParsy module
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - parse out reference information from genbank records") 
+
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+oGBParsy = gbparsy.gbparsy()
+oGBParsy.parse(filename) # parse a GBF file which contains more than one GBF sequence data
+
+sys.stderr.write("Parsing %s\n" % filename)
+# If you want to get a list of SeqRecord instances, use getBioData method instead of getRawData.
+lSeqData = oGBParsy.getRawData()
+   
+#headers = ["#Accession", "Index", "PMID", "title", "authors", "journal", "consortium", "medline", "remark"]
+#print "\t".join(headers)
+
+for dSeqData in lSeqData: 
+    acc= dSeqData["accession"]
+    for ref in dSeqData["references"]:
+        row = [acc, str(ref["number"]), ref["pubmed"], ref["title"], ref["authors"], ref["journal"], ref["consrtm"], ref["medline"], ref["remark"]]
+        print "\t".join(row)

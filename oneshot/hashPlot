@@ -1,0 +1,24 @@
+#!/bin/bash
+# $1 - hashfile
+# optional $2: description of y axis
+
+OUT=/tmp/my.gp
+PS=`basename $1 .hash`.ps
+YLABEL=${2:-No Label}
+echo $PS
+
+cat $1 | gawk '{OFS="\t"; print NR, $2;}' > /tmp/gnudata
+echo > $OUT
+cat $1 | gawk 'BEGIN { printf "set xtics (";} // {ORS=",";OFS="\t"; print "\""$1"\" " NR-1 } END {print ")"; }' | tr '\n' ' ' | sed -e "s/,)/)/g" | sed -e "s/,$//g"  >> $OUT
+echo \; >> $OUT
+echo set terminal postscript eps \;>> $OUT
+echo set output \"$PS\" \;>> $OUT
+echo set xtics rotate \; >> $OUT
+echo 'set nokey;' >> $OUT
+echo 'set ylabel "'$YLABEL'";' >> $OUT
+echo 'plot "'/tmp/gnudata'" using 2 with linespoints;' >> $OUT
+gnuplot $OUT
+#gv $PS
+PNG=`basename $PS .ps`.png
+convert -density 150 $PS $PNG
+qiv $PNG

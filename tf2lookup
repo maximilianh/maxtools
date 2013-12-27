@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+
+import re
+import sys
+
+if len(sys.argv)>1 and sys.argv[-1]=="-h":
+  print ""
+  print " Will construct lookup tables from transfac's matrix.dat"
+  print " Site-AC -> Matrix-AC"
+  print " "
+  print " SYNTAX: "
+  print " cat matrix.mat | tf2lookup"
+  sys.exit() 
+
+def extractID(record):
+	""" will return the AC of a transfac record """
+	for line in record:
+		if line.startswith("AC "):
+			line = line[2:]
+			bf = line.strip()
+			return bf
+
+def extractsiteacs(record):
+	""" will return all linked site-acs for a given matrix record"""
+	acs = []
+	for line in record:
+		if line.startswith("BS "):
+			line = line[2:]
+			ac = line.split(";")[1].strip()
+			if not ac.startswith("R"):
+				continue
+			acs.append(ac)
+	return acs	
+
+def readmats(lines):
+	""" returns a dict with the factor names (BF-line) as keys and the
+	the whole matrix description lines as the values """
+
+	mats = {}
+	startdb = False
+	record = []
+	for line in lines: 
+		line = line.strip()
+		if line=="//": 
+			if startdb==True:
+				id = extractID(record)			
+				mats[id]=record
+				record = []
+			startdb = True
+		# skip until first line with //
+		if not startdb:
+			continue
+		# read into list until we find //
+		record.append(line)	
+	return mats
+
+lines = sys.stdin.readlines()
+mats = readmats(lines)
+del lines
+
+# print all records and their linked acs
+for id, mat in mats.iteritems():
+	acs = extractsiteacs(mat)
+	for ac in acs:
+	  print id+"\t"+ac
+

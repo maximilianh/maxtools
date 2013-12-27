@@ -1,0 +1,14 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+parser = OptionParser("usage: %prog infile - print multiple values for one key in one line") 
+parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="reverse key/value order in hash file") 
+(options, args) = parser.parse_args()
+infile = args[0]
+
+data = tabfile.slurpdictlist(infile, reverse=options.reverse)
+for key, vals in data.iteritems():
+   print key+"\t"+"/".join(vals) 

@@ -1,0 +1,53 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - output a list of genes sorted by total sum of conserved non-coding region length around them") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-g", "--genesFile", dest="genesFile", action="store", help="evaluate results for a subset of genes") 
+parser.add_option("-f", "--flankType", dest="flankType", action="store", type="int", help="flanking type, default %default, 0=upstream, 1=closest, 2=both", default=1) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+flankType=options.flankType
+
+stderr.write("Reading words file...\n")
+f = open(filename, "r")
+nblocks=0
+geneScores = {}
+for b in wordParser.readBlocks(f):
+    nblocks+=1
+    genes, intronic = b.getGenes(flankType=flankType)
+    for g in genes:
+	geneScores.setdefault(g,0)
+	geneScores[g]+=b.score
+
+if options.genesFile:
+    genes = tabfile.slurplist(options.genesFile, field=0)
+else:
+    genes = geneScores.keys()
+
+genes = set(genes)
+
+geneScoresList = [] 
+for gene in genes:
+    if gene in geneScores:
+	score = geneScores[gene]
+	geneScoresList.append ((gene,score))
+geneScoresList.sort( key = lambda (x,y): y)
+
+for gene, score in geneScoresList:
+    print gene+"\t"+str(score)

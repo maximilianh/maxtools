@@ -1,0 +1,110 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] blastfile bedfile : Use a tblastx-tabular-file to lift annotations between sequences (approximatively), very slow") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-s", "--suppressIntersection", dest="noIntersection", action="store_true", help="suppress printing length of intersection", default=True) 
+parser.add_option("-a", "--outputAll", dest="outputAll", action="store", help="instead of dropping everything that can not be mapped, output it with NAME as description. ", metavar="NAME", default="", type="string") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+class hit:
+    """ a hit from a blast tabular output file """
+    def __repr__(self):
+        return self.line
+
+def parseBlast(file):
+    hits = []
+    for l in file:
+        if l.startswith("#"):
+            continue
+        fs = l.split()
+        if len(fs)!=12:
+            stderr.write("error: blast output does not have 12 fields. Make sure that you ran blast with -m 9 or -D T (for bl2seq)\n")
+            exit(1)
+        h = hit()
+        (h.qName, h.sName, h.percId, h.alnLen, h.mismatches, h.gapOpen, h.qStart, h.qEnd, h.sStart, h.sEnd, h.eVal, h.alnScore) = fs 
+        h.sStart = int(h.sStart)
+        h.sEnd = int(h.sEnd)
+        h.qStart = int(h.qStart)
+        h.qEnd = int(h.qEnd)
+        if h.qEnd < h.qStart:
+            (h.qStart, h.qEnd) = (h.qEnd, h.qStart)
+        if h.sEnd < h.sStart:
+            (h.sStart, h.sEnd) = (h.sEnd, h.sStart)
+        h.line = l.strip()
+        hits.append(h)
+    return hits
+
+class bed:
+    """ a feature from a bed file """
+    def overlaps(self, hit):
+        """ returns number of overlapping bp if two Features overlap or 
+            false if no overlap """
+        if (( hit.sStart <= self.start and hit.sEnd > self.start) or \
+            (hit.sStart < self.end and hit.sEnd >= self.end) or 
+            (hit.sStart > self.start and hit.sStart < self.end)):
+            return (min (hit.sEnd, self.end) - max (hit.sStart, self.start))
+        else:
+            return 0 
+    def __repr__(self):
+        return self.line
+
+def parseBed(file):
+    beds = []
+    for l in file:
+        l = l.strip()
+        b = bed()
+        if l.startswith("#"):
+            continue
+        fs = l.split()
+        if not len(fs) >= 4:
+            stderr.write("error: bed features need names.\n")
+            exit(1)
+        (b.chrom, b.start, b.end, b.name) = fs[0:4]
+        b.start = int(b.start)
+        b.end = int(b.end)
+        b.line = l
+        beds.append(b)
+    return beds
+        
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+defaultname = options.outputAll
+noIntersection = options.noIntersection
+stderr.write("Reading blast output...\n")
+f = open(args[0], "r")
+hits = parseBlast(f)
+
+stderr.write("Reading bedfile ...\n")
+f = open(args[1], "r")
+beds = parseBed(f)
+    
+stderr.write("Searching for overlaps bed-blast...\n")
+for b in beds:
+    overlaps = []
+    for h in hits:
+        length = b.overlaps(h)
+        if length > 0:
+            h.overlapLen=length
+            overlaps.append(h)
+    # choose highest scoring overlap
+    if len(overlaps)==0:
+        if defaultname!="":
+            print "%s\t%s\t%s\t%s" % (b.chrom, b.start, b.end,defaultname)
+        continue
+    #overlaps.sort(key=lambda x: x.eVal, reverse=True) # py cannot parse eval
+    overlaps.sort(key=lambda x: x.alnScore)
+    best = overlaps[0]
+    suffix = ""
+    if (not noIntersection):
+        suffix="_ints"+str(best.overlapLen), str(best.eVal)
+    print "\t".join([best.qName, str(best.qStart), str(best.qEnd), b.name+suffix])

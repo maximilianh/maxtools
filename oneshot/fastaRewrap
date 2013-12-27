@@ -1,0 +1,3 @@
+#!/bin/bash
+
+cat $1 | fastaWrap 80 > /tmp/fastarewrap.tmp && mv /tmp/fastarewrap.tmp $1

@@ -1,0 +1,75 @@
+#!/usr/bin/perl  -w
+use strict;
+$|++;                       # force auto flush of output buffer
+use Getopt::Long;
+use Pod::Usage;
+use Bio::SeqIO;
+
+my $BASESEQ = 1;
+=head1 NAME
+maf2Info - prints information about a maf-file
+L<perlpod>
+=cut
+
+my %options=();
+
+sub options () {
+    # Process options.
+    use Getopt::Std;
+    getopts("r:hb:",\%options) or die("unrecognized option.");
+    if ($options{"h"}) {
+        print << "END";
+$0 <options> filename: filter maf-file, read from stdin, print to stdout
+
+Will drop all alignment scores, all lines that do not start with a or s.
+
+options:
+   -r <species> : require all printed blocks to include a certain species,
+                  e.g. "fr1"
+   -h           : this help
+END
+        exit(1);
+    }
+
+}
+
+&options();
+
+use Bio::AlignIO;
+
+my $nal = 1;
+print STDERR  "Reading file...\n";
+
+my $required = $options{"r"};
+
+print "##maf version=1\n";
+my $alignio = Bio::AlignIO->new(-fh => \*STDIN , -format => 'maf');
+while(my $aln = $alignio->next_aln()){
+    print STDERR "$nal...\n";
+    $nal++;
+    my $match_line = $aln->match_line;
+
+    # see if we find the required id:
+    my $found = 0;
+    if ($required) {
+        foreach my $seq ( $aln->each_seq() ) {
+            my @parts = split(/\./, $seq->id());
+            #print $required,$parts[0]."\n";
+            if ($parts[0] eq $required) {
+                $found = 1;
+                last; # WTF! break = last in perl!
+            }
+        }
+    }
+    if ($required && ! $found==1) {
+        next;
+    }
+    # write maf-file
+    print "a score=0\n";
+    foreach my $seq ( $aln->each_seq() ) {
+        #printf "s\t%s\t%d\t%d\t%s\t%d\t%s\n",$seq->id(), $seq->start, $seq->_ungapped_len()-$seq->start()+1, $seq->strand(), 0, $seq->seq();
+        printf "s %25s %15d %7d %1s %10d %s\n",$seq->id(), $seq->start-1, $seq->end()-$seq->start()+1, $seq->strand(), 900000000, $seq->seq();
+    }
+    print "\n";
+}
+

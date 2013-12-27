@@ -1,0 +1,104 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, csv
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] bedFile tabFile1 tabFile2 tabFile3... - convert data in format (geneName, experimentName, value) to the geneExpr format and append the geneExpr entries to bed features, output everything to stdout") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+else:
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+# ==== FUNCTIONs =====
+
+def parseExprFile(filename, geneExprDict, expMinMax):
+    """ parse a tabfile and add to geneExprDict as geneName -> dict of
+    experiments -> value
+    """
+    logging.info("Parsing %s" % filename)
+    linereader = csv.reader(open(filename), delimiter="\t")
+    for row in linereader:
+        gene, exp, value = row
+        value = float(value)
+        geneExprDict.setdefault(gene, {}).setdefault(exp, value)
+        expMinMax.setdefault(exp, [9999999999999, -99999999999])
+
+        expMinMax[exp][0] = min(expMinMax[exp][0], value)
+        expMinMax[exp][1] = max(expMinMax[exp][1], value)
+
+    return geneExprDict, expMinMax
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+bedFilename = args[0]
+tabFilenames = args[1:]
+
+# collect gene -> exp -> value mappings from file
+# and also min/max values for each experiment
+geneExpr = {}
+expMinMax = {}
+for tabFilename in tabFilenames:
+    geneExpr, expMinMax = parseExprFile(tabFilename, geneExpr, expMinMax)
+
+# assign exp strings to integer ids and output min/max
+experiments = list(expMinMax.keys())
+experiments.sort()
+
+expId = 0
+expToId = {}
+expIds = []
+for exp in experiments:
+    logging.debug("Experiment %s: MinVal %f, MaxVal %f" % (exp, expMinMax[exp][0], expMinMax[exp][1]))
+    expToId[exp]=expId
+    expIds.append(expId)
+    expId+=1
+
+expCount  = len(expIds)
+expIds    = [str(x) for x in expIds] # convert to strinlist
+expIds    = ",".join(expIds) # to tab sep string
+logging.debug("expCount %d" % expCount)
+logging.debug("expIds %s" % str(expIds))
+
+# output in geneExpr format
+skipCount=0
+for line in open(bedFilename):
+    line = line.strip("\n")
+    gene = line.split("\t")[3]
+
+    expScores = expCount * [0.0]
+    if gene in geneExpr:
+        for exp in experiments:
+            expValues = geneExpr[gene]
+            score = expValues.get(exp, 0.0)
+            expId = expToId[exp]
+            expScores[expId]=score
+    else:
+        skipCount+=1
+        logging.debug("skipping %s" % gene)
+        continue
+
+    # convert to stringlist and to comma-sep string
+    expScores = [str(x) for x in expScores] 
+    expScores = ",".join(expScores)
+
+    exprFields  = [str(expCount), expIds, expScores]
+    exprString  = "\t".join(exprFields)
+
+    print line, exprString
+
+logging.info("No data found for %d genes, these genes were skipped" % skipCount)
+logging.info("\nAdd this to microarrayGroups.ra:\n")
+logging.info("name "+",".join(tabFilenames))
+logging.info("type all")
+logging.info("expIds "+expIds)
+logging.info("groupSizes "+",".join(len(experiments)*["1"]))
+logging.info("names "+",".join(experiments))

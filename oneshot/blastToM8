@@ -1,0 +1,56 @@
+#!/usr/bin/python
+import sys
+f = sys.argv[1]
+
+firstOne = True
+
+# blast tabular format
+# query id, database sequence (subject) id, percent identity, alignment length, number of mismatches, number of gap openings, query start, query end, subject start, subject end, Expect value, HSP bit score.
+
+for l in open(f):
+  #print l
+  if l.startswith("Query="):
+      srcId=l.strip().split("= ")[1]
+
+  if (l.startswith(">") or l.startswith(" Score")) and not firstOne:
+      fs = [ trgId, srcId, percent, alnLen, matches, "NaN", qStart, qEnd, trgStart, trgEnd, eVal, score]
+      print "\t".join(fs)
+
+  if l.startswith(">"):
+      trgId=l.strip(">").strip()
+
+  if l.startswith(" Score"):
+      score = l.split("bits")[0].split("=")[1].strip()
+      eVal  = l.split("=")[2].strip()
+      firstOne=False
+
+  if l.startswith(" Identities"):
+      alnLen  = l.split(" ")[2].strip().split("/")[0]
+      matches = l.split(" ")[2].strip().split("/")[1]
+      percent = l.split("(")[1].strip("%)").strip()
+
+  if l.startswith(" Query"):
+      fs = l.split()
+      fs = fs[1], fs[-1]
+      #fs = [int(x) for x in fs]
+      #fs.sort()
+      qStart, qEnd = fs 
+
+  if l.startswith(" Sbjct"):
+      fs = l.split()
+      fs = fs[1], fs[-1]
+      #fs = [int(x) for x in fs]
+      #fs.sort()
+      trgStart, trgEnd = fs 
+
+  if l.startswith(" Strand"):
+      strands = l.split("=")[1].split("/")
+      strands = [s.strip() for s in strands]
+      newStrands = []
+      for s in strands:
+          if s=="Plus":
+              newStrands.append("+")
+          else:
+              newStrands.append("-")
+      strands = newStrands
+      qStrand, trgStrand = strands

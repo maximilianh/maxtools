@@ -1,0 +1,29 @@
+#!/usr/bin/python
+
+import sys
+
+lastname = ""
+lastchrom = ""
+minStart, maxEnd = 99999999999, 0
+laststart, lastend = -1,-1
+for l in sys.stdin:
+    print l,
+    (chrom, start, end, name) = l.strip().split()[:4]
+    start = int(start)
+    end = int(end)
+    name = name.split("_")[0]
+    if name.split()[0] == lastname and lastchrom==chrom:
+        minStart = min(start, minStart)
+        maxEnd = max(end, maxEnd)
+    else:
+       print "\t".join([lastchrom, str(minStart), str(maxEnd), lastname]) 
+       minStart, maxEnd = 99999999999, -1
+       
+    lastchrom = chrom
+    lastname = name
+    laststart = start
+    lastend = end
+
+
+    
+

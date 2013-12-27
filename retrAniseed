@@ -1,0 +1,46 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import time
+import util
+import os.path
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename outDir - read in-situ-ids from file and download pictures from aniseed") 
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename, outDir = args
+
+if filename=="stdin":
+    f = sys.stdin
+else:
+    f = open(filename, "r")
+
+for l in f:
+    l = l.strip()
+    id = l.split("\t")[2]
+    print id
+    url = "http://crfb.univ-mrs.fr/aniseed/insitu.php?id="+id
+    print url
+    matches = util.httpMatches(url, 'cellpadding="0"><tr><td><img src="([a-zA-Z?=0-9.\/_-]*)"')
+    i = 0
+    if len(matches)==0:
+	print "No image found for %s" % id
+	continue
+    for m in matches:
+        i+=1
+        fname = id+"_"+str(i)+".jpg"
+        fname = os.path.join(outDir, fname)
+        imgUrl = "http://crfb.univ-mrs.fr/aniseed/"+m
+        print "Downloading %s to %s" % (imgUrl, fname)
+        util.httpDownload(imgUrl, fname)
+        time.sleep(3)

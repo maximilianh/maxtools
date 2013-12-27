@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, operator
+import bed
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - put bed features into 1MB bins and output sorted by number of features by bin") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-s", "--binSize", dest="binSize", action="store", type="int", help="size of bin, default %default", default=1000000) 
+parser.add_option("-m", "--minFeats", dest="minFeats", action="store", type="int", help="minimum number of features per bin, default %default", default=10) 
+parser.add_option("-d", "--debug", dest="debug", action="store", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+binSize = options.binSize
+minFeats = options.minFeats
+
+features = bed.parseBedFilename(filename)
+
+byChromBin = {}
+
+for ft in features:
+    bin = ft.start / binSize
+    byChromBin.setdefault(ft.chrom, {}).setdefault(bin, []).append(ft)
+
+binList = []
+for chrom, binFeatures in byChromBin.iteritems():
+    for bin, features in binFeatures.iteritems():
+        binList.append(( len(features), chrom, bin, features))
+    binList.sort( key=operator.itemgetter(0), reverse=True)
+
+for size, chrom, bin, features in binList:
+    if size<minFeats:
+        continue
+    print "Chrom %s, Bin %s: %s:%d-%d"% (chrom, bin, chrom, bin*binSize,(bin+1)*binSize)
+    for f in features:
+        print "  * ", f

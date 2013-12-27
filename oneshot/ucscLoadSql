@@ -1,0 +1,21 @@
+#!/bin/sh
+# load all sql dbs in current dir into given mysql db
+DB=$1
+if [ -z "$DB" ]; then
+    echo ucscLoadSql dbname - load all sql files in current dir into mysql db 
+    exit 1
+fi
+
+for SQL in *.sql
+do
+    T_NAME=${SQL%%.sql}
+    echo "loading table ${T_NAME}"
+    echo drop
+    mysql  -e "DROP TABLE ${T_NAME};" ${DB} > /dev/null 2> /dev/null
+    echo create
+    mysql  ${DB} < ${SQL}
+    echo loading
+    cat "${T_NAME}.txt" | mysql --local-infile=1 -e "LOAD DATA LOCAL INFILE \"/dev/stdin\" INTO TABLE ${T_NAME};" ${DB}
+done
+
+

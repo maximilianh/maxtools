@@ -1,0 +1,18 @@
+#!/usr/bin/gawk -f
+# extract part of a bed file that lie completely between two limits:
+#  example: bedFrag chr1 1000 1500
+BEGIN {
+    OFS="\t";      
+    chrom = ARGV[1];
+    min = ARGV[2];
+    max   = ARGV[3];
+    ARGV[1]="";
+    ARGV[2]="";
+    ARGV[3]="";
+    ARGC=1;
+} 
+
+($1 == chrom) && ($2 >= min) && ($3 <= max)   { 
+        print $0
+} 
+

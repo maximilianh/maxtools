@@ -1,0 +1,176 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import os
+import tabfile, pmcArticle
+
+# a global variable with some hard-coded translations from Ensembl to UCSC chromosome names that I spotted
+chromMap = {
+        "chrMtDNA" : "chrM", # ce2
+        "chrUextra" : "chrU", # ce2
+        "E22C19W28_E50C23" : "chrE22C19W28_E50C23", #galgal2
+        "chrMT" : "chrM",  # mm9
+        "dmel_mitochondrion_genome" : "chrM", # dm2
+        "HSCHR6_MHC_COX"  : "chr6_cox_hap2", # all of these are from human ensembl 56
+        "HSCHR6_MHC_APD"  : "chr6_apd_hap1",
+        "HSCHR6_MHC_DBB"  : "chr6_dbb_hap3",
+        "HSCHR6_MHC_MANN" : "chr6_mann_hap4",
+        "HSCHR6_MHC_MCF"  : "chr6_mcf_hap5",
+        "HSCHR6_MHC_QBL"  : "chr6_qbl_hap6",
+        "HSCHR6_MHC_SSTO" : "chr6_ssto_hap7",
+        "HSCHR17_1"       : "chr17_ctg5_hap1",
+        "HSCHR4_1"        : "chr4_ctg9_hap1",
+        "chrUn_gl000191": "chr1_gl000191_random",
+        "chrUn_gl000192": "chr1_gl000192_random",
+        "chrUn_gl000193": "chr4_gl000193_random",
+        "chrUn_gl000194": "chr4_gl000194_random",
+        "chrUn_gl000195": "chr7_gl000195_random",
+        "chrUn_gl000196": "chr8_gl000196_random",
+        "chrUn_gl000197": "chr8_gl000197_random",
+        "chrUn_gl000198": "chr9_gl000198_random",
+        "chrUn_gl000199": "chr9_gl000199_random",
+        "chrUn_gl000200": "chr9_gl000200_random",
+        "chrUn_gl000201": "chr9_gl000201_random",
+        "chrUn_gl000202":"chr11_gl000202_random",
+        "chrUn_gl000203":"chr17_gl000203_random",
+        "chrUn_gl000204":"chr17_gl000204_random",
+        "chrUn_gl000205":"chr17_gl000205_random",
+        "chrUn_gl000206":"chr17_gl000206_random",
+        "chrUn_gl000207":"chr18_gl000207_random",
+        "chrUn_gl000208":"chr19_gl000208_random",
+        "chrUn_gl000209":"chr19_gl000209_random",
+        "chrUn_gl000210":"chr21_gl000210_random",
+        "chrI" : "chr1", 
+        "chrII" : "chr2", 
+        "chrIII" : "chr3", 
+        "chrIV" : "chr4", 
+        "chrV" : "chr5", 
+        "chrVI" : "chr6", 
+        "chrVII" : "chr7", 
+        "chrVIII" : "chr8", 
+        "chrIX" : "chr9", 
+        "chrX" : "chr10", 
+        "chrXI" : "chr11", 
+        "chrXII" : "chr12", 
+        "chrXIII" : "chr13", 
+        "chrXIV" : "chr14" ,
+        "chrMito" : "chrM" 
+        }
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] features.tsv taxonToUcscDb pmcToUniqueKeyFile outputDir - convert text2genome features file for ensembl DAS server to UCSC bed file by using the blocks-field of its bed format. Taxon to UcscDb is a file in the format genomeId<tab>ucscDbId") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+featureFile, taxonToUcscFile, pmcToKeyFile, outputDir = args
+
+taxonToUcsc = tabfile.slurpdict(taxonToUcscFile)
+pmcToKey = tabfile.slurpdict(pmcToUniqueKeyFile)
+
+print("reading %s" % taxonToUcscFile)
+bedFiles = {}
+for taxon, ucscDb in taxonToUcsc.iteritems():
+    # UCSC's fr2 has nothing in common with ensembl's fugu sequences
+    if ucscDb=="fr2":
+        continue
+    bedname = os.path.join(outputDir, ucscDb+".bed")
+    fh = open(bedname, "w")
+    fh.write('track name=Text2Genome description="Text2Genome Fulltext DNA" visibility=3 htmlUrl=http://www.text2genome.org url=%s?pmcId=$$\n' % pmcArticle.config.detailsUrl)
+    bedFiles[ucscDb] = fh
+
+print("reading features.tsv into memory")
+indexedFeatures = {}
+i = 0
+dropped =0
+for line in open(featureFile):
+    line = line.strip()
+    ft = line.split("\t")
+    genomeId, chrom, start, end, pmcId, seqId, score, groupId = ft
+    ft = ( genomeId, chrom, int(start), int(end), int(pmcId), int(seqId), int(score), int(groupId) )
+    if genomeId in taxonToUcsc:
+        indexedFeatures.setdefault(pmcId, {}).setdefault(groupId, []).append(ft)
+        i+=1
+    else: 
+        dropped+=1
+print("read %d features, dropped %d features as genome is not mapped to UCSC db ig" % (i, dropped))
+
+# format of feature is: genomeId, chrom, start, end, pmcId, seqId, score, groupId = ft
+# this could be better realized with dictionaries but I think arrays are faster and the code
+# is still quite readable
+GENOME=0
+CHROM=1
+START=2
+END=3
+PMCID=4
+SEQID=5
+
+print("converting features and writing to files in %s" % outputDir)
+for pmcId, groupFeatures in indexedFeatures.iteritems():
+    for groupId, features in groupFeatures.iteritems():
+
+        # data check
+        chroms = [f[CHROM] for f in features]
+        chroms = set(chroms)
+        assert(len(chroms)==1) # all features of a group have to be located on the same chromosome
+        chrom = chroms.pop()
+
+        genomeId = features[0][GENOME]
+        ucscDb = taxonToUcsc[genomeId]
+
+        # convert ensembl to UCSC chromosomes
+        # a very ugly procedure but not our fault
+        # (Ensembl itself doesn't care, they don't convert stuff like HSCHR4, creating invalid links)
+        # (UCSC doesn't care either, links to Ensembl often don't work when not on standard chromosomes)
+        # I spend one hour fixing most of these links, a very ugly work
+        
+        # if the chrom is a simple number we have to add "chr"
+        if chrom[0].isdigit():
+            # some hacks to accommodate ensembl/UCSC pecularities
+            if ucscDb=="ci2":
+                chrom = "chr%02d" % int(chrom.replace("q","").replace("p","")) + chrom[-1]
+            else:
+                chrom = "chr"+chrom
+        elif chrom[0] in ["I","V","M","X","Y","U","Z","W"]:
+            chrom = "chr"+chrom
+        elif ucscDb.startswith("hg") and chrom.startswith("GL"):
+            chrom = "chrUn_"+chrom.lower().split(".")[0]
+        elif ucscDb.startswith("mm") and chrom.startswith("NT_"):
+            continue
+        # skip stuff like chr1099214728069 on rheMac2
+        elif ucscDb.startswith("rheMac") and chrom.startswith("chr") and len(chrom)>15:
+            continue
+        # on bosTau4
+        elif ucscDb.startswith("bosTau") and "AAFC03011305" in chrom:
+            continue
+        if chrom in chromMap:
+            chrom = chromMap[chrom]
+
+        # generate bed block sizes for bed feature line
+        features.sort(key=lambda f: f[START]) # sort fts by start pos
+        minStart = features[0][START]
+        maxEnd   = features[-1][END]
+        blockStarts = [ str(f[START] - minStart) for f in features]
+        blockSizes = [ str(f[END] - f[START]) for f in features]
+        names = [str(f[SEQID]) for f in features]
+        #name = pmcId+"_"+",".join(names)
+        name = pmcToKey.get(pmcId, pmcId)
+        score = 0
+        bedFeature = [chrom, str(minStart), str(maxEnd), name,str(score), "+", str(minStart), str(maxEnd), "0", str(len(features)), ",".join(blockSizes), ",".join(blockStarts)]
+
+        bedFh  = bedFiles[ucscDb]
+        bedFh.write("\t".join(bedFeature))
+        bedFh.write("\n")
+
+     
+

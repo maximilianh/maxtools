@@ -1,0 +1,38 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - create one bedgraph feature per bp, split longer ones into several lines") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+if filename=="stdin":
+    ifh = sys.stdin
+else:
+    ifh = open(filename)
+
+for line in ifh:
+    chrom, start, end, score = line.strip().split()
+    start = int(start)
+    end = int(end)
+    if end-start==1:
+        print line,
+    else:
+        for newStart in range(start, end):
+            print "%s\t%d\t%d\t%s" % (chrom, newStart, newStart+1, score)

@@ -1,0 +1,24 @@
+#!/usr/bin/gawk -f
+
+BEGIN { FS = " "; 
+        OFS = "\t"; 
+        if (ARGC>1) 
+        {           feattype=ARGV[1];  }
+        else
+        {    feattype="misc_feature" }
+        ARGV[1]=""
+    }
+
+$1 !~ /^#.*/      { 
+                        strand = $5;
+                        score = $6;
+                        if (strand=="") 
+                            { strand="."; }
+                        if (score=="") 
+                            { score="0.0"; }
+                        frame=".";
+
+       # format: seq, progname, feat_type, start, stop, score, strand, frame(=".")
+       # HSFAU1        EMBL    exon    408     504     0.000   +       .       Sequence "HSFAU1.3" ; number 1
+			print $1,$4,feattype,$2,$3,score,strand,frame;
+		  }

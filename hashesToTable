@@ -1,0 +1,80 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import os.path
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] hashFile1 hashFile2 ...- summarize hash files to a table") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-k", "--valField", dest="valField", action="store", help="get value of hash from column x", type="int", default=1) 
+parser.add_option("-i", "--ignoreKeys", dest="ignoreKeys", action="store_true", help="ignore keys that do not occur in all files") 
+parser.add_option("", "--headers", dest="headers", action="store_true", help="input files have headers") 
+parser.add_option("-o", "--outHeaders", dest="outHeaders", action="store_true", help="generate output headers from filenames") 
+parser.add_option("", "--keyHeader", dest="keyHeader", action="store", help="name of key field, if -o is specified but not --headers, default %default", default="motif") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+files = args
+valField=options.valField
+ignoreKeys = options.ignoreKeys
+headers = options.headers
+
+keys=set()
+dicts = []
+
+# use filnames as headers if input files don't contain headers
+if options.outHeaders :
+    valueHeads = [os.path.splitext(os.path.basename(f))[0] for f in files]
+else:
+    valueHeads = []
+
+for f in files:
+    if headers:
+        valueHeads.append(open(f).readline().strip().split("\t")[1])
+
+    dict = tabfile.slurpdict(f, valField=valField, headers=headers)
+    #print keys.difference(dict.keys)
+    if len(keys.difference(dict.keys()))!=0:
+        stderr.write("error: keys are not identical in all files, file %s\n" % f)
+    dicts.append((f, dict))
+
+keys = set()
+first=True
+for fname, d in dicts:
+    if ignoreKeys and not first:
+        keys = keys.intersection(d.keys())
+    else:
+        keys = keys.union(d.keys())
+    first=False
+
+if options.outHeaders or options.headers:
+    if options.headers:
+        firstHead=open(files[0]).readline()
+        keyHead = firstHead.split("\t")[0]
+    else:
+        keyHead = options.keyHeader
+    #valueHeads = [".".join(os.path.basename(f).split(".")[:-1]) for f in files]
+    #valueHeads = [f for f in files]
+    headers = [keyHead]
+    headers.extend(valueHeads)
+    print "\t".join(headers)
+
+for key in keys:
+    values = [key]
+    for fname, d in dicts:
+        if key in d:
+            values.append(d[key])
+        else:
+            stderr.write("error: key %s missing in file %s\n" % (key, fname))
+    print "\t".join(values)
+

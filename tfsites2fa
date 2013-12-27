@@ -1,0 +1,94 @@
+#!/usr/bin/python
+
+import PWM
+import re
+from sys import *
+from optparse import OptionParser
+from os import environ
+import SubSeq 
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] transfac-id \nretrieve the real binding sites given a list of regular expressions that match against the ID-fields from a transfac file\n") 
+
+parser.add_option("-t", "--tffile", dest="matrixfile", action="store", help="the name of the file matrix.dat from Transfac/Jaspar/Genomatix, the default value is taken from the environment variable TFMATPATH [default: %default]", type="string", metavar="PATH", default=environ["TFMATPATH"]) 
+
+#parser.add_option("-m", "--matrixid", dest="matrixid", action="store", help="a regular expression to select the matrix to export") 
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def getIdentity(seq1, seq2):
+    """ return the identity as a value between 0 and len(seq1)"""
+    if not len(seq1)==len(seq2):
+        stderr.write("seq1 and seq2 have to have equal length!\n")
+    c = 0
+    for i in range(len(seq1)):
+        if (seq1[i]==seq2[i]):
+            c+=1
+    return c
+
+# -----------------
+matrixfile = options.matrixfile
+#matrixid = options.matrixid
+
+if args==[] :
+    stderr.write("No matrix specified. -h for help.\n ")
+    exit(1)
+
+stderr.write("Parsing matrix file...\n")
+pwms = PWM.readMatrices(matrixfile)
+if len(pwms)==0:
+    stderr.write("Could not parse matrix.dat-file from "+matrixfile+"\n")
+    exit(1)
+
+# remove pwms that do not match any pattern 
+count = 0
+keepList = []
+delList = []
+# collect ids to keep
+for RegEx in args:
+    pat = re.compile(RegEx)
+    for id in pwms.keys():
+        if pat.match(id):
+            keepList.append(id) 
+# collect ids to delete
+for id in pwms.keys():
+    if not id in keepList:
+        delList.append(id)
+# delete
+for id in delList:
+    del pwms[id]
+
+stderr.write(" Found %u matrices that matched pattern.\n" % len(keepList) )
+stderr.write(" These matrices will be treated.:\n")
+for id in pwms.keys():
+    stderr.write(" %s \n" % id)
+
+# print out sites
+for p in pwms.values():
+    print
+    print "Similarity Matrix:"
+    sitecount = range(len(p.siteseqs))
+    for i in sitecount:
+        seq = p.siteseqs[i]
+        #if (p.sitestrands[i]=="-"):
+        #    seq = "".join(SubSeq.revcomp(seq))
+        stdout.write("%s\t" % seq)
+        idents = []
+        for j in sitecount:
+            idents.append(getIdentity(p.siteseqs[i],p.siteseqs[j]))
+        stridents = [str(i) for i in idents]
+        print "\t".join(stridents),
+        print "--> AVG %.2f" % (float(sum(idents)) / len(idents))
+
+    print
+    print "Core Search:"
+    print 
+    p.prepareScoring()
+    p._mostConserved(4)
+    print p.mostConserved
+            
+
+
+    

@@ -1,0 +1,279 @@
+#!/usr/bin/env python
+
+import logging, os, itertools
+from optparse import OptionParser
+import wordParser, tabfile, iupacSearch
+from maxXml import XmlWriter
+from array import array
+
+MAXLINES=50
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] wordFile outFile: print a multiple alignment with annotations on it to an SVG file") 
+
+parser.add_option("-s", "--scores", dest="scoreFile", action="store", type="string", help="specify a file with <word>tab<score> lines, will be used to color the motifs, from min-max opacity, will remove all other motifs", default=None) 
+parser.add_option("-m", "--motif", dest="iupacMotif", action="store", type="string", help="highlight this IUPAC motif _on_ the alignment, even if it is not conserved", default=None) 
+parser.add_option("", "--minScore", dest="minScore", action="store", type="int", help="only draw motifs with scores higher than x", default=None) 
+parser.add_option("", "--noLines", dest="noLines", action="store_true", help="do not draw any connector lines", default=None) 
+
+(options, args) = parser.parse_args()
+
+# ------------ FUNCTIONS -----------
+def makeConservedMask(seqs):
+    """ 
+    Given list of sequences of identical length
+    return list of True/False, with True for each concserved position """
+    consensus = []
+    alnLen   = len(seqs[0])
+    score=0
+    for pos in range(0, alnLen):
+        chars = set()
+        for seq in seqs:
+            chars.add(seq[pos])
+        if len(chars)==1:
+            consensus.append(seq[pos])
+        else:
+            consensus.append(".")
+    return consensus
+
+def createLines(length, count=MAXLINES):
+    """ create dict with integers 0..count => list of length*[True} values 
+        the lists represent occupied/not occupied information, one per line 
+    """
+    lineDict = {}
+    for i in range(0, count):
+        lineDict[i]=length*[True]
+    return lineDict
+
+def findFreeLine(lines, lineNo, start, end):
+    """ recursive function.
+        find the first free line where we can fit in an annotation from start to end, 
+        Mark these positions as occupied in 'lines'
+        return None if no space could be found
+    """
+    #print start, end , lineNo, lines
+    if lineNo==len(lines):
+        return None
+
+    freePos = set()
+    for pos in range(start, end):
+        if lines[lineNo][pos]==False:
+            return findFreeLine(lines, lineNo+1, start, end)
+    for pos in range(start, end):
+        lines[lineNo][pos]=False
+    return lineNo
+         
+def readWordScores(fname, minFilterScore):
+    """ read a value<tab>score file and return as a dict """
+    if fname==None:
+        logging.info("No word scores specified")
+        return {}
+    wordScores = tabfile.slurpdict(fname, asFloat=True)
+    maxScore = max(wordScores.values())
+    minScore = min(wordScores.values())
+    normDiff = maxScore - minScore
+
+    normWordScores = {}
+    for word, score in wordScores.iteritems():
+        if minFilterScore!=None and score<minFilterScore:
+            continue
+        normScore = (score-minScore)/normDiff
+        normWordScores[word]= normScore
+    return normWordScores
+
+def convertPosList(seqstr, posList):
+    """ convert a list of (start, end, strand,....) to a list of (start,end,strand)
+        also convert to gapped coordiantes"""
+
+    gapped = 0
+    ungapped = 0
+    maxpos = 1 + len(seqstr)
+    uToG = array("L", maxpos * [0]) # ungapped to gapped array
+
+    for c in seqstr:
+        if c!="-":
+            uToG[ungapped] = gapped
+            ungapped += 1
+        gapped += 1
+
+    newPosList = []
+    for el in posList:
+        start, end = el[:2]
+        otherEl = el[2:]
+
+        newEl=[uToG[start], uToG[end]]
+        newEl.extend(otherEl)
+        newPosList.append(newEl)
+
+    return newPosList
+
+def plotFeatures(s, minX, minY, seq, wordPosDict, wordIntensities, aliLineYDist, motifRectHeight, flip):
+    """ plot word-features based on seq, arranged on y to avoid overlap 
+    
+        returns a dict with word -> list of (x,y)-pos of feature-rectangles
+        if flip is true, will stack the features towards the bottom, not towards top
+    """
+    # from dark to bright
+    #palette = ["#6600FF", "#6633FF", "#6666FF", "#6699FF", "#66CCFF", "#66FFFF"]
+    #palette = ["#FF0000", "#FF3300", "#FF6600", "#FF9900", "#FFCC00", "#FFFF00"]
+    palette = ["#FF0000", "#FF3333", "#FF6666", "#FF9999", "#FFCCCC", "#FFFFFF"]
+    palette.reverse()
+    paletteStep = 1.0/len(palette)
+    lines = createLines(len(seq))
+    featPosDict = {}
+    for word, posList in wordPosDict.iteritems():
+        if wordIntensities != None and word not in wordIntensities:
+            continue
+
+        posList = [(int(start),int(start)+len(word),strand) for start,strand in posList]
+        gappedPosList = convertPosList(seq, posList)
+        for start,end,strand in gappedPosList:
+            xStart = start*charDist
+            width  = len(word)*charDist
+            line   = findFreeLine(lines, 0, start, start+len(word))
+            if line==None:
+                raise Exception("No free line for word %s" % word)
+            if flip:
+                yStart= (line*motifRectHeight)
+            else:
+                yStart= (-2*aliLineYDist)-(line*motifRectHeight)
+            rectX = minX+xStart
+            rectY = minY+yStart
+            intensity = wordIntensities.get(word, 0.0)
+            paletteIndex = int(abs((intensity-0.01)/paletteStep))
+            #print intensity, paletteStep, paletteIndex
+            colorCode = palette[paletteIndex]
+            s.rect(x=rectX, y=rectY, width=width, height=motifRectHeight, style="fill:%s" % colorCode, stroke="white")
+            #s.rect(x=rectX, y=rectY, width=width, height=motifRectHeight, fill="rgb(%d,0,0)", fill_opacity=opacity, stroke="black")
+            featPosDict.setdefault(word, []).append( (rectX+(0.5*width), rectY) )
+            s.text(word+strand, x=minX+xStart+2, y=minY+yStart+motifTextSize-2, font_size=motifTextSize, width="%dex" % width, height=motifTextSize, fill="black", alignment_baseline="top")
+    return featPosDict
+
+def plotAlignment(s, minX, minY, seqs, iupacMotif, charDist, aliLineYDist):
+    """ plot alignment sequences, leave charDist pixels between characters """
+    consensusSeq = makeConservedMask(block.seqs)
+    seqs.append("".join(consensusSeq))
+
+    for seqIdx, seq in enumerate(seqs):
+
+        yStart = seqIdx*aliLineYDist
+        for charIdx, char in enumerate(seq):
+            if consensusSeq[charIdx]==".":
+                fontWeight="normal"
+            else:
+                fontWeight="bold"
+            xStart = charIdx*charDist
+            s.text(seq[charIdx], x=minX+xStart, y=minY+yStart, font_weight=fontWeight)
+
+        motifMatches = iupacSearch.findMotifs(seq, iupacMotif)
+        #gappedCoords = convertPosList(seq, motifMatches)
+        for start, end, strand, name in motifMatches:
+            xStart = (start) * charDist
+            rectWidth= (end-start) * charDist
+            s.rect(x=minX+xStart, y=minY+yStart-aliLineYDist+1, width=rectWidth, height=aliLineYDist, stroke="black", stroke_width=1, fill="none", opacity="0.7")
+
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = itertools.tee(iterable)
+    next(b, None)
+    return itertools.izip(a, b)
+
+def plotPairsBezier(s, posList, towardsTop=True):
+    " plot bezier lines between all pairs of (x,y) tuples "
+    if len(posList)<2:
+        return
+
+    for p1, p2 in pairwise(posList):
+        if p1[0]>p2[0]:
+            p1, p2 = p2, p1
+        x1, y1 = p1
+        x2, y2 = p2
+            
+        cx = x1+(x2-x1) # ctrl point for spline
+        if towardsTop:
+            cy = (max(y1,y2)-100)
+        else:
+            cy = (max(y1,y2)+200)
+        #relCx = cx - x1
+        #relCy = cy - y1
+        #relX2, relY2 = x2 - cx, y2 - cy
+        dString = "M %(x1)d,%(y1)d Q %(cx)d,%(cy)d %(x2)d,%(y2)d" % locals()
+        s.path(style="stroke:blue;stroke-width:2;opacity:0.2;fill:none", d=dString)
+
+def plotWordConnectors(s, wordPosDictList):
+    """ input: a list of dicts, where each dict is word -> list of (x,y) tuples
+        searches for words that appear in all dicts, then connects all of them with 
+        lines 
+    """
+    s.gStart(render_order=0)
+    commonWords = set(wordPosDictList[0].keys())
+    for wordPosDict in wordPosDictList:
+        commonWords = commonWords.intersection(wordPosDict.keys())
+
+    for word in commonWords:
+        for posDictA, posDictB in pairwise(wordPosDictList):
+            posListA = posDictA[word]
+            plotPairsBezier(s, posListA, True)
+                
+            posListB = posDictB[word]
+            plotPairsBezier(s, posListB, False)
+                
+            for posA in posListA:
+                x1, y1 = posA
+                for posB in posListB:
+                    x2, y2 = posB
+                    s.line(x1=x1, y1=y1, x2=x2, y2=y2, style='stroke:rgb(255,0,0);opacity:0.2;stroke-width:2')
+    s.gEnd()
+        
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+wordFile, outFname = args
+s = XmlWriter(outFname)
+
+scoreFname = options.scoreFile
+iupacMotif = options.iupacMotif
+minScore   = options.minScore
+
+wordIntensities = readWordScores(scoreFname, minScore)
+
+s.svgStart(width=2000)
+
+seqPanelHeight=350 # max height of one sequence + all annotations
+seqLabelWidth = 250 # space on the left of alignment for alignment label
+motifRectHeight=9 # height of little rectangles
+motifTextSize=9   # text size of rectangle annotations
+aliLineYDist = 10 # distance between two lines of alignment
+charDist = 8      # distance between two characters of alignment
+
+flip = True
+
+s.writeToBuffer() # write first part not into file, but into buffer -> z-Ordering
+
+wordPosList = []
+for blockIdx, block in enumerate(wordParser.readBlocks(open(wordFile))):
+    graphStartY = seqPanelHeight*(blockIdx+1)
+    #s.f.write(""" <path stroke="sienna" stroke-width="2" fill="none" d='M  80,180 Q  50,120  80,60 Q  90, 40  80,20 Q 100, 20 120,20 Q 110, 40 120,60 Q 150,120 120,180 Z' />""")
+    #s.line(x1=0, y1=graphStartY, x2=1000, y2=graphStartY, fill="black", stroke="black", width="10")
+
+    s.text(block.chrom, x=0, y=graphStartY, font_family="Helvetica", font_size="11")
+    s.gStart(font_family="Courier", font_size=12, render_order=10)
+
+    wordPos = plotFeatures(s, seqLabelWidth, graphStartY, block.seqs[0], \
+        block.words, wordIntensities, aliLineYDist, motifRectHeight, flip)
+    wordPosList.append(wordPos)
+    if flip:
+        graphStartY-= (len(block.seqs) * aliLineYDist)
+        flip=False
+    plotAlignment(s, seqLabelWidth, graphStartY, block.seqs, iupacMotif, charDist, aliLineYDist)
+    s.gEnd()
+
+s.writeToFile()
+if not options.noLines:
+    plotWordConnectors(s, wordPosList)
+s.writeBuffer()
+
+s.svgEnd()

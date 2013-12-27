@@ -1,0 +1,23 @@
+#!/usr/bin/python
+
+import sys
+import re
+files = sys.argv[1:]
+
+MINLEN = 10
+MINDNA = 0.4
+
+nucl = re.compile("[actgACTG]")
+nonNucl = re.compile("[^actgACTG]")
+
+
+for filename in files:
+    lno = 0
+    for line in open(filename, "r"):
+        lno +=1
+        if len(line) > MINLEN:
+            dnaContent = float(len(nucl.findall(line))) / len(line)
+            #print dnaContent
+            if dnaContent > MINDNA:
+                seq = nonNucl.sub("", line)
+                print ">%s line=%d dnaContent=%.2f\n%s" % (filename,lno,dnaContent, seq)

@@ -1,0 +1,1 @@
+head -n1000 ~/contemplateGenome/contemplate/dm3dp3/constrainedElements.filtered.minBlocks3.bed > in.bed

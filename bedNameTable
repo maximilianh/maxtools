@@ -1,0 +1,54 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+from optparse import *
+
+# === command line interface, options and help ===
+parser = OptionParser("usage: %prog [options] \n parses names from bed file, split at comma and arrange as a table for import into r") 
+
+parser.add_option("-f", "--fsep", dest="sep", action="store", help="separator for table, default %default", type="string", metavar="char", default="\t") 
+parser.add_option("-l", "--lsep", dest="lsep", action="store", help="line separator, default %default", type="string", metavar="char", default="\n") 
+(options, args) = parser.parse_args()
+if len(args)==0:
+	print " EXAMPLE:"
+	print "  bedNameRewrite jgi-exons.bed jgi-exons2.bed '(.*_exon_[0-9]*).*' '\1'"
+        sys.exit(1)
+
+# === END CMDLINE
+
+fin = args[0]
+table = {} # CR region -> dict of occuring names in this region -> number of occurences 
+names = [] # list of all occuring names
+
+for l in open(fin, "r"):
+    fs = l.strip().split()
+    name = fs[3]
+    fs = name.split(",")
+    name=fs[0]
+    description=fs[1]
+    if not description in table.keys():
+        table[description]={}
+    if not name in table[description]:
+        table[description][name]=0
+    table[description][name] += 1
+    if not name in names:
+        names.append(name)
+
+#for el in table:
+#header=
+
+#print table
+#print names
+
+sep = options.sep
+lsep = options.lsep
+print sep.join(names)+lsep,
+regions = table.keys()
+regions.sort()
+for region in regions:
+    print region+sep,
+    fields = []
+    for n in names:
+        fields.append(str(table[region].get(n,0)))
+    print sep.join(fields)+lsep,

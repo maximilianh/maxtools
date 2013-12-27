@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==1:
+	print " "
+	print " Will read features from stdin."
+	print " Will let pass only those features that have a name that also"
+	print " occurs in a second bed file."
+	print " (desc is separated by ',' and the part before '=' is stripped)."
+        print 
+        print " EXAMPLE: "
+        print " cat big.bed | bedfiltername small.bed"
+        exit() 
+
+
+def getTFs(name):
+# converts name-string into list of TFs
+        if "=" in name:
+            parts = name.split("=")	
+            names = parts[1]	
+            names = names.split(",")
+        else:
+            names = name.split(",")
+	names = [x.strip() for x in names]
+	return names
+
+def feat2str(x):
+	# converts a list to a string 
+	# does not care about included ints or included lists
+	res = str(x[0])
+	res += " "
+	res += str(x[1])
+	res += " "
+	res += x[2]
+	res += " "
+	res += " ".join(x[3])
+	return res
+
+# read tfs from file
+# put into dictionary as KEYS (deletes double values automatically)
+f = open(argv[1], 'r')
+lines = f.readlines()
+while lines[0].startswith("track") or lines[0].startswith("browser") or lines[0].startswith("#"):
+  lines.pop(0)
+descs = {}
+for line in lines:
+	fields = line.split()
+	name = fields[0]
+	tfs = getTFs(name) 
+	for tf in tfs:
+		descs[tf]=True
+	
+# read features from stdin
+# print out those features that have name-part contained in dict 
+line = sys.stdin.readline()
+while line!="":
+  if line.startswith("track") or line.startswith("browser") or line.startswith("#"):
+	  print line,
+  else:
+	  fields = line.split("\t", )
+          name = fields[3]
+	  tfs = getTFs(name)
+	  for tf in tfs:
+             if descs.has_key(tf):
+               print line,
+	       break
+  line = sys.stdin.readline()

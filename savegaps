@@ -1,0 +1,61 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+def gaplen(seq, pos):
+	len = 0
+	for nucl in seq[pos:]:
+		if nucl=="-":
+			len = len + 1
+		else:
+			return len
+	return len
+
+def readfasta(lines):
+  ## will read from lines
+  ## will return a list of n seqs
+  ## seq[n][0] is the seqname
+  ## seq[n][1] is the sequence
+  seqs = []
+  for line in lines:
+	  if line.startswith(">"):
+	    seqs.append([line.strip(">").strip().split(" ")[0], ""])
+	  else:
+            #print seqs
+            seqs[-1][1]+=line.strip()
+  return seqs
+
+
+
+if len(argv)==1:
+  print "saves all gaps from a fasta file from stdinput into a textfile of format "
+  print "   <seqname> <position-on-sequence-without-gaps> <gaplength> <position on sequence with gaps> "
+  print "When parsing it, you have to insert a gap of <gaplength> AFTER every <position>"
+  print " syntax: "
+  print " savegaps <gapfilename>"
+  exit() 
+
+f = open(argv[1], 'w')
+lines = sys.stdin.readlines()
+
+seqs = readfasta(lines)
+del lines
+
+for part in seqs:
+        seq = part[1]
+	name = part[0]
+	gaplessPos = 0
+	pos = 0
+	while pos < len(seq):
+	  if seq[pos]=="-":
+	    l = gaplen(seq, pos)
+	    f.write(name+" "+str(gaplessPos-1)+" "+ str(l)+" "+str(pos-1)+"\n")
+	    pos+=l 
+	  else:
+	    gaplessPos+=1
+	    pos+=1
+
+

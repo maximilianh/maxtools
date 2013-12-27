@@ -1,0 +1,92 @@
+#!/bin/bash
+set -beEu -o pipefail
+
+# from mark diekhans home dir
+#
+# Compile kent tree, setting required environment variables
+#
+
+# find directory containing kent/src (don't let bash get fool by symlinks):
+cwd=$(pwd)
+case $cwd in
+    */kent/src*)
+        root=$(echo $cwd | sed -e 's|/kent/src.*$||')
+        ;;
+    *)
+        echo "can't find /kent/src in $cwd" >&2
+        exit 1;;
+esac
+
+echo root=$root
+
+export COPT=${COPT:--g}
+export STRIP=true
+
+sys=$(uname -s)
+arch=$(uname -m)
+host=$(hostname)
+
+case $sys in
+    Linux)
+        if [ $arch = i686 ] ; then
+            arch=i386
+        fi
+        MAKE=make
+        MYSQL_CONFIG=mysql_config;;
+    FreeBSD)
+        MAKE=gmake
+        MYSQL_CONFIG=mysql_config;;
+    Darwin)
+        MAKE=make
+        MYSQL_CONFIG=mysql_config5;;
+    *)
+        echo "Error: gbmake can't determine system/arch" >&2
+        exit 1 ;;
+esac
+export MACHTYPE=$arch
+
+# MYSQL location
+export MYSQLINC=$(${MYSQL_CONFIG} --include | sed 's/^-I//')
+export MYSQLLIBS=$(${MYSQL_CONFIG} --libs)
+
+if [ "${USE_SSL:-}" = "" ] ; then
+   export USE_SSL=1
+fi
+
+# this is value of MYLIBDIR, but don't override, as it masks problems
+mylibdir=$root/kent/src/lib/${MACHTYPE}
+
+# SAM/BAM
+if [ "$host" = "hgwdev" -a "${USE_BAM:-}" = "" ] ; then
+    export USE_BAM=1
+fi
+
+case $sys in
+    FreeBSD)
+        export PNGINCL="-I/usr/local/include"
+        export PNGLIB="-L/usr/local/lib -lpng";;
+    Darwin)
+        export PNGINCL="-I/opt/local/include"
+        export PNGLIB="-L/opt/local/lib -lpng";;
+esac
+
+
+# override locations in makefiles
+export BINDIR=$root/kent/bin/${MACHTYPE}
+export SCRIPTS=${BINDIR}
+mkdir -p ${mylibdir} ${BINDIR}
+export PATH=${BINDIR}:${PATH}
+
+# install location
+pubCgiBin=/usr/local/apache/cgi-bin
+pubCgiBinUser=${pubCgiBin}-${USER}
+if [ ! -e ${pubCgiBinUser} ] ; then
+    export CGI_BIN=${root}/kent/cgi-bin
+    export DOCUMENTROOT=${root}/kent/htdocs
+    cgiBinUser=${CGI_BIN}-${USER}
+    echo "Note: no ${pubCgiBinUser}, using ${cgiBinUser}"
+    mkdir -p ${cgiBinUser} ${DOCUMENTROOT}
+fi
+
+exec ${MAKE} -e "$@"
+

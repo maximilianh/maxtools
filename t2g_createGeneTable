@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import tabfile, os.path
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] genomes.tsv hugoFile orthologyDir outfile - given directories with orthology tables, a hugo-symbol table and a list of genome ids, create a table in the format <genomeId><geneId><HumanSymbol>") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+#genomeFile, hugoFile, orthoDir, outfile = args
+genomeFile, orthoDir, outfile = args
+
+print "we don't need this anymore!"
+assert(False)
+
+#hugoIds = tabfile.slurpdict(hugoFile, doNotCheckLen=True)
+genomeIds = tabfile.slurpdict(genomeFile, doNotCheckLen=True)
+
+of = open(outfile, "w")
+
+# special case homo sapiens
+hsGenomeId = genomeIds["homo_sapiens"]
+for gene, symbol in hugoIds.iteritems():
+    if symbol==None:
+        symbol=""
+    #data = [hsGenomeId, gene, symbol]
+    #of.write("\t".join(data)+"\n")
+
+# the others
+for genome, id in genomeIds.iteritems():
+    print genome
+    if genome=="homo_sapiens" or genome=="univec":
+        continue
+    genomeId = genomeIds[genome]
+    orthoFile = os.path.join(orthoDir, genome)
+    toHumanGenes = tabfile.slurpdictlist(orthoFile, reverse=True)
+    for gene, humanGenes in toHumanGenes.iteritems():
+        for humanGene in humanGenes:
+            hugo = hugoIds.get(humanGene)
+            if hugo==None:
+                hugo=""
+            data = [genomeId, gene, hugo]
+            of.write("\t".join(data)+"\n")
+

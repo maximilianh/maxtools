@@ -1,0 +1,20 @@
+#!/bin/bash
+if [[ -z "$1" || "$1" == "-h" ]]
+then
+  echo
+  echo "Syntax:"
+  echo 'fastaFromUCSC <seq> <begin> <end> <db, default=hg17> <strand, default=+>'
+  echo "fastaFromUCSC chr1 1 1000 hg17"
+  echo 
+  exit 1
+fi
+
+strand=${5-+}
+if [[ "$strand" == "-" ]]
+then
+    addparam='&hgSeq.revComp=on'
+fi
+
+#wget 'http://genome.ucsc.edu/cgi-bin/hgc?hgsid=75174175&g=htcGetDna2&getDnaPos='$1'%3A'$2'-'$3'&db='${4-hg17}'&l='$2'&r='$3'&c='$1'&hgSeq.cdsExon=1&hgSeq.casing=upper&boolshad.hgSeq.maskRepeats=on&hgSeq.repMasking=lower'$addparam'&submit=get+DNA' -O - -q | grep -v '^<' | sed -e 's/_dna//g'
+wget 'http://genome.ucsc.edu/cgi-bin/hgc?hgsid=75174175&g=htcGetDna2&getDnaPos='$1'%3A'$2'-'$3'&db='${4-hg17}'&l='$2'&r='$3'&c='$1'&hgSeq.cdsExon=1&hgSeq.casing=upper&boolshad.hgSeq.maskRepeats=on&hgSeq.repMasking=N'$addparam'&submit=get+DNA' -O - -q | grep -v '^<' | sed -e 's/_dna//g'
+exit 0

@@ -1,0 +1,66 @@
+#!/usr/bin/perl
+use Getopt::Long;
+use Pod::Usage;
+use Bio::SeqIO;
+
+=head1 NAME
+maf2EvoPrinter - prints a multiple alignment as an EvoPrinter text
+L<perlpod>
+=cut
+
+sub options () {
+    my $help = 0;       # handled locally
+    my $ident = 0;      # handled locally
+    my $man = 0;        # handled locally
+    $file = "test"; # global
+    
+    # Process options.
+     if ( @ARGV > 0 ) {
+        GetOptions('verbose'=> \$verbose,
+                           'help|?' => \$help,
+                           'manual' => \$man,
+                           'file=s' => \$file)
+            or pod2usage(2);
+        }
+    if ( $man or $help ) {
+        # Load Pod::Usage only if needed.
+        require "Pod/Usage.pm";
+        import Pod::Usage;
+        pod2usage(VERBOSE => 2) if $help;
+    }
+}
+
+&options();
+
+# $seqio_obj = Bio::SeqIO->new(-file => $file, -format => "fasta" );
+use Bio::AlignIO;
+my $alignio = Bio::AlignIO->new(-file => $ARGV[0], -format => 'maf');
+while(my $aln = $alignio->next_aln()){
+    my $match_line = $aln->match_line;
+    #print $aln, "\n";
+    #print $aln->length, "\n";
+    #print $aln->no_residues, "\n";
+    #print $aln->is_flush, "\n";
+    #print $aln->no_sequences, "\n";
+    #$aln->splice_by_seq_pos(1);
+    #print $aln->consensus_string(60), "\n";
+    for ($i=0; $i<=$aln->no_residues;$i++) {
+        $char =  substr($aln->get_seq_by_pos(1)->seq,$i,1);
+        $cons =  substr($aln->match_line(),$i,1);
+        if ($char ne "-") {
+            if ($cons eq "*" || $cons eq ":") {
+                print uc($char);
+            }
+            else {
+                print lc($char);
+            }
+        }
+    }
+    print "\n";
+    #print $aln->consensus_string(60), "\n";
+    #for (my $i=1; $i<=$aln->no_sequences;$i++) {
+        #print $aln->get_seq_by_pos($i)->seq,"\n";
+        #}
+        #print $aln->match_line(), "\n";
+
+}

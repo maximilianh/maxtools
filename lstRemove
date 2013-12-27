@@ -1,0 +1,44 @@
+#!/usr/bin/python
+
+# === importing of modules
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import logging
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] file1 file2 file3 ... - remove all ids in file2, file3, ... from file1 and print") 
+parser.add_option("-f", "--field", dest="field", action="store", help="use only this field from the first file", type="int", default=0) 
+parser.add_option("", "--otherField", dest="otherField", action="store", help="use only this field from the other files", type="int", default=0) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-t", "--splitChar", dest="splitChar", action="store", help="split on this char, default %default", default="\t") 
+
+(options, args) = parser.parse_args()
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ----------- MAIN --------------
+field = options.field
+otherField = options.otherField
+
+# data input
+f1 = args[0]
+otherFiles = args[1:]
+
+list1 = tabfile.slurplist(f1, check=False, field=field)
+set1 = set (list1)
+
+for f2 in otherFiles:
+    list2 = tabfile.slurplist(f2, check=False, field=otherField)
+    set2 = set (list2)
+    set1 = set1.difference(set2)
+
+# output
+for val in set1:
+    print val

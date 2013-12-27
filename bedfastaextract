@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+import re
+
+def readfasta(lines):
+  ## will read from lines
+  ## will return a dict 
+  seqs = {}
+  for line in lines:
+	  if line.startswith(">"):
+            seqname = line.strip(">").split()[0]
+	    seqs[seqname]=""
+	  else:
+            seqs[seqname]+=line.replace(" ","").strip()
+  return seqs
+
+def revComp(seq):
+	table = { "a" : "t", "A" : "T", "t" : "a", "T" : "A", "c" : "g", "C":"G", "g":"c", "G":"C", "-":"-" }
+	newseq = ""
+        for nucl in reversed(seq):
+           newseq += table[nucl]
+	return newseq
+
+def readBed(lines):
+	features = []
+	for line in lines:
+	  if line.startswith("#"):
+		  continue
+	  if line.startswith("track"):
+		  continue
+	  if line.startswith("browser"):
+		  continue
+	  parts = line.split()
+          if len(parts)>=6:
+              seq,start,end,name,score,strand = parts[0], int(parts[1]), int(parts[2]), parts[3], parts[4], parts[5]
+          else:
+              seq,start,end,name= parts[0], int(parts[1]), int(parts[2]), parts[3]
+
+	  features.append([seq,start,end,name,score,strand])
+	return features
+
+
+if len(argv)==1:
+  print " Will extract sequences of features of a multi fasta sequence file."
+  print " The parts to extract have to be specified as a bed file."
+  print " Will print the negative strand if bed-strand is '-'. "
+  print " Results are printed in fasta-format."
+  print " "
+  print " Syntax: "
+  print " cat test.bed | fastabedextract test.fa "
+  print " Options:"
+  print " -b : output as bed, do not output as fasta but annotation name field"
+  exit() 
+
+bedoutput=False
+for a in argv[1:]:
+    if a=="-b":
+        bedoutput=True
+    else:
+        filename=a
+    
+sys.stderr.write("Reading fasta...\n")
+f = open(filename, 'r')
+lines = f.readlines()
+seqs = readfasta(lines)
+
+lines = sys.stdin.readlines()
+features = readBed(lines)
+del lines
+
+sys.stderr.write("Processing beds...\n")
+for f in features:
+   if f[1] < 0:
+	   sys.stderr.write("Warning: "+str(f[1])+" is smaller than 0!\n")
+   if f[0] not in seqs:
+           sys.stderr.write("Warning: dropping feature "+f[0]+" "+str(f[1])+" as sequence not found in fasta\n")
+           continue
+   if f[2] > len(seqs[f[0]])+1:
+       sys.stderr.write("Warning: "+str(f[2])+" is greater than seqlen + 1. Seq="+f[0]+", seqlen="+str(len(seqs[f[0]]))+"\n")
+       f[2] = len(seqs[f[0]])
+   seq =  seqs[f[0]][f[1]:f[2]] 
+   if f[5]=="-": 
+      seq = revComp(seq)
+   if bedoutput==False:
+       print ">"+f[0]+"_"+str(f[1])+"-"+str(f[2])+" "+str(f[3])
+       print seq
+   else:
+       #f = [str(s) for s in f]
+       print "%s\t%s\t%s\t%s_%s\t%s\t%s" % (f[0],f[1],f[2],f[3],seq,f[4],f[5])
+       #print "\t".join(f[0-2]) + "_"+seq + "\t%s\t%s" % (f[3],f[4],f[5])

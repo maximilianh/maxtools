@@ -1,0 +1,116 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, operator
+from Bio import AlignIO
+from Bio.Align import AlignInfo
+from os.path import *
+import os, sys, textwrap, re
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] inFa outFa - make consensus given multi-fasta alignment") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-m", "--matrix", dest="matrix", action="store_true", help="do not output fasta file, but a PSSM matrix in transfac format (you can use weblogo to plot it)") 
+parser.add_option("-g", "--keepGap", dest="keepGap", action="store_true", help="keep columns with more than 50% gap characters")
+parser.add_option("-t", "--threshold", dest="threshold", action="store", type="float", help="required percent of rows that have to have a certain character to call it in the consensus")
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+alnName, outFname = args
+alignment = AlignIO.read(alnName, "fasta")
+summary_align = AlignInfo.SummaryInfo(alignment)
+
+if options.matrix:
+    # see http://biopython.org/DIST/docs/tutorial/Tutorial.html#htoc302
+    #consensus = summary_align.dumb_consensus()
+    consensus = summary_align.gap_consensus(threshold=options.threshold, ambiguous="N")
+    my_pssm = summary_align.pos_specific_score_matrix(consensus, chars_to_ignore = ['N'])
+    ofh = open(outFname, "w")
+    ofh.write("ID %s\n" % alnName)
+    ofh.write("P0 A C G T\n")
+    #print my_pssm
+    nuclList = ["A", "C", "G", "T", "-"]
+    nuclSet = set(nuclList)
+    tfPos = 1
+
+    lines = []
+    maxSeqCount = 0
+    consSeq = []
+    for i in range(len(my_pssm.pssm)):
+        # make sure that there are no lowercase or other chars
+        assert(len(set(my_pssm[i].keys())-nuclSet)==0)
+
+        #nuclList = my_pssm[i].keys()
+        #nuclList.sort()
+        row = []
+        tfRow = []
+
+        # determine sum of counts 
+        countSum = sum(my_pssm[i].values())
+
+        #gapCharCount = my_pssm[i].get("-",0)+my_pssm[i].get("N",0)
+
+        # find nucleotide with top count
+        counts = my_pssm[i].items()
+        counts.sort(key=operator.itemgetter(1), reverse=True)
+        bestNucl = counts[0][0]
+
+        logging.debug(( counts, bestNucl))
+        if not options.keepGap and bestNucl in ["N", "-"]:
+            logging.debug("Skipping pos %d: consensus char is %s, countSum %d" % \
+                (i, bestNucl, countSum))
+            continue
+        consSeq.append(bestNucl)
+
+        for nucl in nuclList:
+            count = my_pssm[i][nucl]
+            countSum += count
+            desc = "%s:%d" % (nucl, count)
+            tfDesc = "%d" % count
+            row.append(desc)
+            tfRow.append(tfDesc)
+
+        maxSeqCount = max(maxSeqCount, countSum)
+        lines.append( " ".join(row))
+        ofh.write("%02d %s\n" % (tfPos, " ".join(tfRow)))
+        tfPos += 1
+
+    ofh.write("XX\n")
+    ofh.close()
+
+    print alnName, "(%d sequences)" % maxSeqCount
+    print "\n".join(lines)
+    print "%d rows" % len(lines)
+    print "consensus: %s" % "".join(consSeq)
+
+    # convert biopython PSSM to transfac format
+    #for i in range(len(my_pssm.pssm)):
+        #nuclList = ["A", "C", "G", "T"]
+
+    #print dir(my_pssm.pssm)
+    #print my_pssm.pssm.degenerate_consensus()
+else:
+    cons = summary_align.gap_consensus(threshold=options.threshold, ambiguous="N")
+    if not options.keepGap:
+        consSeq = str(cons).replace("-", "")
+    if len(consSeq)==0:
+        raise Exception("cannot get consensus for %s" % alnName)
+    print 'aln length', alignment.get_alignment_length(), "seqlen", len(consSeq), "N count", len(list(re.finditer("N", consSeq)))
+
+    consSeqWrap = "\n".join(textwrap.wrap(consSeq, 60))
+    consFh = open(outFname, "w")
+    consName = basename(outFname)
+    consFh.write(">%s\n%s\n" % (consName, consSeqWrap))
+    consFh.close()

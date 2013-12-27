@@ -1,0 +1,53 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wordFile annotationFile - output average length of conserved regions around tissues") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-f", "--flankType", type="int", dest="flankType", action="store", help="which genes to keep (0/1/2 = upstream/closest/both, default is %default", default=1) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infname = args[0]
+annotFile = args[1]
+optFlankType = options.flankType
+
+annots = tabfile.slurpdictlist(annotFile)
+
+stderr.write("Reading words...\n")
+f = open(infname, "r")
+
+geneCnsLen = {}
+i=0
+
+motifs = wordParser.readMotifs(f)
+
+for b in wordParser.readBlocks(f):
+    genes, intronic = b.getGenes(flankType=optFlankType) # 0/1/2 = upstream, closest, both
+
+    # ignore if not annotated
+    OK=False
+    for g in genes:
+        if g in annots:
+                #cnsLenByTissue[tiss].append(b.score)
+                geneCnsLen.setdefault(g,0)
+                geneCnsLen[g]+=b.score
+
+print "gene\ttissue\tcnsLen"
+for gene, cnsLen in geneCnsLen.iteritems():
+    for tiss in annots[gene]:
+        print gene+"\t"+tiss+"\t"+str(cnsLen)
+
+    

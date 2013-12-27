@@ -1,0 +1,78 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inputFile - filter word file, will add index numbers") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-c", "--chrom", dest="chrom", action="store", type="string", help="let only pass blocks on given chromosome", default=None) 
+parser.add_option("-s", "--minScore", dest="minScore", action="store", type="int", help="minimum score of elements to pass", default=0) 
+parser.add_option("-x", "--maxScore", dest="maxScore", action="store", type="int", help="maxScore score of elements to pass", default=99999999999999999) 
+parser.add_option("-a", "--annotatedGenes", dest="annotatedGenes", action="store", help="name of file with list of annotated genes, only blocks flanking one of those will be kept[default: %default]") 
+parser.add_option("-f", "--flankType", type="int", dest="flankType", action="store", help="which genes to keep (0/1/2 = upstream/closest/both), default %default", default=1) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infname = args[0]
+minScore = options.minScore
+maxScore = options.maxScore
+chrom = options.chrom
+annotGenesFile = options.annotatedGenes
+annotatedGenes = set(tabfile.slurplist(annotGenesFile, field=0))
+optFlankType = options.flankType
+
+stderr.write("Found annotation for %d genes from file %s...\n" % (len(annotatedGenes), annotGenesFile))
+stderr.write("Filtering with minimum score >= %d...\n" % minScore)
+stderr.write("Filtering with max score >= %d...\n" % maxScore)
+stderr.write("Filtering with genes from file %s...\n" % annotGenesFile)
+stderr.write("Reading words...\n")
+
+if infname!="stdin":
+    f = open(infname, "r")
+else:
+    f = stdin
+
+
+wordIndex = {}
+i=0
+print "##words1"
+
+motifs = wordParser.readMotifs(f)
+for m, desc in motifs:
+    print "m\t%s\t%s" % (m, desc)
+print
+
+for b in wordParser.readBlocks(f):
+    if annotGenesFile:
+        genes, intronic = b.getGenes(flankType=optFlankType) # 0/1/2 = upstream, closest, both
+
+        # ignore if not annotated
+        OK=False
+        for g in genes:
+            if g in annotatedGenes:
+                OK=True
+        if not OK:
+            continue
+
+    # ignore if score too low
+    if b.score < minScore or b.score > maxScore:
+        continue
+
+    # ignore if not on chrom x
+    if chrom!=None and b.chrom!=chrom:
+        continue
+
+    print b.toString(i)
+    print 
+    i+=1

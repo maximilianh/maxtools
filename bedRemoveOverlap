@@ -1,0 +1,88 @@
+#!/usr/bin/python
+
+import bed
+import sys
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] file \nReads bed from file (stdin ok)and joins all features that are overlapped by immediately preceding features. (features have to bed sorted, use ucsc's bedSort)") 
+
+#parser.add_option("-v", "--inverse", dest="inverse", action="store_true", help="inverse restult, only print lines that DO overlap",default=False) 
+#parser.add_option("-c", "--concat", dest="concat", action="store_true", help="print all lines but if 2 feats overlap: concat the name of the second feature to the name the first feature",default=False) 
+parser.add_option("-s", "--wobblestart", dest="tolerance", action="store", type="int",help="tolerate a shift of x basepairs when looking for overlaps, if set to 10 then even features that not completely overlap will be removed",default=0) 
+
+(options, args) = parser.parse_args()
+tolerance = options.tolerance
+
+# ==== FUNCTIONs =====
+
+def flushClique(clique, tolerance):
+    """ clean, print, reset"""
+    #print "clique is", clique
+    lenClique = len(clique)
+    if lenClique==0:
+        return
+    # special cases
+    if lenClique==1:
+        print clique[0]
+        clique = []
+        return
+
+    #for c in clique:
+        #c.delete=False
+
+    # remove features that are included in others
+    #for i in range(0, len(clique)):
+        #b1 = clique[i]
+        #for j in range(i+1, len(clique)):
+            #b2 = clique[j]
+            #print "cmp",b1,b2
+            #if b1.includes(b2, tolerance):
+                #b2.delete=True
+                ##print "tag",b2
+            #else:
+                #if b2.includes(b1, tolerance):
+                    #b1.delete=True
+                #print "tag",b1
+
+    #for i in reversed(range(0,len(clique))):
+        #if clique[i].delete:
+            #del clique[i]
+
+    # generate feature that covers whole clique
+    newName = "JOINED_"
+    starts = []
+    ends = []
+    #print clique
+    for b in clique:
+        newName += b.name + "_"
+        starts.append(b.start)
+        ends.append(b.end)
+
+    first = clique[0]
+    print "\t".join([first.chrom, str(first.start), str(first.end), newName])
+
+        
+# ==== MAIN ====
+#inv = options.inverse
+#concat = options.inverse
+
+beds = bed.parseBedFilename(args[0])
+
+clique = []
+last = None
+
+for b in beds:
+    if last==None:
+        last=b
+        continue
+    if bed.overlap(b, last):
+        clique.append(last)
+        last=b
+    else:
+        flushClique(clique, tolerance)
+        clique=[b]
+        last = b
+
+clique.append(last)
+flushClique(clique, tolerance)

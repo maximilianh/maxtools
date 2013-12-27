@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+
+def readfasta(lines):
+  ## will read from lines
+  ## will return a list of n seqs
+  ## seq[n][0] is the seqname
+  ## seq[n][1] is the sequence
+  seqs = {}
+  for line in lines:
+	  if line.startswith(">"):
+            seqname = line.strip(">").split()[0]
+	    seqs[seqname]=""
+	  else:
+            seqs[seqname]+=line.replace(" ","").strip()
+  return seqs
+
+def revComp(seq):
+	table = { "a" : "t", "A" : "T", "t" : "a", "T" : "A", "c" : "g", "C":"G", "g":"c", "G":"C", "-":"-" }
+	newseq = ""
+        for nucl in reversed(seq):
+           newseq += table[nucl]
+	return newseq
+
+if len(argv)>1:
+  print " Will rev-comp the sequence from stdin."
+  print " "
+  print " Syntax: "
+  print " cat fasta.fa | fastarevcomp "
+  exit() 
+
+lines = sys.stdin.readlines()
+seqs = readfasta(lines)
+del lines
+
+for name,seq in seqs.iteritems():
+	print ">"+name 
+	print revComp(seq)

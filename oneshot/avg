@@ -1,0 +1,14 @@
+#!/usr/bin/gawk -f
+BEGIN { min = 999999999;
+        max = 0;
+        OFS="\t";
+        FS="\t";
+        sum=0;
+    }
+{ sum += $1;
+    if ($1<min)
+        min = $1;
+    if ($1>max)
+        max = $1;
+} 
+END { printf "SUM %i AVG %i MIN %i MAX %i LINECOUNT %i \n", sum, sum / FNR, min, max, FNR } 

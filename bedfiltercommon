@@ -1,0 +1,133 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)<=2:
+	print " "
+	print " Will read features from stdin."
+	print " Features can lie on several different sequences (seqname-field)"
+	print " Only features can pass that lie on the BASE-sequence and are"
+	print " conserved in all sequences except NON_CONSERVED AND"
+	print " overlap each"
+	print " other by at least 1 bp AND have a word in common in their "
+	print " desc-field (desc is separated by ',' and part before = stripped)."
+        print 
+	print " bedfiltercommon <BASESEQNAME> <NON_CONSERVED>"
+        print " EXAMPLE: "
+        print " cat test.bed test1.bed test2.bed | bedcommon test 1"
+        exit() 
+
+
+def getTFs(name):
+	# convert name-field of bed into list of TFs
+	# format it: comment=TF/TF2/TF3...
+	if "=" in name:
+	    parts = name.split("=")	
+	    names = parts[1]	
+	else:
+	    names = name
+	names = names.split(",")
+	names = [x.strip().strip("!") for x in names]
+	return names
+
+def feat2str(x):
+	# converts a list to a string 
+	# does not care about included ints or included lists
+        res = str(x[0])
+	res += " "
+	res += str(x[1])
+	res += " "
+	res += str(x[2])
+	res += " "
+	res += str(x[3])
+	res += " "
+        res += " ".join(x[4])
+	return res
+
+NonConserved=int(argv[2])
+# read features from stdin
+lines = sys.stdin.readlines()
+# remove header
+while not lines==[] and (lines[0].startswith("track") or lines[0].startswith("browser") or lines[0].startswith("#")):
+  lines.pop(0)
+# parse faturespositions, keep everthing
+features = {}
+for line in lines:
+  line = line.strip()
+  if line=="":
+	continue
+  if line.startswith("track"):
+	  continue
+  if line.startswith("browser"):
+	  continue
+  fields = line.split("\t",4)
+  seqname = fields[0]
+  start = int(fields[1])
+  end = int(fields[2])
+  name = fields[3]
+  rest = fields[4:]
+  if not features.has_key(seqname):
+	  features[seqname]=[]
+  features[seqname].append([seqname, start, end, name, rest])
+del lines
+
+seqs = len(features)
+saveFeats = {}
+baseseqname = argv[1] 
+basefeatures = features[baseseqname]
+del features[baseseqname]
+otherfeatures = features
+
+# take a feature from first seqname -> f
+for f in basefeatures:
+  start = f[1]
+  end = f[2]
+  tfs = getTFs(f[3])	
+  # add f to current list
+  saveFeats={}
+  saveFeats[baseseqname]=[f]
+  #print "Current f:" + str(f)
+  # and compare with all other seqs, adding to list
+  for name in otherfeatures.keys(): 
+	  seqFeats = otherfeatures[name]
+	  # get features that overlap f
+	  ovFeats = [f for f in seqFeats if \
+	    ((f[1] <= start and f[2] >= start) or \
+	    (f[1] <= end and f[2] >= end)) ]
+
+	  #print "seq = "+name
+	  #print "overlap with f:"+str(ovFeats)
+	  # check for all features that overlap if
+	  # their tf-fields are identical to f
+          for ovFeat in ovFeats:
+            ovTFs = getTFs(ovFeat[3])
+	    # keeo only features if they share one TF-field with f
+	    sameTFs = [tf for tf in tfs if tf in ovTFs]
+	    # print "checking "+str(ovFeat)
+	    # print "same TF names:"+str(sameTFs)
+	    # if anything left, save this feature 
+	    if not sameTFs == []:
+		    #print "OK, added "+str(ovFeat)
+		    seqname = ovFeat[0]
+		    if not saveFeats.has_key(seqname):
+			    saveFeats[seqname]=[]
+		    saveFeats[seqname].append(ovFeat)
+  # check if results from sequence traversal exceed limit
+  print "sequences in set:"+str(seqs)
+  print "features foudn:"+str(len(saveFeats.keys()))
+  print saveFeats
+  if len(saveFeats.keys())>=seqs-NonConserved:
+	  #print "printing..."
+	  #print saveFeats.keys()
+	  for k in saveFeats.keys():
+	       #print saveFeats[k]
+	       for x in saveFeats[k]:
+		  print feat2str(x) 
+
+  
+            		
+
+

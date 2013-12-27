@@ -1,0 +1,159 @@
+#!/usr/bin/env python
+
+# convert embl to fasta format
+# by max & joachim
+
+from sys import *
+from optparse import OptionParser
+import os.path, glob, sets, types
+
+# max's lib
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("Usage: %prog file1 file2 ... outputDirFilename - extracts all sequences from all files specified and outputs to fasta files in outputDirFilename (one per taxonId). Filters out papers that are linked to more than 100 sequences.")
+
+parser.add_option("-m", "--maxSeqs", dest="maxSeqs", action="store", help="set maximum number of sequences per paper, default %default", default=100) 
+parser.add_option("-t", "--taxonIdListFile", dest="taxonIdListFile", action="store", help="limit output to the list of taxonIDs specified in this file") 
+parser.add_option("", "--onlyMeta", dest="onlyMeta", action="store_true", help="output meta information: print all accession numbers, taxons and years to stdout, as a table, no maximum sequences constraints, do not write sequences.") 
+
+(options, args) = parser.parse_args()
+
+# === Functions ===
+taxonIds = set() # taxonIds from taxonIdListFile
+
+def outputMeta(data, fh):
+    for rec in data:
+        pmids = rec[2] 
+        if len(pmids)==0:
+            pmids=[None]
+        for pmid in pmids:
+            strings = []
+            for data in rec:
+                if data==None:
+                    strings.append("\N")
+                else:
+                    strings.append(data)
+            strings[2] = pmid
+            strings = [str(x) for x in strings]
+            line = "\t".join(strings)
+            fh.write(line+"\n")
+
+fhCache = {} # filehandles of opened files
+def outputSequences(pmidSeqs, baseDir, maxSeqs):
+    global fhCache
+    for pmid, seqInfoList in pmidSeqs.iteritems():
+        if len(seqInfoList) < maxSeqs:
+            for seqInfo in seqInfoList:
+                ref, taxonId, acc, seq, definition = seqInfo
+
+                if "complete genome" in definition:
+                    stderr.write("Ignored record %s, DEFINITION line contains 'complete genome' \n" % acc)
+                    continue
+
+                if len(seq)>1000000:
+                    stderr.write("Ignored record %s, sequence length > 1 Mbp\n" % acc)
+                    continue
+
+                if taxonIds==None or taxonId in taxonIds:
+                    if not taxonId in fhCache:
+                        fhCache[taxonId]=open(os.path.join(baseDir, str(taxonId)+".fa", ), "w")
+                    faSeqStr = ">%s|%s|%s\n%s\n" % (ref, taxonId, acc, seq)
+                    fhCache[taxonId].write(faSeqStr)
+        else:
+            stderr.write("Ignored PMID %s, number of seqs > %d\n" % (pmid, maxSeqs))
+
+# == MAIN ==
+
+if len(args)==0:
+    parser.print_help()
+    exit(1)
+
+filenames = args[:-1]
+outputDirFilename = args[-1]
+maxSeqs         = options.maxSeqs
+taxonIdListFile = options.taxonIdListFile
+onlyMeta      = options.onlyMeta
+
+#if not os.path.isfile(emblPath):
+    #files = glob.glob(os.path.join(emblPath, "*.dat"))
+#else:
+    #files = [emblPath]
+if outputDirFilename.endswith(".dat"):
+    stderr.write("Hm, last filename ends with .dat...\n")
+    stderr.write("You seem to have forgotten to specify an output file\n")
+    exit(1)
+
+if taxonIdListFile:
+    taxonIds = set(tabfile.slurplist(taxonIdListFile, check=False, valType=types.IntType))
+    stderr.write("Taxon ID file specified, limiting extracts to the following taxon ids: %s\n" % str(taxonIds))
+else:
+    taxonIds = None
+
+if onlyMeta:
+    metaFh = open(outputDirFilename, "w")
+    metaFh.write("#Accession, Taxon ID, PMID, Year\n")
+
+for f in filenames:
+    metaInfo = []
+    pmidSeqs = {}
+    acc = None
+    lines = open(f)
+
+    refs = set()
+    year = None
+    taxonId = None
+    seqs = []
+    definition = ""
+
+    stderr.write("Parsing file %s\n" % f)
+    for line in lines:
+        # end of record identifier
+        if line.startswith("//"):
+            if onlyMeta:
+                metaInfo.append( (acc, taxonId, refs, date) )
+            else:
+                if acc!=None and taxonId!=None and len(refs)!=0:
+                    for ref in refs:
+                        longSeq = "\n".join(seqs)
+                        seqInfo = ref, taxonId, acc, longSeq, definition
+                        pmidSeqs.setdefault(ref, []).append(seqInfo)
+                        
+            taxonId = None
+            refs = set()
+            seqs = []
+            definition=""
+            year = None
+
+        #DE  Aspergillus niger contig An09c0100, complete genome.
+        if line.startswith("DE "):
+            definition = line.replace("DE   ","").strip()
+
+        #AC   AB000001;
+        if line.startswith("AC"):
+            acc = line.split()[1].strip(";")
+        if '/db_xref="taxon:' in line:
+            taxonId = line.split(":")[1].strip().strip('"')
+            try:
+                taxonId=int(taxonId)
+            except:
+                stderr.write("Error casting taxonId to Int, file %s, acc %s\n" % (f, acc))
+                continue
+
+        #RX   PUBMED; 9339350.
+        if line.startswith("RX   PUBMED"):
+            pmid = line.split()[2].strip().strip(".")
+            refs.add(pmid)
+        #DT   DT   DD-MON-YYYY (Rel. #, Last updated, Version #)
+        if line.startswith("DT "):
+            date = line.split()[1]
+            date = date.split("-")[2]
+
+        #     aattttaatg aagagtttgg ttgtagctgg cccattaatt taggcatgtg cacacctttc        60
+        if line.startswith("    "):
+            seqs.append(line.strip().strip("0123456789").replace(" ",""))
+
+    if onlyMeta:
+        outputMeta(metaInfo, metaFh)
+    else: 
+        outputSequences(pmidSeqs, outputDirFilename, maxSeqs)

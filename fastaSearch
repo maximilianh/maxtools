@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ "$#" == "0" -o "$1" == "-h" ]; then
+    echo  "fastaSearch: searches nucleotide fasta file for occurences of string "
+    echo  "             and reports them as a bed file, searches revCompl, "
+    echo  "             degenerate bases possible "
+#    echo  " -u:         requires the fasta file to have a UCSC-style "
+#    echo  "             coord header like this: \">seqname range=chr1:1000-2000\" and will report relative  "
+#    echo  "             genomic coordiantes then for the matches. "
+    echo  "usage:       fastaSearch test.fa gatta ytta tkkg ttttttt"
+    exit
+fi
+
+file=$1
+shift
+for i in $@ 
+do pat=$i
+    fuzznuc -sequence $file -pattern $pat -complement -rformat gff -stdout -mismatch 0 -outfile stdout 2>/dev/null | grep -v '###'  | cut -f1-7 | gff2bed | cut -f1-7 | awk '{OFS="\t"; print $1,$2-1,$3,"'$pat'","0", $6}' 
+#| gawk '{OFS="\t"; if ($6=="-") $2=$2-1; $3=$3-1; print $1,$2,$3,$4,$5,$6,$7;}'
+done

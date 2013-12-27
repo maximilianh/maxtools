@@ -1,0 +1,41 @@
+#!/usr/bin/perl -Tw         # force taint checks, and print warnings
+use strict;                 # install all three strictures
+$|++;                       # force auto flush of output buffer
+
+my $lastchrom=0;
+my $laststart=0;
+my $lastend=0;
+my $lastname=0;
+
+if ($#ARGV > 0 && $ARGV[0] eq "-h" ) {
+    print "bedOverlapCoalesce: joins two overlapping bed features on sorted bed file into one feature";
+    print "\n";
+    exit(1);
+}
+
+$,="\t";
+
+my $skip=0;
+my @fts;
+my $i = 0;
+
+# read bed file (anyone got bioperl featio/bed.pm working?)
+while (<>) {
+    chomp();
+    my @a = split();
+    if (@a > 0) {
+        if ($a[1] > $lastend) {
+            print $lastchrom, $laststart, $lastend, $lastname."\n" unless $laststart==0;
+            $lastchrom=$a[0];
+            $laststart=$a[1];
+            $lastend=$a[2];
+            $lastname=$a[3];
+        }
+        else {
+            $lastend = $a[2];
+            $lastname = $lastname."/".$a[3];
+        }
+    }
+}
+print $lastchrom, $laststart, $lastend, $lastname."\n" unless $laststart==0;
+

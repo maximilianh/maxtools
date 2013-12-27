@@ -1,0 +1,42 @@
+#!/usr/bin/env python
+# this script can filter the list of jgi orthologs as downloaded from anissed
+
+from sys import *
+f = open(argv[1], "r")
+lastid = 0
+bestline = ""
+bestpercent = 0
+
+def isAcc(str):
+    if str.startswith("CG"):
+        return True
+    if str.startswith("NM_"):
+        return True
+    if str.startswith("ENS"):
+        return True
+    return False
+
+for l in f:
+    if l.startswith("#"):
+        continue
+    f = l.split("\t")
+    if f[0]!=lastid:
+        print bestline,
+        bestline = l
+        bestpercent = int(f[3].strip("%"))
+    else:
+        percent = int(f[3].strip("%"))
+        org = f[5].strip()
+        name = f[2].strip()
+        if percent >= bestpercent and org=="Homo sapiens" and not isAcc(name):
+            bestline=l
+            bestpercent = percent
+    lastid=f[0]
+
+
+
+
+
+
+
+    

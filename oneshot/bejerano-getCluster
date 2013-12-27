@@ -1,0 +1,50 @@
+#!/usr/bin/python
+
+from sys import * 
+
+f = open("ismb2004.intervals.txt", "r")
+
+class Region:
+    def __repr__(self):
+        return self.chrom+"\t"+self.start+"\t"+self.end
+    def join(self):
+        return self.chrom+":"+self.start+"-"+self.end
+    def within(self, chrom,start,end):
+        if self.chrom == chrom and self.start <= start and self.end >= end:
+            return True
+        else:
+            return False
+
+inChrom = argv[1]
+inStart = argv[2]
+inEnd = argv[3]
+
+myregions = {}
+allregions = {}
+for l in f:
+    fs = l.split()
+    i = Region()
+    (i.name, i.chrom, i.start, i.end) = fs
+    if i.chrom==inChrom and int(i.start) > int(inStart) and int(i.end) < int(inEnd):
+        myregions[i.name]=i
+    allregions[i.name]=i
+
+f = open("ismb2004.clusters.txt", "r")
+
+for l in f:
+    (cluster,regions) = l.split()
+    regionNames = regions.split(",")
+    for r in regionNames:
+        found=False
+        if r in myregions:
+            orgReg = myregions[r]
+            for hit in regionNames:
+                if not hit in myregions:
+                    print str(allregions[hit])+'\t'+ hit+"-"+r+"(="+orgReg.join()+")"
+            
+
+    
+    
+
+
+    

@@ -1,0 +1,99 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import time, sys, urllib2, os.path, operator
+#import util
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] annotationsFile filename outDir - read in-situ-ids from mart_export.txt, and annotations from annotationsFiles and download pictures from eurexpress into outdir") 
+
+#parser.add_option("", "--geneIds", dest="geneIds", action="store_true", help="treat annotations file as gene identifiers, no as annotations") 
+(options, args) = parser.parse_args()
+
+def parseBiomart(f, targetDomainList):
+    """ parses eurexpress biomart output, returns list of (symbol, [imgUrls]) """
+    imgPaths = {} 
+    # templateId => tuple (geneSym, list of tuple (int priority, imgPath))
+    for l in f:
+        if l.startswith("Template"):
+            continue
+        l = l.strip("\n")
+        fs = l.split("\t")
+        if len(fs)<5:
+            continue
+        templateId = fs[0]
+        imgPath = fs[-2]
+        domain = fs[-1]
+        if targetDomainList!=None and domain not in targetDomainList:
+            continue
+        symbol = fs[1].replace("/",":")
+
+        # fill dict with imgPaths in right order
+        for prio, sectStr in [(1, "12"), (2, "08"), (3, "16"), (4, "20")]:
+            if imgPath.endswith("_"+sectStr+".jpg"):
+                imgPaths.setdefault(templateId, [symbol, []])
+                imgPaths[templateId][1].append((prio, imgPath))
+
+    # sory by priority
+    for templId, symImgPath in imgPaths.iteritems():
+        sym, imgPathList = symImgPath
+        imgPathList.sort(key=operator.itemgetter(0))
+
+    return imgPaths
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if sys.argv[0].endswith(".py"):
+    filename = "mart_export.txt"
+    outDir = "images"
+    domains = open("annotations.txt").readlines()
+    domains = [d.rstrip("\n") for d in domains]
+    print "Found %d domain annotations in annotations.txt" % len(domains)
+    f = open(filename)
+
+else:
+    if args==[]: 
+        parser.print_help()
+        exit(1)
+
+    annotationsFile , filename, outDir = args
+    domains = [x.strip() for x in open(annotationsFile).readlines()]
+
+    if filename=="stdin":
+        f = sys.stdin
+    else:
+        f = open(filename, "r")
+
+print "Reading eurexpress annotations..."
+symbolPaths = parseBiomart(f, domains)
+downloadTotal = len(symbolPaths)
+print "According to eurexpress annotations and your annotations.txt file, we need to download about %d images (3 sections per gene, if availble)" % downloadTotal
+
+downloadCount=0
+for templId, symPaths in symbolPaths.iteritems():
+    symbol, imgPaths = symPaths
+    if len(imgPaths)==0:
+        continue
+    priority, imgPath = imgPaths[0]  # only use most imp section
+    fname = symbol+"_"+templId+"_"+imgPath
+    fname = os.path.join(outDir, fname)
+    if not os.path.isdir(outDir):
+        print ("Creating directory %s" % outDir)
+        os.mkdir(outDir)
+
+    downloadCount+=1
+    if os.path.isfile(fname):
+        print "file %s exists, skipping" % fname
+        continue
+
+    imgUrl = "http://www.eurexpress.org/euximages/getImage?image="+imgPath
+    print "Downloading %s to %s" % (imgUrl, fname)
+    #util.httpDownload(imgUrl, fname)
+    data = urllib2.urlopen(imgUrl).read()
+    open(fname, "w").write(data)
+
+    print "Downloaded %d of %d images" % (downloadCount, downloadTotal)
+    print "Waiting for 5 seconds..."
+    time.sleep(5)

@@ -1,0 +1,47 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile, operator
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename filename - compare two sorted hashfiles' keys by their ranking and report rank1 / rank2") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def keyRanks(fname):
+    lines = tabfile.slurplist(fname)
+    i=1
+    ranks = {}
+    for l in lines:
+        k,v = l.split()
+        ranks[k]=i
+        i+=1
+    return ranks
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+file1, file2 = args
+ranks1, ranks2 = keyRanks(file1), keyRanks(file2)
+
+inters =  len(set(ranks1).intersection(ranks2)) 
+if len(ranks1)!=inters or len(ranks2)!=inters:
+    stderr.write("error: files have different keys\n")
+    exit(1)
+
+relRanks = []
+for k, r1 in ranks1.iteritems():
+    r2 = ranks2[k]
+    relRanks.append( (k, float(r1)/r2) )
+
+relRanks.sort(key=operator.itemgetter(1))
+
+for k, r in relRanks:
+    print k, r

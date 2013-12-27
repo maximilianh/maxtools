@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import bed
+import copy, os
+import maxGenome
+from collections import defaultdict
+import matplotlib.pyplot as plt
+import numpy as np
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename(s) - convert bed to UCSC genome graph") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-s", "--chromSizes", dest="chromSizes", action="store", help="use this chrom sizes file to chunk genome into 1 mbp tiles (makes sure that every piece has at least a 0 annotation). Can be either a db like hg19 or a chrom.sizes file.")
+parser.add_option("-d", "--distance", dest="distance", action="store", type="int", help="distance between two bins, default is %default", default=1000000)
+parser.add_option("-p", "--plot", dest="plot", action="store", help="write diagram with matplotlib to named file")
+parser.add_option("-c", "--chrom", dest="chrom", action="store", help="required if for -p: plot only a single chromosome")
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filenames = args
+binSize = options.distance
+
+chromBinsEmpty = {}
+
+# prep chromBins to get 0-values right
+if options.chromSizes!=None:
+    #print "OPTION SET"
+    for b in maxGenome.chromSplit(options.chromSizes, binSize):
+        #print b.chrom, b.start
+        chromBinsEmpty.setdefault(b.chrom, {})
+        chromBinsEmpty[b.chrom][b.start] = set()
+
+# fill chromBins
+fileChromBins = []
+for filename in filenames:
+    chromBins = copy.copy(chromBinsEmpty)
+    beds = bed.parseBedFilename(filename)
+    chromScores = {}
+    nameScores = {}
+    for b in beds:
+        for pos in range(b.start, b.end, binSize):
+            bin = pos / binSize
+            binStart = bin * binSize
+            assert(b.name!="")
+            if options.chromSizes:
+                chromBins[b.chrom][binStart].add(b.name)
+            else:
+                chromBins.setdefault(b.chrom, {}).setdefault(binStart, set()).add(b.name)
+    fileChromBins.append(chromBins)
+
+if not options.plot:
+    chromBins = fileChromBins[0]
+    for chrom, bins in chromBins.iteritems():
+        # a vector of counts for each score, over all bins
+        posVals = {}
+        minBin = min(bins)
+        maxBin = max(bins)
+        for binStart in range(minBin, maxBin, binSize):
+            binSet = bins.get(binStart, [])
+            plotVal = str(len(binSet))
+            binEnd = binStart+binSize
+            fields = [str(chrom), str(binStart), str(binEnd), plotVal]
+            print "\t".join(fields)
+
+else:
+    assert(options.chrom)
+    binCounts = [f[options.chrom] for f in fileChromBins]
+    maxAll = 0
+    minAll = 999999999999
+    for bin in binCounts:
+        minBin = min(bin)
+        minAll = min(minAll, minBin)
+
+        maxBin = max(bin)
+        maxAll = max(maxAll, maxBin)
+
+    #print "min", minAll, "max", maxAll
+    counts = []
+    for i in range(len(filenames)):
+        counts.append([])
+    # transform from list of dicts pos -> set to list of list of vals
+    # one list per input file, one list for values
+    #print binCounts
+    ticks = []
+    tickLabels = []
+    tick = 0
+    for binStart in range(minAll, maxAll, binSize):
+        if binStart%2000000==0:
+            ticks.append(tick)
+            tickLabels.append(str(binStart/1000000))
+        binVals = [len(b.get(binStart, set())) for b in binCounts]
+        #print "binStart, vals:", binStart, binVals
+        for i in range(len(binVals)):
+            #print i, binVals[i]
+            counts[i].append(binVals[i])
+        tick += 1
+
+    width =1.0
+    #print counts
+    #print "ticks", ticks
+    barLocs = range(len(counts[0]))
+    colors = ["Indigo", "DarkOrange", "m"]
+    bars = []
+    bottom = [0]*len(counts[0])
+    for i in range(len(counts)):
+        countVec = counts[i]
+        values = [b+c for b,c in zip(countVec, bottom)]
+        #print "bottom", bottom
+        #print "countVec", countVec
+        #print "data", i, values, width, colors[i]
+        bars.append( plt.bar(barLocs, values, width, bottom=bottom, color=colors[i], linewidth=0 ))
+        for j, c in enumerate(countVec):
+            bottom[j]+=c
+
+    #tickLabels = [str(x)+"Mbp" for x in ticks]
+    #print bars
+    plt.ylabel("Number of articles")
+    plt.xlabel("chr21 position in Mbp")
+    #plt.xticks(ticks, tickLabels)
+    #plt.xticks(np.arange(len(ticks)), rotation=90)
+    plt.xticks(ticks, tickLabels, rotation=90)
+    print ticks, tickLabels
+    #plt.show()
+    basenames = [os.path.basename(f).split(".")[1] for f in filenames]
+    basenames = ["%s-%d" % (x, int(x)+6) for x in basenames]
+    plt.legend( bars, basenames)
+    plt.savefig(options.plot)

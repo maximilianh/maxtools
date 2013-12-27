@@ -1,0 +1,82 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+from optparse import OptionParser
+
+parser = OptionParser("usage: %prog [options] sequence-files\nJoins two tables, can filter and replace") 
+
+parser.add_option("-f", "--filter", dest="filter", action="store_true", help="output only lines that can be translated", metavar="", default=False) 
+parser.add_option("-n", "--noreplace", dest="wholeLine", action="store_true", help="do not replace, just output lines", metavar="", default=False) 
+parser.add_option("-d", "--delimiter", dest="delim", action="store", help="output field separator,[default: %default]", metavar="", default="\t") 
+parser.add_option("-r", "--replace", dest="replace", action="store_true", help="replace instead of concat [default: %default]", metavar="", default=False) 
+
+(options, args) = parser.parse_args()
+
+if len(argv)>1 and argv[1]=="-h" or len(argv)==1:
+  parser.print_help()
+  print """ 
+    Dictionary file:
+      Will read textlines from stdinput that can be splittet into columns.
+      File will be read as a dictionary into memory: first (from) column is key,
+      second column (from) is the value.
+
+    File parsing from stdin:
+      Every string in the last (default) column of stdin-lines is replaced using 
+      this dictionary. if the dictionary does not have a key for it,
+      nothing is printed (this can also be used as a filter). The fields from the dict
+      that are not use for the replacement are added at the end of each line. (except when you specify
+      -r, replace)
+
+      EXAMPLE:
+      cat id2matrix | joinFields matrix2accesion.lst 4 
+        == search 4th column (1-based) of id2matrix, replace according to matrix2accession
+  """
+  exit()
+
+if (len(args)>1):
+    cols=args[1].split(",")
+else:
+    cols=["0"]
+columns = [ int(x)-1 for x in cols ]
+
+
+fromcolumn=0
+tocolumn=1
+
+# read in first file
+f = open(args[0], "r")
+dict={}
+for line in f:
+	fields = line.split()
+        if tocolumn>=len(fields):
+            tocolumn=fromcolumn
+	if not fields==[]:
+            dict[fields[fromcolumn]]=fields[tocolumn:]
+
+# do join
+delim = options.delim
+lines = sys.stdin.readlines()
+onlyMatches = options.filter
+wholeLine = options.wholeLine
+replace = options.replace
+for line in lines:
+        found=False
+	fields = line.split()
+        for col in columns:
+            idx = fields[col]
+            if idx in dict:
+                found=True
+                if wholeLine==True:
+                    print line
+                else:
+                    hit = dict[idx][0]
+                    if replace==True:
+                        fields[col]=hit
+                    else:
+                        fields.append(hit)
+        if (not wholeLine and (not onlyMatches or (onlyMatches and found))):
+            print delim.join(fields)
+
+

@@ -1,0 +1,64 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import os, time
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - convert tab separated file to weka ARFF format, will interprete lines similar to '# format result={1,2,3}' if present") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-i", "--ignore", dest="ignore", action="store", help="ignore column, can be specified several times", action="append") 
+parser.add_option("-f", "--format", dest="format", action="store", help="type of data columns in format <name>=<type>/<name>=<type>, e.g. expression=numeric/name=string,etc the default type is numeric") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+format = options.format
+
+comments, headers, data  = tabfile.parseTsv(filename, [])
+
+# default type is numeric
+types = {}
+typeOrder = headers
+for h in headers:
+    types[h]="numeric"
+
+# try to get format info from comments
+for l in comments:
+    if l.startswith("# format"):
+        formatStr =l.split()[-1]
+        name, type = formatStr.split("=")
+        name = name.strip()
+        type = type.strip()
+        types[name] = type
+
+# try to get format info from options
+if format:
+    for f in format.strip().split("/"):
+        fs = f.strip().split("=")
+        name, type = fs
+        if name not in headers:
+            stderr.write("error: %s is not in header (%s) " % (name, str(headers)))
+            exit(1)
+        types[name] = type
+
+print "% tsvToArff converted file"
+print "% "+time.asctime()
+print "% original filename: "+filename
+print "@RELATION %s" % os.path.splitext(os.path.basename(filename))[0]
+print
+for name in typeOrder:
+    type = types[name]
+    print "@ATTRIBUTE %20s %20s" % (name, type)
+print "@data"
+
+for linedata in data:
+    print ",".join(linedata)

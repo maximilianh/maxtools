@@ -1,0 +1,39 @@
+#!/usr/bin/python
+
+from optparse import OptionParser
+from sys import *
+import bedTools
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] regions.bed genes.bed - find flanking genes for regions of interest.") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-s", "--noStar", dest="noStar", action="store_true", help="do not mark downstream genes with star * at the begining of the name", default=False) 
+parser.add_option("-d", "--dist", dest="dist", action="store_true", help="add distances to left/right neighbors as seperate columns to bed file", default=False) 
+parser.add_option("", "--onlyDownstream", dest="onlyDownstream", action="store_true", help="print only genes that are downstream of regions", default=False) 
+parser.add_option("", "--onlyClosest", dest="onlyClosest", action="store_true", help="print only gene that is closest to region", default=False) 
+parser.add_option("", "--keepOverlaps", dest="keepOverlaps", action="store_true", help="do not drop a region if it is overlapping a gene", default=False) 
+parser.add_option("-q", "--quiet", dest="quiet", action="store_true", help="do not output anything to stderr", default=False) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+noStar=options.noStar
+onlyDownstream=options.onlyDownstream
+onlyClosest=options.onlyClosest
+addDist = options.dist
+keepOverlaps = options.keepOverlaps
+if options.quiet:
+    bedTools.QUIET=True
+regions,genes= args
+
+beds = bedTools.bedFindNeighbors(regions,genes, noStar,onlyDownstream,onlyClosest,addDist,keepOverlaps)
+print beds
+if not options.quiet:
+    stderr.write('Printed %d features\n' % len(beds))

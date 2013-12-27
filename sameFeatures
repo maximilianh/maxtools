@@ -1,0 +1,100 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+from distutils.util import split_quoted
+
+if len(argv)==1:
+  print
+  print "DESCRIPTION:"
+  print "  reads bed-file from stdin and displays only those features that are"
+  print "  also present in a given bed-file. Same here means that the"
+  print "  position and one part (/-separator) of the description have to be"
+  print '  identical. Make sure that track lines have the formnat "track name=xx"'
+  print
+  print "SYNTAX: "
+  print " sameFeatures <filename> " 
+  print
+  print "OPTIONS:"
+  print "  checkpos=<true|false>        keep features only when the position "
+  print "                              of the feature in the file does "
+  print "                              match, default: true"
+  print
+  print "AUTHOR:"
+  print "  M. Haeussler, maximilian@bioinformatics.org"
+  print
+  exit() 
+
+FEATUREACCSEP= "="
+FEATUREDESCSEP = "/"
+
+def parseTrackName(s):
+  return split_quoted(s)[1].split("=")[1].strip('"')  
+def parseFeatureNames(s):
+  if not s.find(FEATUREACCSEP)==-1:
+    s = s.split(FEATUREACCSEP)[1]
+  return s.split(FEATUREDESCSEP)
+
+# parse options into dict
+option = {}
+if len(argv) >= 3:
+   options = argv[2]
+   options = options.split(",")
+   for o in options:
+    (key, value) = o.split("=")
+    option[key.lower()]=value.lower()
+
+checkPos = not option.has_key('checkpos')
+
+# read file, parse trackname, remove header
+f = open(argv[1], 'r')
+lines1 = []
+desc = {}
+lines = f.readlines()
+for line in lines:
+  line = line.strip()
+  if (line.startswith("browser") or len(line)==0):
+      print line
+  if (line.startswith("track")):
+      trackname1=parseTrackName(line)
+      trackline1=line
+  else:
+    parts = line.split()
+    pos = int(parts[1])
+    names = parseFeatureNames(parts[3])
+    # generate a 2D-dictionary, with the position as first index and the factor
+    # name as the second
+    for name in names:
+      if not desc.has_key(name):
+        desc[name]={}
+      desc[name][pos]=True
+
+del lines     
+
+#print desc
+
+# read line, exit on EOF
+while True:
+ try:
+  line = raw_input()
+ except:
+  exit()
+
+ line = line.strip()
+
+ if line.startswith("track"):
+  trackname2=parseTrackName(line)
+  trackdata = split_quoted(line)
+  print trackdata[0]+' name="CommonFeatures" description="Common('+trackname1+","+trackname2+')" '+" ".join(trackdata[3:])
+  
+# if feature found, extract names and output line if found in dictionary  
+ elif not (line.startswith("browser") or len(line)==0):
+  pos = int(line.split()[1])
+  names = parseFeatureNames(line.split()[3])
+  for name in names:
+    if not checkPos and desc.has_key(name):
+         print line
+         break   
+    elif checkPos and desc.has_key(name) and desc[name].has_key(pos) and desc[name][pos]==True:
+       print line
+       break      

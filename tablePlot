@@ -1,0 +1,131 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import util
+import tempfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] tableFile postscriptFile - generate a diagram from a tabsep-file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-f", "--field", dest="field", action="store", help="name of the field which is plotted") 
+parser.add_option("-k", "--fieldNumber", dest="fieldNumber", action="store", type="int", help="number of field to plot, zero-based, default %default", default=1) 
+parser.add_option("-y", "--ylabel", dest="ylabel", action="store", help="label for y axis") 
+parser.add_option("-t", "--title", dest="title", action="store", help="title for plot") 
+parser.add_option("-s", "--sort", dest="sort", action="store_true", help="sort values before plotting") 
+parser.add_option("-p", "--png", dest="png", action="store_true", help="create png file in addition to ps file") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def searchVal(list, val):
+    for i in range(0, len(headers)):
+	header = headers[i]
+	if header==val:
+	    return i
+    stderr.write("error: could not find field with name %s" % fieldName)
+    exit(1)
+    
+# ----------- MAIN --------------
+
+if len(args)<2: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+outfile = args[1]
+fieldName = options.field
+fieldNumber = options.fieldNumber
+ylabel = options.ylabel
+sort = options.sort
+title = options.title
+
+stderr.write("Reading table...\n")
+if filename=="stdin":
+    f = stdin
+else:
+    f = open(filename, "r")
+lines = f.readlines()
+headers = lines[0].strip().split("\t")
+
+col = fieldNumber
+if fieldName!=None:
+    col = searchVal(headers, fieldName)
+
+xtics = []
+vals = []
+for l in lines[1:]:
+    fs = l.strip().split("\t")
+    xtics.append(fs[0])
+    vals.append(float(fs[col]))
+
+# sort values and xtics together
+if sort:
+    all = zip(xtics, vals)
+    all.sort(key= lambda (x,y): y)
+    xtics, vals = zip(*all)
+
+# add index to xtics
+xticsNums = []
+i=0
+for x in xtics:
+    xticsNums.append((x,i))
+    i+=1
+xtics = xticsNums
+
+
+# write vals into file
+datafile = tempfile.NamedTemporaryFile()
+for v in vals:
+    datafile.write(str(v)+"\n")
+
+# generate plotfile
+plotfile = tempfile.NamedTemporaryFile()
+
+xtics = ['"' + v + '" '+str(i) for v,i in xtics]
+xticsStr = "set xtics (%s);\n" % ",".join(xtics)
+plotfile.write(xticsStr)
+
+plotfile.write("set terminal postscript eps;\n")
+plotfile.write('set output "%s";\n' % outfile)
+plotfile.write("set xtics rotate;\n")
+plotfile.write("set nokey;\n")
+if ylabel:
+    plotfile.write('set ylabel "%s";\n' % ylabel)
+if title:
+    plotfile.write('set title "%s";\n' % title)
+plotfile.write('plot "%s" using 1 with linespoints;\n' % datafile.name)
+
+plotfile.flush()
+datafile.flush()
+#util.execCmdLine("cat %s" % plotfile.name)
+util.execCmdLine("gnuplot %s" % plotfile.name)
+util.execCmdLine("gv %s &" % outfile)
+util.execCmdLine("convert -density 200 %s %s.png" % (outfile, outfile))
+
+#!/bin/bash
+# $1 - hashfile
+# optional $2: description of y axis
+
+#OUT=/tmp/my.gp
+#PS=`basename $1 .hash`.ps
+#YLABEL=${2:-No Label}
+#echo $PS
+#
+#cat $1 | gawk '{OFS="\t"; print NR, $2;}' > /tmp/gnudata
+#echo > $OUT
+#cat $1 | gawk 'BEGIN { printf "set xtics (";} // {ORS=",";OFS="\t"; print "\""$1"\" " NR-1 } END {print ")"; }' | tr '\n' ' ' | sed -e "s/,)/)/g" | sed -e "s/,$//g"  >> $OUT
+#echo \; >> $OUT
+#echo set terminal postscript eps \;>> $OUT
+#echo set output \"$PS\" \;>> $OUT
+#echo set xtics rotate \; >> $OUT
+#echo 'set nokey;' >> $OUT
+#echo 'set ylabel "'$YLABEL'";' >> $OUT
+#echo 'plot "'/tmp/gnudata'" using 2 with linespoints;' >> $OUT
+#gnuplot $OUT
+##gv $PS
+#PNG=`basename $PS .ps`.png
+#convert -density 150 $PS $PNG
+#qiv $PNG

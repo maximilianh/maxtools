@@ -1,0 +1,4 @@
+#!/bin/bash
+
+curl ftp://hgdownload.cse.ucsc.edu/goldenPath/$1/bigZips/chromFaMasked.tar.gz -o $1.zip
+unzip *.zip

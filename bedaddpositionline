@@ -1,0 +1,43 @@
+#!/usr/bin/gawk -f
+
+BEGIN { 
+	if (ARGC>0 && ARGV[1]=="-h") {
+	  print;
+	  print "Will add a 'browser position' line to a bed file"
+	  print "in UCSC-stile format (browser position chr4:minstartpos-maxendpos)"
+	  print "Coordiates are chosen to include all features contained."
+	  print ""
+	  print "SYNTAX:"
+	  print " bedaddbrowserpositionline" 
+	  print "EXAMPLE:"
+	  print " cat bla.bed | bedaddbrowserpositionline > bla2.bed"
+         exit 1
+
+        }
+	 FS=" ";
+	 min=10000000000;
+	 max=0;
+}
+	
+//      { alllines[NR]=$0;
+        }
+/track/ { next;}
+/browser/ {next;}
+/^#.*/ {next;} #ignore comments
+
+//	{ 
+	  if ($2 < min) {
+	   min = $2
+   	  }
+	if ($3 > max) {
+		max = $3 
+	}
+	chrom = $1
+}
+
+END {
+	print "browser position " chrom ":" min "-" max; 
+        for (i=1; i<=FNR; i++) {
+	    print alllines[i];
+	}
+}

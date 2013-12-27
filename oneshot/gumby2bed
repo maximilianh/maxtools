@@ -1,0 +1,38 @@
+#!/usr/bin/gawk -f 
+# convert gumby output to bed format, call like this:
+# cat test.out | gumby2bed fugu Fugu_rubrices
+# or: cat test.out | gumby2bed fugu
+# you NEED to specify param1, it's the base species
+# param2 is optional, if you want to change the base to another string
+# param3 is optional, can be "-noP" to suppress P-value printing
+BEGIN {
+    OFS="\t";      
+    org = tolower(ARGV[1]);
+    neworg = tolower(ARGV[2]);
+    noP= tolower(ARGV[3]);
+    regex = org".*[0-9]+.*[ACTG]+";
+    ARGV[1]="";
+    ARGV[2]="";
+    ARGV[3]="";
+    if (neworg=="") 
+        neworg=org;
+} 
+
+/pvalue/ {
+    pvalue=$11;
+    first=0;
+} 
+
+/len/ {
+    next;
+    }
+
+($0 ~ regex) { 
+        if (first==0) {
+            if (noP) 
+                print neworg, $2, $3;
+            else
+                print neworg, $2, $3, pvalue;
+            first=1;
+        }
+    } 

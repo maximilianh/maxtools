@@ -1,0 +1,71 @@
+#!/usr/bin/perl 
+
+if ($#ARGV==-1) {
+print<<END;
+
+DESCRIPTION: run transfac match with the given parameters and return result
+             as html file to stdout.
+SYNTAX:
+             patch-match <options>
+OPTIONS:
+
+   group=id:  The type of matrices. Id is one of:
+		            all
+                            vertebrates (default)
+            		    bacteria
+                            fungi
+                            insects
+                            nematodes
+                            plants
+
+            See the transfac documentation for more info on this.
+	    
+    quality=high:  Set this option if you want to scan only with
+                    high quality matrices.
+    user=x:   Your Transfac username to login, required option
+    password=x:  Your Transfac passowrd to login, required option
+    mode=FN|FP|EQ: Set the thresholds. FN = minimze false negatives
+                   FP=minimize false positives, EQ=specify cut-offs
+    matsim=x:  if mode=EQ: specifies the matrix similarity threshold.
+    coresim=x: if mode=EQ: specifies the core similarity threshold.
+END
+
+exit();
+}
+$BIOBASE_PASS="39W44n";
+$BIOBASE_USER="joly\@cnrs_depsn";
+
+@options=split(",",$ARGV[0]);
+
+for $i (@options) {
+  ($key, $val) = split("=",$i);  
+  $option{$key}=$val;
+}
+$user="";
+$user=$option{'user'};
+if ($user eq "") {
+	$user=$BIOBASE_USER;
+}
+$password="";
+$password=$option{'password'};
+if ($password eq "") {
+	$password=$BIOBASE_PASS;
+}
+#$file=$ARGV[0];
+$length=$option{'length'};
+$mismatch=$option{'mismatch'};
+$group=$option{'group'};
+$matsim=$option{'matsim'};
+$coresim=$option{'coresim'};
+$mode=$option{'mode'};
+$quality=$option{'quality'};
+$addoption="";
+if ($quality ne "") {
+    $addoption=qq/-F "quality=$quality"/
+}
+
+if ($group eq "") {
+  $group='vertebrates';
+}
+
+system qq{curl -u }.$user.":".$password.qq{ http://www.biobase.de/cgi-bin/biobase/transfac/9.3/match/bin/match.cgi -F "Status=First" -F "searchName=Default" -F "seqStat=DEL" -F "sequenceName=ScriptSeq" -F "theSequence=<-" -F "SearchMode=ALL" -F "allMode=$mode" -F group=}.'"'.$group.'" '.qq{-F "file=" -F "cut-off=$matsim" -F "core=$coresim" $addoption };

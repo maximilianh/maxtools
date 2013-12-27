@@ -1,0 +1,274 @@
+#!/usr/bin/python
+
+from optparse import OptionParser
+import tempfile, os, logging, sys, bed, operator
+
+minX = -10
+maxX = 20
+#tickDist = 2
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] ref.bed annots.bed outputBasename: plot how well the edges of annots overlap the edges of ref and write to outputBasename.R") 
+
+#parser.add_option("-s", "--seperator", dest="sep", action="store", help="delimiter between old bed name and overlap annotations, comma by default", default="|", type="string") 
+#parser.add_option("-i", "--internal-seperator", dest="isep", action="store", help="delimiter between annotations, default %default", default=",", type="string") 
+#parser.add_option("-o", "--outputPdf", dest="outputPdf", action="store", help="specify the output PDF file basename, default %default", type="string", default="plot") 
+#parser.add_option("", "--overlapSelect", dest="useOverlapSelect", action="store_true", help="use overlapSelect, speeds up comparison by factor 100x") 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-o", "--outFile", dest="outFile", action="store", help="do not print to stdout, but use outFilename") 
+parser.add_option("-a", "--absolute", dest="absolute", action="store_true", help="plot absolute counts, not relative shares") 
+parser.add_option("", "--deltas", dest="rawValues", action="store_true", help="output Casey's deltas, one per line, to file outputBasename.deltas.R") 
+parser.add_option("-R", "--runR", dest="runR", action="store_true", help="run all R output files through R") 
+#parser.add_option("", "--asTable", dest="asTable", action="store_true", help="do not output as BED, but as a table ref.name<tab>annot.name") 
+#parser.add_option("", "--maxAnnots", dest="maxAnnots", action="store", type="int", help="ignore all features that lead to more than x different annotations (this is not the same as a overlap-limit on the feature level)") 
+
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ==== FUNCTIONs =====
+
+# ------------ FUNCTIONS -----------
+
+def runOverlapSelect(selectFilename, inFilename):
+    """ 
+    run overlap select with bedfilename as selectfile and annotfilename as inFile
+
+    return the data as features from infile, with the overlapped features as a list in the attribute
+    feature.overlapFeats
+    """
+
+    logging.info("Overlapping %s with %s" % (selectFilename, inFilename))
+    annotColumnCount = len(open(inFilename).readline().split("\t"))
+
+    #if nameToAnnotate==None:
+        #newName=os.path.splitext(os.path.basename(inFilename))[0]
+
+    # run overlapSelect into tempfile
+    cmd = "overlapSelect %s %s %s -selectRange -mergeOutput" % (selectFilename, inFilename, tempFilename)
+    logging.debug("Running %s" % cmd)
+    ret = os.system(cmd)
+    if ret!=0:
+        logging.error("Error when running %s" % cmd)
+        sys.exit(1)
+
+    # get names of overlapping annotations from tempfile
+    # and store in overlapData
+    overlapData = {}
+    for l in open(tempFilename):
+        #print "overlapSelectLine", l
+        fields = l.strip("\n").split("\t")
+        inFileFields = fields[0:annotColumnCount]
+        overlapFields = fields[annotColumnCount:][:3] # use only chr start end
+        overlapFields[1] = int(overlapFields[1])
+        overlapFields[2] = int(overlapFields[2])
+        #print "in", inFileFields
+        #print "overlap", overlapFields
+
+        #inKey = " ".join(inFileFields[:3]) # use only chr start end
+        inKey = inFileFields[3]   # use bed name as key
+        assert(inKey.strip()!="") # bed input file MUST HAVE unique names!
+        overlapData.setdefault(inKey, []).append(overlapFields)
+
+    os.remove(tempFilename)
+    #print overlapData
+    return overlapData
+
+def updateBinCounts(binSize, ovStart, refStart, binCountDict, firstBin=0, type="pos"):
+    """ 
+        increase bincount for ovStart by one and write into binCountDict + add to rawVals
+    """
+    relStart = ovStart - refStart
+    relBin = relStart / binSize
+    binIdx = relBin + firstBin
+    logging.debug("overlapping %s %d, delta %d, relBin %d, absolute bin %d" % (type, ovStart, relStart, relBin, binIdx))
+    binCountDict.setdefault(binIdx, 0)
+    binCountDict[binIdx]+=1
+    return binCountDict
+
+def updateBinsAlong(binSize, ovStart, ovEnd, refStart, refEnd, binCountDict, firstBin=0):
+    """ 
+        increase bincount of pos by one
+    """
+    for i in range(ovStart, ovEnd, binSize):
+        relStart = ovStart - refStart
+        relBin = relStart / binSize
+        binIdx = relBin + firstBin
+        logging.debug("overlapping start %d, relative start %d, relBin %d, binIdx %d" % (ovStart, relStart, relBin, binIdx))
+        binCountDict.setdefault(binIdx, 0)
+        binCountDict[binIdx]+=1
+    return binCountDict
+
+def binCountDictToRString(binCountDict, prefix, totalCount=0):
+    """ convert dict to two R strings for plotting """
+    #binCountList = binCountDict.items()
+    #binCountList.sort(key=operator.itemgetter(0))
+    #print binCountDict
+    xValues = [x for x in range(minX, maxX)]
+    yValuesRaw = [binCountDict.get(x, 0) for x in xValues]
+    if totalCount==0:
+        yValues = yValuesRaw
+    else:
+        yValues = [float(x)/totalCount for x in xValues]
+
+    xValues = [str(x) for x in xValues]
+    yValues = [str(y) for y in yValues]
+
+    xValString = '%sx=c(%s)' % (prefix, ",".join(xValues))
+    yValString = '%sy=c(%s)' % (prefix, ",".join(yValues))
+
+    ignoredCount = sum(binCountDict.values()) - sum(yValuesRaw)
+    logging.info("Ignored a total of %d overlaps for %s positions, as they are outside the plotting rage" % (ignoredCount, prefix))
+
+    bothStrings = xValString+"\n"+yValString+"\n"
+    return bothStrings
+
+def extendBedFile(filename):
+    """ extend features by +- featureLen and write to temp file """
+    logging.info("Extending features in file %s" %filename)
+    dummy, tempFilename = tempfile.mkstemp(prefix="bedAnnotateOverlap.ref.", suffix=".overlapSelect.bed")
+    tempFile = open(tempFilename, "w")
+    for b in bed.parseBedFilename(filename):
+        bedLen = b.end - b.start
+        newStart = b.start - bedLen
+        newEnd   = b.end + bedLen
+        newName = b.chrom+" "+str(b.start)+" "+str(b.end)
+        if newStart<0:
+            continue
+        tempFile.write("\t".join([b.chrom, str(newStart), str(newEnd), newName]))
+        tempFile.write("\n")
+
+    tempFile.close()
+    return tempFilename
+        
+        
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    sys.exit(1)
+
+#nameToAnnotate=options.bedName
+#useOverlapSelect = options.useOverlapSelect
+#sep = options.sep
+#isep = options.isep
+#asTable = options.asTable
+#maxAnnots = options.maxAnnots
+#if options.outFile:
+    #outFile = open(options.outFile, "w")
+#$outputPdf = options.outputPdf
+absoluteCounts = options.absolute
+rawValFilename = options.rawValues
+runR = options.runR
+
+#outFile = sys.stdout
+
+# read and prepare bed-data
+bedFilename = args[0]
+annotFilenames = args[1:-1]
+outFilename = args[-1]
+
+refBedTempFilename = extendBedFile(bedFilename)
+
+dummy, tempFilename = tempfile.mkstemp(prefix="bedAnnotateNameOverlap.", suffix=".overlapSelect")
+
+for annotFilename in annotFilenames:
+    overlapData = runOverlapSelect(annotFilename, refBedTempFilename)
+
+    # now interate over input file, outputting features and annotations
+    logging.info("Reading overlap results and binning")
+    beds = bed.parseBedFilename(bedFilename)
+    startBinCounts = {}
+    endBinCounts   = {}
+    overlapCount = 0
+    refOverlapCount = 0
+    deltas = []
+
+    for b in beds:
+        key = " ".join([b.chrom,str(b.start),str(b.end)])
+        #key = b.name
+        overlaps = overlapData.get(key, [])
+
+        if len(overlaps)==0:
+            continue
+
+        logging.debug("reference feature %s" % b)
+
+        binSize = (b.end - b.start)/10
+        logging.debug("binSize is %d" % binSize)
+
+        if len(overlaps)==0:
+            continue
+
+        refOverlapCount+=1
+        for overlap in overlaps:
+            ovChrom, ovStart, ovEnd = overlap
+            if binSize==0:
+                continue
+            updateBinCounts (binSize, ovStart, b.start, startBinCounts, firstBin=0, type="start")
+            updateBinCounts (binSize, ovEnd,   b.end,   endBinCounts  , firstBin=10, type="end")
+            #updateBinsAlong(binSize, ovStart, ovEnd,   b.start, b.end,   startBinCounts  , firstBin=0)
+            featLen = b.end-b.start
+            overlapCount +=1
+            # Casey suggestions start
+            if rawValFilename:
+                caseyDeltaS = abs(ovStart - b.start)/ float(featLen)
+                caseyDeltaE = abs(ovEnd - b.end)/ float(featLen)
+                caseyDelta  = caseyDeltaS + caseyDeltaE
+                deltas.append(caseyDelta)
+            # Casey suggestions end
+                
+
+    yLabel = "Density"
+    legendY = 6
+    if absoluteCounts:
+        totalOverlapCount=0
+        yLabel = "Count per bin"
+        maxY = max(startBinCounts.values())
+        legendY = maxY - 5
+    else:
+        totalOverlapCount=overlapCount
+        
+    startStr = binCountDictToRString(startBinCounts, "start", totalOverlapCount)
+    endStr   = binCountDictToRString(endBinCounts,   "end",   totalOverlapCount)
+
+    outFile = open(outFilename+".R", "w")
+    outFile.write('pdf("%s.pdf", width=12)\n' % outFilename)
+    outFile.write(startStr)
+    outFile.write(endStr)
+    outFile.write('par(mar=c(6,4.1,6,2.1))\n')
+    outFile.write('plot(startx, starty, type="b", xlab="", xaxt="n", ylab="%s")\n' % yLabel)
+    outFile.write('lines(endx, endy, type="b", lty=2, col="blue")\n')
+    outFile.write('axis(1, seq(%d, %d), las=2, hadj=1.0, paste(seq(%d, %d)*10, "%%"))\n' % (minX, maxX, minX, maxX))
+    outFile.write('axis(3, seq(%d, %d), las=2, paste(seq(%d, %d)*10, "%%"), col="blue", col.ticks="blue", col.lab="blue", )\n' % (minX, maxX, minX-10, maxX-10))
+    outFile.write('legend(-9,%d, legend=c("Start positions", "End positions"), lty=c(1,2), col=c("black", "blue"))\n' % (legendY))
+    outFile.write('mtext("percentage deviation from reference end (relative to ref feat length)", NORTH<-3, line=4, adj=0.5, col="blue")\n' )
+    outFile.write('mtext("percentage deviation from reference start (relative to ref feat length)", WEST<-1, line=4, adj=0.5, col="black")\n' )
+    outFile.write('dev.off()\n')
+    outFile.close()
+    if runR:
+        os.system("Rscript %s" % outFilename+".R")
+
+logging.info("Number of reference features %d" % len(beds))
+logging.info("Number of reference features with overlaps %d" % refOverlapCount)
+logging.info("Number of overlapping features %d" % overlapCount)
+
+if rawValFilename:
+    deltaStrings = [str(x) for x in deltas]
+    deltaString = ",".join(deltaStrings)
+
+    filename = outFilename+".deltas.R"
+    rawFile = open(filename, "w")
+    rawFile.write('pdf("%s.deltas.pdf", width=12)\n' % outFilename)
+    rawFile.write('deltas=c(%s)\n' % deltaString)
+    rawFile.write('hist(deltas, main="%s")\n' % outFilename)
+    rawFile.write('dev.off()\n')
+    rawFile.close()
+    if runR:
+        os.system("Rscript %s" % filename)
+
+os.remove(refBedTempFilename)
+

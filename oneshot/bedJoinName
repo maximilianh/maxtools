@@ -1,0 +1,35 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+# tries to join bed files according to their names
+# usage: bedJoinNames <join-file> <bed1> <bed2>
+# will split all bed1,bed2 on _ character
+# will join them using <bed1>tab<bed2>-style join-file
+
+sub bedToHash($$) {
+ my $f = shift;
+ open(FH, $f);
+ my %h = ();
+ while (<FH>) {
+ 	my @fs = split;
+	my @parts = split (/_/, $fs[3] );
+	my $key = $parts[0];
+	$h { $key } = $fs[3];
+
+ }
+ return %h;
+}
+
+my %bed2 = &bedToHash(pop @ARGV);
+my %bed1 = &bedToHash(pop @ARGV);
+
+open (FH, pop @ARGV);
+while (<FH>) {
+  my @fs = split;
+  print "no value for $fs[0] \n" if (not exists $bed1 { $fs[0] } ) ;
+  print "no value for $fs[1] \n" if (not exists $bed2 { $fs[1] } ) ;
+  my $val1 = $bed1 { $fs[0] } ; 
+  my $val2 = $bed2 { $fs[1] } ; 
+  print $val1 . "\t" . $val2 . "\n" ;
+}

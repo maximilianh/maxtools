@@ -1,0 +1,88 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import glob
+import os.path
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] infile - convert blast m8 output to bed to stdout") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+parser.add_option("-d", "--asDir", dest="asDir", action="store_true", help="filename is treated as a dir of which all files *.blast are converted") 
+parser.add_option("", "--mysqlFormat", dest="mysqlFormat", action="store_true", help="output format is <firstpartOfFilename><srcSeq><srcSeqAfter|><chrom><start><end><score>") 
+parser.add_option("-o", "--outDir", dest="outDir", action="store", help="results are written to specified directory, filenames are <infileNameBeforeFirstDot>.bed, this join resultfiles like hg18.chr1.bed and hg18.chr2.bed into hg18.bed") 
+parser.add_option("-t", "--trackLine", dest="trackLine", action="store", help="add this to the start of all bed files", default='track name=textToGenome url=http://www.ncbi.nlm.nih.gov/pubmed/$$') 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def toBed(fname, outfh, myFormat=False):
+    if fname=="stdin":
+        f = stdin
+    else:
+        f = open(fname, "r")
+
+
+    # example
+    # 11495631        chr1    100.00  23      0       0       1       23      25500772        25500750        2e-05   46.1
+    for l in f:
+        fs = l.strip().split("\t")
+        srcId, trgId, perc, len, dummy, dummy, dummy, len, trgStart, trgEnd, eVal, score = fs
+        trgEnd = int(trgEnd)
+        trgStart = int(trgStart)
+        if trgEnd < trgStart:
+            trgStart, trgEnd = trgEnd, trgStart
+        if not myFormat:
+            data = [trgId, str(trgStart), str(trgEnd), srcId]
+        else:
+            org = os.path.basename(fname.split(".")[0])
+            fs = srcId.split("|")
+            srcId = fs[0]
+            srcSeq = fs[1]
+            pmcId = srcId.strip("pmcA")
+            data = [org, pmcId, srcSeq, trgId, str(trgStart), str(trgEnd), score]
+            
+        outfh.write("\t".join(data)+"\n")
+
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename  = args[0]
+asDir     = options.asDir
+outDir    = options.outDir
+trackLine = options.trackLine
+myFormat  = options.mysqlFormat
+
+#stderr.write("Reading gene list...\n")
+
+if asDir:
+    files = glob.glob(os.path.join(filename, '*.blast'))
+    # prepare dict infilename -> outfilename
+    if outDir:
+        inToOut = {}
+        for f in files:
+                outfn = os.path.basename(f).split(".")[0]
+                inToOut[f]=os.path.join(outDir, outfn+".bed")
+        for f in inToOut.values():
+            if os.path.exists(f):
+                stderr.write("info: Removing %s\n" % f)
+                os.remove(f)
+            fh = open(f, "w")
+            fh.write(trackLine+"\n")
+            fh.close()
+    # iterate over infiles
+    for f in files:
+        outfh = stdout
+        if outDir:
+            print "Writing to",inToOut[f]
+            outfh = open(inToOut[f], "a")
+        toBed(f, outfh, myFormat)
+else:
+    if not myFormat:
+        print trackLine
+    toBed(filename, stdout, myFormat)

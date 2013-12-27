@@ -1,0 +1,84 @@
+#!/usr/bin/env python
+
+# convert embl to fasta format
+# improved by joachim baran
+
+# emblExtractSeqs.sh EMBL_dat_file species_name_dmp tmpdir
+
+from sys import *
+from optparse import OptionParser
+import os.path
+import sets
+import re
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("Usage: %prog emblPath taxonIdListFile outputDir - extracts all sequences from all *.dat files in emblPath (if they reference a taxonId from taxonIdListFile) and outputs to fasta files in outputDir (one per taxonId). ")
+(options, args) = parser.parse_args()
+
+
+# == MAIN ==
+if len(args)==0:
+	print "Usage: %prog EMBL_dat_file species_name_dmp tmpdir"
+	exit(1)
+
+f = args[0]
+namedmp = args[1]
+tmpdir = args[2]
+
+stderr.write("Reading species ID dump-file %s\n" % namedmp)
+dmpfile = open(namedmp)
+
+speciesid = {} # species name to id mapping
+
+for line in dmpfile:
+
+	cols = line.split("|")
+	id = cols[0].strip()
+	name = cols[1].strip().lower()
+	speciesid[name] = id
+
+stderr.write("Reading file %s\n" % f)
+acc = None
+org = None
+refs = sets.Set()
+seqs = []
+lines = open(f)
+
+stderr.write("Parsing file %s\n" % f)
+for line in lines:
+
+	#AC   AB000001;
+	if line.startswith("AC"):
+		acc = line.split()[1].strip(";")
+
+	if line.startswith("//"):
+		if acc!=None and org!=None and len(refs)!=0:
+			for ref in refs:
+				longSeq = "".join(seqs)
+				regExp = re.search('\D+', longSeq)
+				longSeqFormatted = regExp.group(0).upper().strip(" \n")
+				orgFormatted = org.rstrip("\n").split("(")[0].strip().lower();
+				# print ">%s|%s|%s\n%s" % (ref, orgFormatted[0].strip().lower().replace(" ", "_"), acc, longSeqFormatted)
+				if orgFormatted in speciesid:
+					outputFile = open("%s/%s.fa" % (tmpdir,speciesid[orgFormatted]), "a");
+					outputFile.write(">%s|%s|%s\n%s\n" % (ref, speciesid[orgFormatted], acc, longSeqFormatted));
+					outputFile.close();
+		acc = None
+		org = None
+		refs = sets.Set()
+		seqs = []
+
+	#OS   Thanatephorus cucumeris
+	if line.startswith("OS"):
+		org = line.split("   ")[1]
+
+	#RX   PUBMED; 9339350.
+	if line.startswith("RX   PUBMED"):
+		pmid = line.split()[2].strip(".")
+		refs.add(pmid)
+
+        #     aattttaatg aagagtttgg ttgtagctgg cccattaatt taggcatgtg cacacctttc        60
+	if line.startswith("   "):
+		seqs.extend(line.split()) #[1:6])
+		seqs.extend("\n")
+

@@ -1,0 +1,23 @@
+#!/usr/bin/gawk -f
+
+BEGIN { 
+	if (ARGC==1) {
+	  print;
+	  print "Will extract seqname from fasta file and insert into all bed-"
+	  print "lines, that are read from stdin. "
+	  print "EXAMPLE:"
+	  print "cat bla.bed | bedinsertseqname test.fa"
+         exit 1
+        }
+	
+	 FS = " "
+	 getline < ARGV[1]
+	 seqname = substr ($1, 2) 
+	 ARGV[1]="-"
+
+      }
+
+/track/ { print; next;}
+/browser/ {print; next;}
+
+//	{ print seqname, $2, $3, $4, $5, $6, $7, $8, $9}

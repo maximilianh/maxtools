@@ -1,0 +1,57 @@
+#!/usr/bin/gawk -f
+#  a script that converts jaspar core to transfac format
+#  run it like this: jaspar2tf matrix_list.txt
+# ID format is: J for jaspar, V/P/I for the species group, $ as sep, then the ID of the factor
+# if there is no species annotated, defaults to vertebrate
+# max, 3/2006
+
+BEGIN {
+        print "VV  Jaspar Matrix DB, converted by jaspar2tf, max 03/06"
+        print "XX"
+        print "//"
+    }
+//  {  
+       #parse descriptions
+       split($0,f,";");
+       for (i=1; i <= length(f); i++) {
+           split(f[i], desc," ")
+           if (desc[1]=="type")
+               type = desc[2]
+           if (desc[1]=="medline")
+               pmid = substr(desc[2],2,length(desc[2])-2)
+           if (desc[1]=="sysgroup")
+               species = toupper(substr(desc[2], 2, 1))
+               if (species == "\"")
+                  species="V"
+       }
+
+       # print description
+       print "AC  "$1
+       print "ID  J"species "$" $3
+       print "DT  Jaspar"
+       print "DE  "$3,$4,$5
+       print "CC  Factor Class",$4
+       printf "CC  Information Content %.2f bits \n",$2
+       print "CC  Matrix from " type
+
+       # parse out matrix 
+       print "P0    A    C    G    T"
+       file = $1".pfm"
+       getline < file
+       split($0, A, " ")
+       getline < file
+       split($0, C, " ")
+       getline < file
+       split($0, G, " ")
+       getline < file
+       split($0, T, " ")
+
+       for (i=1; i <= length(A); i++)
+           printf "%02d %4d %4d %4d %4d \n", i, A[i], C[i], G[i], T[i]
+
+       print "XX"
+       print "RX  PUBMED: " pmid "."
+       print "//"
+
+ }
+

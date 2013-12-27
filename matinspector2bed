@@ -1,0 +1,14 @@
+#!/usr/bin/gawk -f
+
+BEGIN   {
+	  print "track name=\"GenomatixConverted\" description=\"Genomatix Converted Search Result\" useScore=1 visibility=2"
+	 FS="\t" 
+  }
+/Seq\. name/  { 
+       next
+ 	}
+
+// {   
+	print $1, $6-1, $7, $3, $10*1000, $8
+} 
+

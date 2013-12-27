@@ -1,0 +1,14 @@
+#!/bin/bash
+if [[ $1 == "-h" ]]; then
+    echo print out bed file with lengths added as last column
+    echo 'optional: filter out features with size < x'
+    echo 'example: cat test.bed | bedlen 200'
+    exit 1
+fi
+
+if [ "$#" -lt "1" ]; then
+    gawk '{OFS="\t"; print $1,$2,$3,$4, $3-$2}'
+else
+    gawk '{OFS="\t"; if ($3-$2>'$1') { print $1,$2,$3,$4, $3-$2; }}'
+fi
+

@@ -1,0 +1,4 @@
+#!/bin/sh
+# replace the current .hg.conf with one of the other ones
+rm -f ~/.hg.conf
+ln -s ~/.hg.conf.$1 ~/.hg.conf; 

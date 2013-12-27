@@ -1,0 +1,182 @@
+#!/bin/bash
+if [ "$1" = "-h" ]; then 
+    echo `basename $0`: convert given alignment into bin format and make vista plot for it, display it and clean up, will leave the pdf file in the current directory
+    echo usage: `basename $0` '<alignment as fa-file> <baseseq, def is first seq>'
+echo example: `basename $0` alignment.fa mouse
+echo parameters:
+echo    -w : window size, default 100
+echo    -m : minimum identity to be marked in red, def 75
+echo    -y : minimum y value to be plotted, def 50
+echo    -b : bases on page, def 10000
+echo    -t : tick distance, def 2000
+echo    -r : resolution, def max possible resol
+echo    -i : wIndows, default is value from -m
+echo '  -n : num lines per page, default 4'
+echo    -g : plot gaps longer than x, def 10
+echo    -a : file for annotations, vista format by default
+echo    -s : snp file, one position per line,drawn as ticks
+echo    -o : output to given pdf file, def is basename of fasta
+echo    -q : do not display pdf 
+echo '-e : basesequence for plot, def is first sequence in aln.'
+echo    -l : title for plot
+echo    -g : export as gff-file
+echo
+exit 1;
+
+fi
+
+# set default options
+win=100
+min=75
+miny=50
+bases=10000
+tickdist=2000
+resol=0
+windows=0
+numlines=0
+gaps=10
+annot=0
+snps=0
+pdf=0
+quiet=0
+baseseq=0
+
+fafile=$1
+title=$fafile
+shift
+
+# parse cmdline
+while getopts ":o:l:e:s:a:g:m:w:m:y:b:t:i:r:i:n:q" Option
+do
+  echo parsing option $Option
+  case $Option in
+    w ) win=$OPTARG ;;
+    m ) min=$OPTARG ;;
+    y ) miny=$OPTARG ;;
+    b ) bases=$OPTARG ;;
+    t ) tickdist=$OPTARG ;;
+    r ) resol=$OPTARG ;;
+    i ) windows=$OPTARG ;;
+    n ) numlines=$OPTARG ;;
+    g ) gaps=$OPTARG ;;
+    a ) annot=$OPTARG ;;
+    s ) snps=$OPTARG ;;
+    o ) pdf=$OPTARG ;;
+    q ) quiet=1 ;;
+    e ) baseseq=$OPTARG ;;
+    l ) title=$OPTARG ;;
+    g ) regionFile=$OPTARG ;;
+  esac
+done
+
+# import. parameter
+if [ $baseseq != 0 ]; then
+    echo BASE SPECIFIED!!!
+    base=$baseseq
+else
+    base=`cat $fafile | head -n1 | cut -d'>' -f2 | cut -d' ' -f1`
+fi
+
+# prep temp dir
+mkdir temp.vista
+trap "rm -rf temp.vista; exit" SIGHUP SIGINT SIGTERM
+cp $fafile temp.vista/
+cd temp.vista
+if [ $pdf == 0 ]; then
+    pdf=`basename $fafile .fa`.pdf
+fi
+
+# generate plotfile
+echo title is $title
+echo TITLE $title > plotfile
+echo
+echo OUTPUT ../$pdf  >> plotfile
+echo
+echo SEQUENCES $seqnames >> plotfile
+
+# extract and convert pairwise alignment 
+$LAGAN_DIR/utils/mextract.pl $fafile
+rm -f $fafile
+rm -f *.fa.pair
+
+for f1 in *.fa; do
+    for f2 in *.fa; do
+        if [ $f1 == $f2 ]; then
+            continue
+        fi
+        seqname=`cat $f1 | grep \> | cut -d'>' -f2 | cut -d' ' -f1`
+        if [ "$seqname" != "$base" ]; then
+            continue
+        fi
+        echo generating sequence pair with $f1 and $f2
+        echo | cat $f1 - $f2 > `basename $f1 .fa`-`basename $f2 .fa`.fa.pair
+    done
+done
+
+echo
+
+# generate plotfile sections for them
+for fafile in *.fa.pair; do
+    echo generating for $fafile
+    seqnames=`cat $fafile | grep \> | cut -d'>' -f2 | cut -d' ' -f1 | tr '\n' ' '`
+    echo with the two sequences $seqnames
+    binaln=`basename $fafile .pair`.bin
+    echo converting to binary format for vista...
+    $LAGAN_DIR/utils/mf2bin.pl $fafile -out $binaln
+    echo ALIGN $binaln BINARY >> plotfile
+    echo   SEQUENCES $seqnames >> plotfile
+    echo   REGIONS $min $win >> plotfile
+    echo   MIN $miny >> plotfile
+    echo END >> plotfile
+done
+
+# general plotting options
+echo >> plotfile
+
+if [ "$snps" != "0" ]; then
+    cp ../$snps .
+    echo SNPS_FILE `basename $snps` >> plotfile
+fi
+
+print $annot
+if [ "$annot" == "0" ]; then
+    touch test.ann
+    echo GENES test.ann  >> plotfile
+else
+    cp ../$annot .
+    echo GENES `basename $annot` >> plotfile
+fi
+
+if [ "$regionFile" != "" ]; then
+    echo REGION_FILE $regionFile >> plotfile
+fi
+
+echo >> plotfile
+echo LEGEND on >> plotfile
+echo COORDINATE `echo $seqnames | cut -d' ' -f1` >> plotfile
+echo PAPER letter >> plotfile
+echo BASES $bases >> plotfile
+echo TICK_DIST $tickdist >> plotfile
+echo AXIS_LABEL ALL >> plotfile
+echo COLOR utr 0 255 0 >> plotfile
+if [ $numlines != 0 ]; then 
+    echo NUM_PLOT_LINES $numlines >> plotfile
+fi
+if [ $resol != 0 ]; then
+    echo RESOLUTION $resol >> plotfile
+fi
+if [ $windows != 0 ]; then
+    echo WINDOW $windows >> plotfile
+fi
+if [ $gaps != 0 ]; then
+    echo GAPS $gaps >> plotfile
+fi
+
+RunVista plotfile
+
+cd ..
+#rm -rf temp.vista
+echo $quiet
+if [ "$quiet" == "0" ]; then
+    xpdf $pdf
+fi

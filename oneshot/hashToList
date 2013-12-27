@@ -1,0 +1,52 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] hashFile keyFile dir - write values from hash into individual files. keyFile has the format <filename>tab<key1,key2,key3...>. Example: 'key1-3.txt<tab>key1,key2,key3'.keyfile can be set to 'none'.") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-r", "--reverseHash", dest="reverseHash", action="store_true", help="reverse input hash before processing") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+hashFile, keyFile, baseDir = args
+reverseHash=options.reverseHash
+
+hash = tabfile.slurpdictlist(hashFile, reverse=not reverseHash)
+
+# read selected keys from dict file
+if keyFile.lower()!="none":
+    keys = tabfile.slurpdict(keyFile, doNotCheckLen=True, comments=True)
+# or from list file
+else:
+    keys = set(hash.keys())
+    keys = dict(zip(keys, keys))
+
+data = {}
+for filename, keys in keys.iteritems():
+    for key in keys.split(","):
+        elements = hash[key]
+        data.setdefault(filename, set()).update(elements)
+
+for key in data:
+    fname = key.replace(" ","_").replace("(","").replace(")","").replace("&","")
+    fullfname = os.path.join(baseDir, fname)
+    stderr.write("Writing to %s\n" % fullfname)
+    of = open(fullfname, "w")
+    elements = data[key]
+    of.write("\n".join(elements))
+    of.write("\n")
+    of.close()
+
+#stderr.write("Make sure that there are no old files in %s\n" % baseDir) 

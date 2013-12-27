@@ -1,0 +1,189 @@
+#!/usr/bin/python
+import os, glob, os.path, sys, math
+import tabfile
+from optparse import OptionParser
+
+PROGNAME = os.path.basename(sys.argv[0])
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""usage: %prog [options] inputA inputB Assembly OutDir - compare all BED files in input A (can be a directory or one filename) against all files in B and submit massive overlapSelect / featureBits with qsub. 
+
+Requires a file chrom.sizes in inDir with the sizes of the
+chromosomes. You can obtain this from UCSC with 
+mysql $(ASSEMBLY) -N --user=genome --host=genome-mysql.cse.ucsc.edu -A -e
+'SELECT * FROM chromInfo;' 
+
+Examples:
+%prog jimmy/ jimmy/ mm9 temp -d
+%prog test.bed bedFiles/ mm9 temp -d
+
+You will have concat the results in outDir with tsvConcat to load it into R.""") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--noSubmit", dest="doNotSubmit", action="store_true", help="do not submit but run locally") 
+parser.add_option("-s", "--skipExisting", dest="skipExisting", action="store_true", help="skip existing files") 
+parser.add_option("-n", "--dry-run", dest="dryRun", action="store_true", help="do not actually run anything, just print to stdout what would be run") 
+parser.add_option("", "--control", dest="controlFilename", action="store", metavar="DirOrFilename", help="a directory or single filename with a shuffled version for each aInput file") 
+parser.add_option("", "--chrom-sizes", dest="chromSizesFilename", action="store", help="specify the file with chromosome sizes")
+parser.add_option("", "--internalCall", dest="internalCall", action="store_true", help="Do not use this option. Used internally.")
+
+(options, args) = parser.parse_args()
+if len(args)==0:
+    parser.print_help()
+    sys.exit(0)
+
+def runProgram(cmdLine, useStdout=True):
+    # run command and return first word from output as a number
+    print cmdLine, 
+    sys.stdout.flush()
+    stdin, stdout, stderr = os.popen3(cmdLine)
+    if useStdout:
+        inFh = stdout
+    else:
+        inFh = stderr
+    line1 = inFh.readline().strip()
+    number1 = line1.split()[0]
+    print " =>", number1
+    return int(number1)
+
+def regions(a):
+    """ number of regions in a"""
+    return runProgram("wc -l %s" % a)
+
+def nuclCover(chromSizesFile, assembly, *files):
+    """ nucleotides that are covered by all files specified """
+    fileString = " ".join(files)
+    cmdLine = "featureBits %s %s -chromSize=%s" % (assembly, fileString, chromSizesFile)
+    return runProgram(cmdLine, useStdout=False)
+
+def overlapRegions(a,b):
+    """ get number of overlapped regions """
+    cmdLine = "overlapSelect %s %s stdout | wc -l" % (a,b)
+    return runProgram(cmdLine)
+
+def outputToFile(a,b,outData, headers, outfile):
+    outhandle = open(outfile, "w")
+    outData = [str(number) for number in outData]
+
+    # strip directory and extension from filenames, generate fieldnames
+    name1 = os.path.splitext(os.path.basename(a))[0]
+    name2 = os.path.splitext(os.path.basename(b))[0]
+    fields = [name1, name2]
+    fields.extend(outData)
+    
+    outLine = "\t".join(headers)
+    outhandle.write(outLine+"\n")
+
+    outLine = "\t".join(fields)
+    outhandle.write(outLine+"\n")
+    outhandle.close()
+
+def generateOutFilename(outDir, a,b):
+    baseA = os.path.splitext(os.path.basename(a))[0]
+    baseB = os.path.splitext(os.path.basename(b))[0]
+    outfile = baseA+"__"+baseB+".overlapData"
+    outfile = os.path.join(outDir, outfile)
+    return outfile
+
+def resolveToFilenames(fileSpec, asDict=False):
+    """ return list of files if Dir, or just file if not Dir 
+        return as hash of basename -> fullpath if asDict==True """
+    if os.path.isdir(fileSpec):
+        fileMask = os.path.join(fileSpec,"*.bed")
+        filenames = glob.glob(fileMask)
+    else:
+        filenames = [ fileSpec ]
+
+    if asDict:
+        for f in filenames:
+            fileDict[ os.path.basename(f) ] = f
+        filenames = fileDict
+
+    return filenames
+
+
+def recursiveCallMyself(args):
+    """ main entry point from command line:
+    collect filename information and call myself for each comparison """
+
+    aInput, bInput, assembly, outDir = args
+    print "Make sure that you run this on a clean output directory %s" % outDir
+
+    aFilenames = resolveToFilenames(aInput)
+    bFilenames = resolveToFilenames(bInput)
+
+    fileCombinations = []
+    for a in aFilenames:
+        for b in bFilenames:
+            if a<b:
+                fileCombinations.append( (a, b) )
+
+    for a,b in fileCombinations:
+        outFile = generateOutFilename(outDir, a,b)
+        if options.skipExisting:
+            if os.path.isfile(outFile):
+                print "%s already exists, skipping" % outFile
+                continue
+
+        cmdLine = programName+" --internalCall %s %s %s %s" % (a,b, assembly, outFile)
+        if options.chromSizesFilename:
+            cmdLine += " --chrom-sizes %s" % options.chromSizesFilename
+        if options.controlFilename:
+            cmdLine += " --controlFilename %s" % options.controlFilename
+        if options.doNotSubmit:
+            retCode = os.system(cmdLine) # execute myself
+        else:
+            cmdLine = "qsub -V -N %s -b y -cwd %s"% (PROGNAME,cmdLine)
+            if options.dryRun:
+                print cmdLine
+                retCode=0
+            else:
+                retCode = os.system(cmdLine) # execute myself
+
+        if retCode!=0:
+            print "error occured while submitting, stopping the submission"
+            sys.exit(1)
+
+def calledByMyself(args):
+    """ Entry point when called by itself, do one single comparison and exit"""
+    a, b, assembly, outFile = args
+    if options.chromSizesFilename!=None:
+        chromSizesFile = options.chromSizesFilename
+    else:
+        chromSizesFile = os.path.join(os.path.dirname(a), "chrom.sizes")
+
+    totalGenomeSize = sum([int(x) for x in tabfile.slurplist(chromSizesFile, field=1)])
+
+    regions_a = regions(a)
+    regions_b = regions(b)
+    overlapRegions_ab = overlapRegions(a, b)
+    overlapRegions_ba = overlapRegions(b, a)
+    maxOverRegionProp = max( float(overlapRegions_ab) / regions_b, float(overlapRegions_ba) / regions_a)
+
+    nuclCover_a  = nuclCover(chromSizesFile, assembly, a)
+    nuclCover_b  = nuclCover(chromSizesFile, assembly, b)
+    nuclCover_ab = nuclCover(chromSizesFile, assembly, a, b)
+    maxOverNuclProp  = max( float(nuclCover_ab) / nuclCover_a, float(nuclCover_ab) / nuclCover_b )
+
+    TP = nuclCover_ab
+    FP = nuclCover_b - nuclCover_ab
+    FN = nuclCover_a - nuclCover_ab
+    TN = totalGenomeSize - nuclCover_a - nuclCover_b + nuclCover_ab
+    CC_top = float(TP * TN - FN * FP)
+    CC_bottom = math.sqrt((TP+FN)*(TN+FP)*(TP+FP)*(TN+FN))
+    if CC_bottom > 0:
+        CC = CC_top / CC_bottom
+
+    headers = "#datasetA, datasetB, regionsA, regionsB, overlapRegionsAB, overlapRegionsBA, maxOverOverRegionProp, nuclCoverA, nuclCoverB, nuclCoverAB, maxOverNuclProp, correlation".split(", ")
+    outData = [regions_a, regions_b, overlapRegions_ab, overlapRegions_ba, maxOverRegionProp, nuclCover_a, nuclCover_b, nuclCover_ab, maxOverNuclProp, CC]
+    outputToFile (a, b, outData, headers, outFile)
+
+
+# ----- MAIN ----------
+programName   = sys.argv[0] # name of myself
+
+if options.internalCall:
+    calledByMyself(args)
+else:
+    recursiveCallMyself(args)

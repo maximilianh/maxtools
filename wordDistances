@@ -1,0 +1,120 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import sets
+import regionView
+import tabfile, operator
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wordFile word - output distances between words in selected blocks") 
+
+parser.add_option("-d", "--maxDist", dest="maxDist", action="store", help="maximum distance between two words to be considered", type="int", metavar="INT", default=99999999) 
+parser.add_option("-g", "--geneFile", dest="geneFile", action="store", help="only process genes in geneFile (one per line)", type="string", metavar="GENEFILE", default=None) 
+parser.add_option("-t", "--tsvFormat", dest="tsvFormat", action="store_true", help="output in tsv format for R", metavar="GENEFILE", default=None) 
+parser.add_option("-s", "--onlyStrands", dest="onlyStrands", action="store_true", help="output in tsv format for R, but print only the strands to the file", metavar="OUTFILE", default=None) 
+parser.add_option("", "--onlyShortest", dest="onlyShortest", action="store_true", help="only plot shortest distances", metavar="", default=None) 
+
+#parser.add_option("", "--annotatedGenes", dest="annotatedGenes", action="store", help="Instead of aniseed file: use this file as a list of annotated genes", type="string", metavar="COMMASEPLIST", default="") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+wordFile, word = args
+geneFile = options.geneFile
+tsvFormat = options.tsvFormat
+onlyStrands = options.onlyStrands
+onlyShortest=options.onlyShortest
+maxDist=options.maxDist
+
+if geneFile:
+    genes = set(tabfile.slurplist(geneFile))
+else: 
+    genes=None
+
+#minCount = options.minCount
+#winSize = options.winSize
+
+#notKeywords    = options.notKeyword.split(",")
+#print "targets", targetGenes
+#print "annotated", annotatedGenes
+flankType=1
+
+outf = "stdout"
+if outf=="stdout":
+    of = stdout
+else:
+    of = open(outf, "w")
+
+#stderr.write("Reading words...\n")
+f = open(wordFile, "r")
+
+validMotifs = wordParser.readMotifs(f)
+#if word not in [motif for (motif, desc) in validMotifs]:
+    #stderr.write("error: motif is not contained in wordFile\n")
+    #exit(1)
+
+#print "# 'len' is the number of completely conserved nucleotides in the consensus sequence"
+
+if onlyStrands:
+    headers = ["seq", "same Strand", "opposite Strand"]
+else:
+    headers = ["seq", "distance"]
+
+print "\t".join(headers)
+
+for b in wordParser.readBlocks(f):
+    # check if block is around annotated genes
+    flankGenes, intronic = b.getGenes(flankType, 9999999999999)
+    if genes:
+        bgGeneFound=False
+        for g in flankGenes:
+            if g in genes:
+                bgGeneFound=True
+        if not bgGeneFound:
+            continue
+
+    # check motif counts
+    if word in b.words:
+        wordOccs = b.words[word]
+        interWords = zip(wordOccs, wordOccs[1:])
+        data = []
+        strandData = {"same":0, "diff":0}
+        for iw in interWords:
+            w1, w2 = iw
+            dist = int(w2[0])-int(w1[0])+len(word)
+            if dist > maxDist:
+                continue
+            strands = w1[1]+w2[1]
+            if not tsvFormat and not onlyStrands:
+                data.append(str(dist)+"(%s)"%strands)
+            if tsvFormat:
+                data.append(dist)
+            if onlyStrands:
+                if strands == "++" or strands=="--":
+                    strandData["same"]+=1
+                elif strands == "+-" or strands=="-+":
+                    strandData["diff"]+=1
+                else:
+                    assert(False)
+                
+        if onlyShortest:
+            shortest = min(data)
+            print b.chrom+"\t"+str(shortest)
+        elif tsvFormat:
+            for dist in data:
+                print b.chrom+"\t"+str(dist)
+        elif onlyStrands:
+            data = [b.chrom, str(strandData["same"]), str(strandData["diff"]) ]
+            print "\t".join(data) 
+        else:
+            print b.chrom, "Len="+str(b.score), ",".join(data)
+
+    #of.write(str(b))
+    #of.write("\n\n") 
+

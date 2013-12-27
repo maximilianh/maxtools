@@ -1,0 +1,10 @@
+#!/bin/bash
+if [ $1 == "-h" ]; then
+    echo print out bed file with distance from last feature added as last column
+    echo 'optional: filter out features with size < x'
+    echo 'example: cat test.bed | beddist'
+    exit 1
+fi
+
+gawk '{OFS="\t"; print $0, $2-lastEnd; lastEnd=$3}'
+

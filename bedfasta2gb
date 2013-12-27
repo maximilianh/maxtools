@@ -1,0 +1,52 @@
+#!/usr/bin/python
+
+from bed import *
+from Fasta import *
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] \nconverts a fasta file with UCSC-style coordinates and a bed file to a genbank-file with features.") 
+
+parser.add_option("-f", "--fasta", dest="fasta", action="store", help="the fasta filename", type="string", metavar="'FASTA-FILENAME'", default="") 
+parser.add_option("-b", "--bed", dest="bed", action="store", help="the bed filename", type="string", metavar="'BED-FILENAME'", default="") 
+parser.add_option("-t", "--type", dest="type", action="store", help="the genbank-type for the features (e.g. misc_binding), default: %default", type="string", metavar="", default="misc_binding") 
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+# -----------------
+
+if (options.fasta=="" or options.bed==""):
+    print "wrong syntax, try -h for help"
+    exit(1)
+seqs = readFasta(options.fasta)
+feats = parseBedFile(open(options.bed, "r").readlines())
+
+seqid, seq = seqs.popitem()
+print "LOCUS      ",seqid
+seqstart = seq.getStart()
+nucl = seq.getNucl()
+print "COMMENT GENOMELOC",seq.getChrom()+":"+str(seqstart)+"-"+str(seq.getEnd())
+print "FEATURES             Location/Qualifiers"
+for f in feats:
+    type = options.type
+    space = [(16 - len(type)) * " "]
+    spacestr = "".join(space)
+    print "     "+options.type+spacestr+str(f.start-seqstart)+".."+str(f.end-seqstart)
+    print "                     /label="+f.name
+print "ORIGIN"
+print "1 ",nucl
+
+
+
+
+
+
+
+
+
+
+
+    

@@ -1,0 +1,117 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging
+import maxTables, tabfile
+import random
+from os.path import *
+import bed
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inBed outBed - choose random chromosomes and random start positions for features in bed file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-r", "--repeat", dest="repeat", action="store", type="int", help="treat outBed as a directory and repeat X times, write to <number>.bed") 
+parser.add_option("-u", "--keepUpstream", dest="keepUpstream", action="store_true", help="instead of shuffling start positions, randomly draw feature lengths and inter-feature distances") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+def shuffleBed_keepPositions(inBed, outBed):
+    tp = maxTables.TableParser(open(inBed), fileType="bed4")
+    features = list(tp.lines())
+    logging.debug("featureCount %d" % len(features))
+
+    newFeats = []
+
+    chroms = [f.chrom for f in features]
+    starts = [f.start for f in features]
+    lengths = [f.end-f.start for f in features]
+    names = [f.name for f in features]
+
+    random.shuffle(starts)
+    random.shuffle(lengths)
+    random.shuffle(names)
+    
+    for i in range(0, len(chroms)):
+        feat = [chroms[i], str(starts[i]), str(starts[i]+lengths[i]), names[i]]
+        newFeats.append(feat)
+
+    for feat in newFeats:
+        outBed.write("\t".join(feat))
+        outBed.write("\n")
+
+    return newFeats
+
+def shuffleBed_keepUpstreamLen(bedFile, outFile):
+    """ create temp file, shuffle Bed to temp file, return name of temp file
+    shuffling following Dave's rules:
+    - will keep all features on their chromosomes 
+    - will keep upstream region size
+    - will just permutate features with their upstream region sizes
+    
+    """
+    logging.debug("Shuffling %s to %s with Dave's process" % (bedFile, outFile.name))
+    bedsByChrom = bed.indexBedsChrom(bedFile)
+    # go over all chromosomes
+    for chrom, beds in bedsByChrom.iteritems():
+        bedSpacers = []
+        lastEnd = 0
+        # transform beds into len, spacer tuples
+        for b in beds[1:]:
+            length = b.end - b.start
+            spacerLen = b.start - lastEnd
+            bedSpacers.append((length, spacerLen, b.name))
+            lastEnd = b.end
+
+        random.shuffle(bedSpacers)
+
+        # recreate beds from shuffled len,spacer tuples
+        start = 0
+        for lenSpacerLen in bedSpacers[1:]:
+            bedLen, bedSpacer, name = lenSpacerLen
+
+            start += bedSpacer
+            end   =  start + bedLen
+            if start<0:
+                start = 0
+            data = [chrom, str(start), str(end), name]
+            outFile.write("\t".join(data)+"\n")
+            start = end
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+#chromSizesFilename, filename = args
+inBed = args[0]
+outBedFname = args[1]
+
+# read chromSizes
+
+# get chrom, start and end information in separate lists
+
+if options.repeat:
+    logging.debug("Creating %d files in %s" % (options.repeat, outBedFname))
+    outBedNames = [join(outBedFname, str(i)+".bed") for i in range(0, options.repeat)]
+else:
+    outBedNames = [outBedFname]
+
+# regenerate features
+for outBedFname in outBedNames:
+    # shuffle all three lists
+    outBed = maxTables.openFile(outBedFname, "w")
+    logging.info("Writing file %s" % outBedFname)
+    if options.keepUpstream:
+        shuffleBed_keepUpstreamLen(inBed, outBed)
+    else:
+        shuffleBed_keepPositions(inBed, outBed)
+

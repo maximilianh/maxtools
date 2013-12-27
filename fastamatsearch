@@ -1,0 +1,156 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+from math import log
+
+# readfasta
+# readmat
+# revcomp 
+# calcminmaxscore
+# calconervation
+# scoreseq
+# scanseq
+
+def readfasta(lines):
+  ## will read from lines
+  ## will return a list of n seqs
+  ## seq[n][0] is the seqname
+  ## seq[n][1] is the sequence
+  seqs = []
+  for line in lines:
+	  if line.startswith(">"):
+	    seqs.append([line.strip(">").split()[0], ""])
+	  else:
+            seqs[-1][1]+=line.replace(" ","").strip()
+  return seqs
+
+
+
+def revComp(seq):
+	table = { "a" : "t", "A" : "T", "t" : "a", "T" : "A", "c" : "g", "C":"G", "g":"c", "G":"C", "-":"-" , "N":"N", "n":"n"}
+	newseq = ""
+        for nucl in reversed(seq):
+           newseq += table[nucl]
+	return newseq
+
+
+def calcminmaxscore(mat, cons):
+	### calc minimum/maximum possible score for a matrix
+	### see match paper
+	maxscore = float(0)
+	minscore = float(0)
+	for pos in range(0, len(mat)):
+		probs = mat[pos]
+		IC = cons[pos]
+		maxscore+=max(probs.values())*IC
+		minscore+=min(probs.values())*IC
+	return (minscore, maxscore)
+		    
+def calcconservation(mat):
+	# calculates the Ci-vector as explained
+	# in Kel 03, a value in 0..100
+	# for every pos in the matrix that describes 
+	# the conservation of a position
+	# and is used to scale the pos-scores.
+	C = []
+	for probs in mat:
+		ics = [(p * log(4*p)) for p in probs.values()]	
+		C.append(float(sum(ics)))
+	return C
+
+def scoreSeq(seq, mat):
+	""" return score for a sequence of given length against a matrix of same """
+	""" length """
+	cons = calcconservation(mat)
+	(minscore, maxscore) = calcminmaxscore(mat, cons)
+	if not len(mat)==len(seq):
+		sys.stderr.write("matrix length != sequence length!!")
+		sys.stderr.write("seq was: "+seq)
+		exit(1)
+	current = 0.0
+	for pos in range(0, len(seq)):
+		nuc = seq[pos].lower()
+		probs = mat[pos]
+		IC = cons[pos]
+		current += probs[nuc]*IC
+	score = (current - minscore) / (maxscore - minscore)
+	# print current, minscore, maxscore, score
+	return score
+
+def scanSeq(seq, seqname, mat, matname, strand):
+  """ Scan a sequence for a weight matrix named matname """
+  gap = re.compile("-")
+  i = 0
+  while i < (len(seq)-len(mat)+1):
+	  ## skip if first char is gap
+	  if seq[i]=="-":
+		  i+=1
+		  continue
+	  subseq = seq[i:i+len(mat)]
+	  gaps = len(gap.findall(subseq))
+	  # if gaps are in subseq, extend end until we have enough non-gapps
+	  extend=0
+	  stop=False
+	  while gaps>0:
+		  extend+=1
+		  if i+len(mat)+extend+1>len(seq):
+			  stop=True
+			  break
+		  if seq[i+len(mat)+extend]!="-":
+			  gaps-=1
+	  if stop:
+		  break
+	  # and rebuild subsequence and remove all "-" 
+	  # print "extend is "+str(extend)
+	  if extend>0:
+		  #print subseq,
+		  subseq = seq[i:i+len(mat)+extend+1].replace("-","")
+		  #print "-> "+subseq
+          # ok, we have a sequence, let's score it against all matrices
+	  score = scoreSeq(subseq, mat)
+	  if score >= cutoff:
+		  if strand=="+":
+			  start = i
+			  end = i+len(mat)+extend+1
+		  else:
+			  end= len(seq)-i 
+			  start= len(seq)-i-len(mat)-extend-1
+		  print seqname, start, end, matname, strand, "%.3f" % score 
+	  i+=1
+# - MAIN - 
+
+if len(argv)==1:
+  print " Searches a multi-fasta file for one or many weight matrices."
+  print " The fasta-file will be read from stdin."
+  print " The weight matrix has to be in Transfac-format."
+  print " Will output results in bed-format to stdout."
+  print " Will only print a match if the score if higher than the cutoff."
+  print " Will search both strands."
+  print
+  print " syntax: "
+  print " "+argv[0]+" <matrixfilename> <cutoff>"
+  exit() 
+
+lines = sys.stdin.readlines()
+
+# read sequences
+seqs = readfasta(lines)
+del lines
+
+# read matrices
+lines = open(argv[1], "r").readlines()
+matrices = readmat(lines)
+del lines
+cutoff = float(argv[2])
+
+for parts in seqs:
+  seqname = parts[0]
+  seq = parts[1]
+  revseq = revComp(seq)
+  for matname, mat in matrices.iteritems():
+	  print matname
+	  scanSeq(seq, seqname, mat, matname, "+")
+	  scanSeq(revseq, seqname, mat, matname, "-")
+   

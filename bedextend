@@ -1,0 +1,31 @@
+#!/usr/bin/gawk -f
+
+BEGIN { 
+	if (ARGC==1 || ARGC>3) {
+	  print;
+	  print " Will modify features given as a bed-file to include flanking sequences."
+	  print " It will simply subtract the given number from the start field and add it"
+	  print " to the end-field."
+	  print ""
+	  print "SYNTAX:"
+	  print " bedextend <length of extension>" 
+	  print "EXAMPLE:"
+	  print " cat bla.bed | bedextend 10"
+         exit 1
+        }
+	
+	 offset = ARGV[1]
+	 ARGV[1]=""
+      }
+
+/track/ { print; next;}
+/browser/ {print; next;}
+/^#/ {print; next;}
+
+//	{ 
+	if ($2-offset < 0) {
+		print $1, 0, $3+offset, $4, $5,$6,$7,$8,$9;
+		}
+	else
+		print $1, $2-offset, $3+offset, $4, $5, $6, $7, $8, $9;
+       	}

@@ -1,0 +1,53 @@
+#!/bin/bash
+
+VERSION=${2-53}
+RELEASE="release-$VERSION/fasta"
+#RELEASE=${RELEASE}
+
+echo This script will download all repeatmasked toplevel files for all genomes or genes in ensembl 
+echo for version ${RELEASE}
+echo change this script if you want to change the version
+echo This scripts will run formatdb on them
+echo It will create one subdirectory per genome of the current dir
+echo It will delete the fasta files afterwards
+echo It will reformat fasta ids to "trans|gene"
+
+if [ "$1" != "genes" -a "$1" != "genomes" ]; then
+    echo
+    echo parameter error:
+    echo "  you have to specify at least one parameter:"
+    echo "  'genes' or 'genomes'"
+    echo " 'genes' will download all cdna fasta files"
+    echo " 'genomes' will download the topleve genome"
+    exit
+fi
+echo press enter to start 
+read
+
+echo Getting list of organisms
+wget ftp://ftp.ensembl.org/pub/${RELEASE}/ -O - -q | grep -o '[a-z]*_[a-z]*' | sort | uniq > orglist
+#less index.html | sed -e 's/<[^>]*>//g' | tr -s ' ' | cut -f7 -d' ' | sed -e 's/\///g' | grep -v fasta > orglist
+#rm index.html
+
+echo Downloading all repeatmasked ensembl genomes
+echo will then run formatdb on them
+echo and will delete the fasta files at the end
+for i in `cat orglist`; do
+    mkdir -p $i 
+    cd $i
+    ucOrg=`echo $i | perl -ane '{print ucfirst}'`
+    if [ $1 == "genomes" ]; then
+        rm *.fa;
+        wget ftp://ftp.ensembl.org/pub/${RELEASE}/$i/dna/$ucOrg.*_rm.toplevel.fa.gz -nv && gunzip -f *.gz && formatdb -i *.fa -p F 
+        #wget ftp://ftp.ensembl.org/pub/${RELEASE}/$i/dna/$ucOrg.*_rm.toplevel.fa.gz && gunzip *.gz && formatdb -i *.fa -p F && rm *.fa
+    fi
+    if [ $1 == "genes" ]; then
+        rm *.fa;
+        wget ftp://ftp.ensembl.org/pub/${RELEASE}/$i/cdna/$ucOrg.*.all.fa.gz -nv && gunzip -f *.gz && fastaIdReformat --inplace ensTrans *.fa && formatdb -i *.fa -p F && rm *.fa
+        #wget ftp://ftp.ensembl.org/pub/${RELEASE}/$i/cdna/$ucOrg.*.all.fa.gz && gunzip *.gz && formatdb -i *.fa -p F && rm *.fa
+    fi
+
+    cd ..
+done
+
+rm orglist

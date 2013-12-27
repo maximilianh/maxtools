@@ -1,0 +1,3 @@
+#!/bin/bash
+# convert ci1 mfa files from vista to maf format
+grep -v score | tr -d '' | sed -e 's/>C. intestinalis 1.0 /s ci1./' | sed -e 's/>C. savignyi Apr. 2003 /s cs1./'| tr -d '(' | tr -d ')' | tr ':' ' ' | gawk 'BEGIN {print "##maf version=1"; } /^s/ {if (NR!=1) print header " " seq; split($3, a,"-"); $3=a[1]-1; $5=$4; $4=(a[2]-1)-$3; $6="9999999"; header = $0;  seq=""; next} // {seq=seq $0}' | gawk '/s ci1/ {print "a"; print ; next} /^s cs1/ {print; print "\n"; next} // {print } END {print "\n";}' 

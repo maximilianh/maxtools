@@ -1,0 +1,77 @@
+#!/usr/bin/python
+
+import sys
+from optparse import OptionParser
+import hashlib, glob, os.path
+import gbparsy # import GBParsy module
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inDir/inFile outDir - parse out reference information from genbank records to two files: genbank<->author links and the author table") 
+
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1) inDir = args[0]
+outDir = args[1]
+
+# If you want to get a list of SeqRecord instances, use getBioData method instead of getRawData.
+#oGBParsy = gbparsy.gbparsy()
+#oGBParsy.parse(filename) # parse a GBF file which contains more than one GBF sequence data
+#lSeqData = oGBParsy.getRawData()
+   
+#headers = [""PMID", "title", "authors", "journal", "consortium", "medline", "remark", "Accession", "Index"]
+#print "\t".join(headers)
+
+if os.path.isdir(inDir):
+    filenames = glob.glob(os.path.join(inDir, "*.tsv"))
+else:
+    filenames = [inDir]
+
+nextAuthorId = 0
+
+for filename in filenames:
+    authorIds = {}
+    accessionAuthorIds = {}
+
+    basename = os.path.basename(filename)
+    sys.stderr.write("Parsing %s\n" % filename)
+    #for dSeqData in lSeqData: 
+        #acc= dSeqData["accession"]
+        #for ref in dSeqData["references"]:
+            #row = [ref["pubmed"], ref["title"], ref["authors"], ref["journal"], ref["consrtm"], ref["medline"], ref["remark"], str(ref["number"])]
+            ##string = "\t".join(row)
+            #authorId = hashlib.sha224(line).digest()
+            #if authorId not in authorCache:
+                #authorId[authorId] = string
+            #authorAccessions
+    for line in open(filename):
+        fields = line.strip().split("\t")
+
+        acc = fields[0]
+        authorString = "\t".join(fields[2:])
+
+        if authorString not in authorIds:
+            authorIds[authorString] = nextAuthorId
+            accessionAuthorId = nextAuthorId
+            nextAuthorId+=1
+        else:
+            accesionAuthorId=authorIds[authorString]
+
+        accessionAuthorIds[acc] = accessionAuthorId
+
+
+    sys.stderr.write("Writing to outfile files\n")
+    authorFile = open(os.path.join(outDir, basename+".authors"), "w")
+    for author, authorId in authorIds.iteritems():
+        authorFile.write(str(authorId)+"\t"+str(author)+"\n")
+        
+    authorLinkFile = open(os.path.join(outDir, basename+".authorAccs"), "w")
+    for acc, authorId in accessionAuthorIds.iteritems():
+        authorLinkFile.write(str(acc)+"\t"+str(authorId)+"\n")
+        

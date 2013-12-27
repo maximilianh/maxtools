@@ -1,0 +1,25 @@
+#!/usr/bin/python
+
+# tries to find genes that are on different strands and at a distance of less than x basepairs 
+# syntax: findBidir <bed-file> <distance in bp>
+import sys
+
+f = open(sys.argv[1],"r")
+maxdiff = int(sys.argv[2])
+
+lastchrom, laststart, lastend, lastname, laststrand = None,None,None,None,None
+for line in f:
+    (chrom, start, end, name, dummy, strand) = line.split()[0:6]
+    if lastchrom != None:
+        #teste si gene est a l'invers
+        # print si oui
+        diff = int(start) - int (lastend)
+        if lastname!=name and lastchrom==chrom and diff > 0 and diff < maxdiff and laststrand=="-" and strand=="+":
+            print lastline,
+            print line,
+            #print int(start) - int(lastend)
+
+    lastchrom, laststart, lastend, lastname, laststrand = chrom, start, end, name, strand
+    lastline = line
+
+

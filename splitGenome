@@ -1,0 +1,28 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+
+import bigBlat
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] db outdir - split UCSC genome into overlapping pieces, and chunk them into bigger jobs of small pieces, then output as bed into outdir, one bed per job") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+db, outDir = args
+
+bigBlat.outputGenomeSplits(db, outDir)

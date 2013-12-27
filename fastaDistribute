@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+import sys, os
+from optparse import OptionParser
+
+from maxbio import *
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filenames outDir - append fasta sequences to files named by a field in their id (split by |)") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-k", "--field", dest="field", action="store", type="int", help="field to use (one-based), default %default", default=2) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infiles = args[:-1]
+outDir = args[-1]
+fnfield = options.field-1
+
+if len(os.listdir(outDir))!=0:
+    sys.stderr.write("error: directory %s has to be empty\n" % outDir)
+    exit(1)
+
+for infile in infiles:
+    print "Processing %s..." % infile
+
+    fr = FastaReader(infile)
+    for (id, seq) in fr.parse():
+        if id==None or seq==None:
+            sys.stderr.write("warning: file %s is empty\n" % infile)
+            continue
+
+        fields = id.split("|")
+
+        if len(fields)<fnfield:
+            sys.stderr.write("warning: seq %s, not enough fields to extract filename, skipping\n")
+            continue
+
+        # keep only the other fields
+        copyFieldList = range(0, len(fields))
+        del copyFieldList[fnfield]
+        newIds = [fields[i] for i in copyFieldList]
+        newId = "|".join(newIds)
+
+        # write to filename
+        filename = fields[fnfield]
+        fh = open(os.path.join(outDir, filename+".fa"), "a")
+        outputFasta(newId, seq, fh)
+        fh.close()

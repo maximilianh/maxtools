@@ -1,0 +1,66 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - convert hash to arff for weka") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-r", "--removeAttributes", dest="removeAttributes", action="store", type="int", help="remove attributes with less than a certain number of instances") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def arffHeader(of, fname, title, possValues):
+    of.write( "%% based on %s\n" % fname)
+    of.write( "@RELATION %s\n"   % title)
+    for val in possValues:
+	of.write ("@ATTRIBUTE %s {0,1}\n" % val.replace(" ", "_"))
+    of.write("@DATA\n")
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+of = stdout
+
+# input
+stderr.write("Reading %s...\n" % filename)
+dict = tabfile.slurpdictset(filename)
+
+# index values
+possValSet = {}
+for key, values in dict.iteritems():
+    for val in values:
+	possValSet.setdefault(val, set()).add(key)
+
+# prune attributes
+delAttr= []
+if options.removeAttributes:
+    for attr, genes in possValSet.iteritems():
+	if len(genes) < options.removeAttributes:
+	    delAttr.append(attr)
+for a in delAttr:
+    del possValSet[a]
+	
+title = filename
+if "/" in title:
+    title = title.split("/")[1]
+
+arffHeader(of, filename, title.split(".")[0], possValSet)
+
+# output
+for key, values in dict.iteritems():
+    #of.write(key+",")
+    for possVal in possValSet:
+	if possVal in values:
+	    of.write("1,")
+	else:
+	    of.write("?,")
+    of.write("\n")
+ 

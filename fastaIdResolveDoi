@@ -1,0 +1,85 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import urllib2
+import binascii
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] typeOfChange filename - change fasta id to something else, typeOfChange can be one of: doiToPmid") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+class doiToPmidChanger:
+    def __init__(self):
+        self.cache={}
+
+    def convert(self, doi):
+        if doi in self.cache:
+            return self.cache[doi]
+
+        url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?term=%s&email=maximilianh@gmail.com" % doi
+        xml = urllib2.urlopen(url)
+        for l in xml:
+            if l.find("<Id>")!=-1:
+                # <Id>16027735</Id>
+                pmid = l.strip().replace("<Id>","").replace("</Id>", "")
+                # strip of part after first _!
+                self.cache[doi]=pmid
+                return pmid
+
+class b64doiToPmidChanger(doiToPmidChanger):
+    def __init__(self):
+        doiToPmidChanger.__init__(self)
+
+    def convert(self, doi):
+        doi = binascii.a2b_base64(doi)
+        pmid = doiToPmidChanger.convert(self, doi)
+        if pmid==None:
+            return "doi:"+doi
+        else:
+            return pmid
+
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[1]
+typeOfChange = args[0]
+
+if typeOfChange.lower()=="doitopmid":
+    seqIdChanger = doiToPmidChanger()
+elif typeOfChange.lower()=="b64doitopmid":
+    seqIdChanger = b64doiToPmidChanger()
+else:
+    stderr.write("type of change not recognized")
+    exit(1)
+
+if filename=="stdin":
+    f = stdin
+else:
+    f = open(filename, "r")
+
+for l in f:
+    if l.startswith(">"):
+        fs = l.strip(">").strip("\n").split()
+        seqid = fs[0]
+        seqParts = seqid.split("|")
+        # try to add part after |
+        ext = ""
+        ext = seqParts[1]
+        seqid = seqParts[0]
+        newId = str(seqIdChanger.convert(seqid))+"|"+ext
+        if newId==None:
+            newId="pmidNotFound:"+" ".join(fs)
+        print ">"+newId+" "+str(" ".join(fs[1:]))
+    else:
+        print l,
+

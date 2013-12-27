@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+import os
+from optparse import OptionParser
+
+APOLLODATA="/home/max/usr/apollo/data"
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] fasta1 fasta2 [bed1] [bed2]: start apollo and display blastn-synteny plot for given fasta files with annotations") 
+parser.add_option("-e", "--evalue", dest="evalue", action="store", help="min e-value for blastn [default: %default]", metavar="NUMBER", type="string",default="0.0001") 
+parser.add_option("-s", "--qsize", dest="qsize", action="store", help="real query size for blastn [default: %default]", metavar="NUMBER", default="130000000") 
+parser.add_option("-1", "--annot1", dest="annot1", action="append", help="annotations in bed format for sequence1 (can be specified several times)", type="string", metavar="BEDFILE") 
+parser.add_option("-2", "--annot2", dest="annot2", action="append", help="annotations in bed format for sequence2 (can be specified several times)", type="string", metavar="BEDFILE" ) 
+parser.add_option("", "--gff1", dest="gffannot1", action="append", help="annotations in gff format for sequence1 (can be specified several times)", type="string", metavar="BEDFILE") 
+parser.add_option("", "--gff2", dest="gffannot2", action="append", help="annotations in gff format for sequence2 (can be specified several times)", type="string", metavar="BEDFILE" ) 
+
+(options, args) = parser.parse_args()
+
+if len(args)==0:
+    parser.print_help()
+    exit() 
+# -----------------
+sys.stderr.write("running blast...\n")
+os.system("bl2seq -i "+args[0]+" -j "+args[1]+" -p blastn -D 1 -U T -Y "+options.qsize+" -e "+options.evalue+" > /tmp/bl2seq.out")
+
+target = APOLLODATA+"/HUMAN_CHR1_1_1Mb"
+sys.stderr.write("converting annotations, seq1...\n")
+os.system("cat "+args[0]+"| fasta2apollofa > "+target+".fa")
+seq1start=open(args[0],"r").readline().split()[1].split(":")[1].split("-")[0]
+os.system("echo -n > "+target+".gff")
+if options.annot1!=None:
+    for parts in options.annot1:
+        annot, feattype = (parts+":").split(":")
+        os.system("cat "+annot+" | bed2apollogff "+feattype+">> "+target+".gff")
+
+if options.gffannot1!=None:
+    for annot in options.gffannot1:
+        os.system("cat "+annot+" >> "+target+".gff")
+
+target = APOLLODATA+"/MOUSE_CHR4_150Mb_152Mb"
+sys.stderr.write("converting annotations, seq2...\n")
+os.system("cat "+args[1]+"| fasta2apollofa > "+target+".fa")
+seq2start=open(args[1],"r").readline().split()[1].split(":")[1].split("-")[0]
+print seq2start
+os.system("echo -n > "+target+".gff")
+
+if options.annot2!=None:
+    for annot in options.annot2:
+        annot, feattype = (parts+":").split(":")
+        os.system("cat "+annot+" | bed2apollogff "+feattype+">> "+target+".gff")
+
+if options.gffannot2!=None:
+    for annot in options.gffannot2:
+        os.system("cat "+annot+" >> "+target+".gff")
+
+sys.stderr.write("converting blast report to /tmp/synteny.gff...\n")
+os.system("""cat /tmp/bl2seq.out | awk 'BEGIN {OFS="\t";} /^#/ {next;} {print "dna1","dna-dna-align","similarity",$7+"""+seq1start+""",$8+"""+seq1start+""",$12,"1",".","dna2",$9+"""+seq2start+""",$10+"""+seq2start+"""}' > """+APOLLODATA+"/HUMAN-1-MOUSE-4.gff")
+
+os.system("apollo")
+

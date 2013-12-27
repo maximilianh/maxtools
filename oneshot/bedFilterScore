@@ -1,0 +1,14 @@
+#!/usr/bin/gawk -f
+#  only print those beds with a score higher than x
+#  example: cat test.bed | bedFilterScore 800
+BEGIN {
+    OFS="\t";      
+    min = ARGV[1];
+    ARGV[1]="";
+    ARGC=1;
+} 
+
+($5 >= min) { 
+        print $0
+} 
+

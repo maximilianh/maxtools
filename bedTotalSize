@@ -1,0 +1,28 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==2:
+	print " Will read bed-style features from stdin"
+	print " Will add all features-lengths together"
+	print ""
+        print " SYNTAX: "
+        print " totalSize "
+        exit() 
+
+
+
+line = sys.stdin.readline()
+sum = 0
+while line!="": 	
+    fields = line.split()
+    start = int(fields[1])
+    stop = int(fields[2])
+    sum += (stop-start)
+    line = sys.stdin.readline()
+
+print str(sum)
+

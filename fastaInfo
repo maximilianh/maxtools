@@ -1,0 +1,50 @@
+#!/usr/bin/python
+
+import random
+import sys
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] fastafiles : print out lengths of all sequences in all fasta files and gc content, also with totals") 
+#parser.add_option("-l", "--length", dest="length", action="store", help="cut out a part of length x of the randomly choosen sequence", type="int", metavar="NUMBER", default="0") 
+(options, args) = parser.parse_args()
+if len(args)==0:
+    parser.print_help()
+    sys.exit(1)
+# -----------------
+#length = options.length
+totalgc=0
+totallen=0
+nseq = 0
+for fn in args:
+    file = open(fn, "r")
+    length=0
+    gc=0
+    for l in file:
+        if l.startswith(">"):
+            if length!=0:
+                print name[1:].strip()+"\t"+str(length)+"\t"+str(gc)
+            length=0;
+            name=l
+            nseq+=1
+        else:
+            # get gc content
+            for c in l:
+                if c!="\n" and c!="\r" and c!=" " and c!="-":
+                    char = c.lower()
+                    totallen+=1
+                    if char == "c" or char=="g":
+                        gc+=1
+                    else:
+                        if char =="a" or char =="t" or char=="n":
+                            pass
+                        else:
+                            sys.stderr.write("unknown char in line:")
+                            pass
+            length+=len(l.strip())
+    print name[1:].strip()+"\t"+str(length)+"\t"+str(gc)
+    totalgc+=gc
+print "Note: TotalLength = %d" % totallen
+print "Note: AvgLength = %.2f" % (totallen / nseq)
+print ("Note: TotalGCContent = %.2f" % (float(totalgc) / float(totallen)))
+

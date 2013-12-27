@@ -1,0 +1,32 @@
+#!/bin/bash
+
+ARGS=6
+if [ $# -ne $ARGS ]
+then
+    echo usage: getFasta hg17 chr1 1 1000 + InformativeDescription
+    echo        last parameter is optional.
+    exit  1
+fi
+
+if [ $1 = "hg17" ] 
+then
+  dbdir=/heap/vert/hg17
+fi
+  
+
+seq=$2
+start=$3
+end=$4
+strand=$5
+
+twoBitToFa $dbdir/$seq.2bit -seq=$seq -start=$start -end=$end /tmp/getFasta.fa
+rcNote="revComp=False"
+if [ $strand = "-" ]
+then
+    faRc /tmp/getFasta.fa /tmp/getFasta.fa -keepName -keepCase
+    rcNote="revComp=True"
+
+fi
+
+echo \>${6-$db} range=$seq:$start-$end $rcNote 
+cat /tmp/getFasta.fa | grep -v ^\>

@@ -1,0 +1,63 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import bed
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - join bed features on names, create one huge feature that overlaps them, problems ocur when features are overlapping") 
+
+parser.add_option("-d", "--maxDist", dest="maxDist", action="store", type="int", help="maximum distance to closest 5' feature when creating clusters, default is %default", metavar="NUMBER", default=1000) 
+(options, args) = parser.parse_args()
+if args==[]: 
+    parser.print_help()
+    exit(1)
+maxDist = options.maxDist
+
+# ---------- FUNCTIONS ----------
+
+def indexBedsNameChrom(fname):
+    if fname=="stdin":
+        beds= bed.parseBedFile(sys.stdin)
+    else:
+        beds= bed.parseBedFile(open(fname,"r"))
+    idx = {}
+    for b in beds:
+        idx.setdefault(b.name, {}).setdefault(b.chrom, []).append(b)
+    return idx
+
+
+# ----------- MAIN --------------
+
+ifile = args[0]
+stderr.write("Indexing features by name...\n")
+bedHash = indexBedsNameChrom(ifile) # Hash bedname -> list of features
+stderr.write("Creating overlap features...\n")
+for name in bedHash:
+        chroms = bedHash[name]
+        for chrom in chroms:
+                features = chroms[chrom]
+                features.sort(key=lambda f: f.start) # sort fts by start pos
+                clusters = []
+                lastEnd = -1
+
+                for f in features:
+                        if lastEnd==-1 or (f.start - lastEnd) > maxDist: 
+                                clusters.append([])
+                        if f.start < lastEnd:
+                            f.start=lastEnd
+                        clusters[-1].append(f)
+                        lastEnd = f.end
+
+                for clustFts in clusters:
+                        if clustFts==[]:
+                                continue
+                        else:
+                                minStart = clustFts[0].start
+                                maxEnd   = clustFts[-1].end
+                                blockStarts = [ str(f.start - minStart) for f in clustFts]
+                                blockSizes = [ str(f.end - f.start) for f in clustFts]
+                                overlapFt = [chrom, str(minStart), str(maxEnd), name,str(len(clustFts)), "+", str(minStart), str(maxEnd), "0", str(len(clustFts)), ",".join(blockSizes), ",".join(blockStarts)]
+                                print "\t".join(overlapFt)
+
+

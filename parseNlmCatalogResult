@@ -1,0 +1,138 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, collections, gzip
+import xml.etree.ElementTree as etree
+from urllib2 import urlparse
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - convert NLM journal xml to tab sep table. \n You can get the XML from http://www.ncbi.nlm.nih.gov/nlmcatalog?term=currentlyindexed[All]") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+
+
+headers = "uniqueId,title,eIssn,pIssn,issn,medlineTA,majMeshList,publisher,author,country,urlList,servers"
+Rec = collections.namedtuple("NLMRec", headers)
+
+def recIter(tree):
+    for rec in tree.findall("NLMCatalogRecord"):
+        #serial = rec.find("Serial")
+        data = {}
+        data["uniqueId"] = rec.find("NlmUniqueID").text
+        data["title"]    = rec.find("TitleMain").find("Title").text
+        medlineTa  = rec.find("MedlineTA")
+        if medlineTa==None:
+            logging.debug("Skipping %s" % data)
+            continue
+
+        data["medlineTA"]= medlineTa.text
+
+        data["author"] = ""
+        authorList = rec.find("AuthorList")
+        if authorList!=None:
+            author = authorList.find("Author")
+            if author!=None:
+                collName = author.find("CollectiveName")
+                if collName!=None:
+                    data["author"] = collName.text.strip(",. ;").replace("[etc.]","").strip(",. ;")
+
+        pubInfo = rec.find("PublicationInfo")
+        data["publisher"] = ""
+        data["country"] = ""
+        if pubInfo != None:
+            publishers = pubInfo.findall("Publisher")
+            if publishers!=None:
+                pubDict = {}
+                for publisher in publishers:
+                    pubStr = publisher.text.strip(",. ;").replace("[etc.]","").strip(",. ;")
+                    pubDict[publisher.attrib.get("ImprintType")] = pubStr
+
+                if "Current" in pubDict:
+                    data["publisher"] = pubDict["Current"]
+                elif "Original" in pubDict:
+                    data["publisher"] = pubDict["Original"]
+                else:
+                    if len(pubDict)!=0:
+                        data["publisher"] = pubDict.values()[0]
+                    else:
+                        data["publisher"] = "unknown"
+
+                if data["publisher"].lower()=="the association":
+                    data["publisher"]=data["author"]
+            country = pubInfo.find("Country")
+            if country !=None:
+                data["country"] = country.text
+
+        eloc = rec.find("ELocationList")
+        urls = []
+        servers = []
+        if eloc!=None:
+            elocs = eloc.findall("ELocation")
+            for eloc in elocs:
+                eid = eloc.find("ELocationID")
+                if eid!=None and eid.attrib.get("EIdType", None)=="url":
+                    url = eid.text
+                    if "pmc" in url or "doi" in url:
+                        logging.debug("url is PMC or DOI")
+                    else:
+                        urls.append(eid.text)
+                        parts = urlparse.urlsplit(url)
+                        server = parts[1]
+                        servers.append(server)
+        data["urlList"] = "|".join(urls)
+        data["servers"] = "|".join(servers)
+
+        majMeshes = []
+        meshList = rec.find("MeshHeadingList")
+        if meshList!=None:
+            heads = meshList.findall("MeshHeading")
+            for head in heads:
+                desc = head.find("DescriptorName")
+                if desc.attrib.get("MajorTopicYN", None)=="Y":
+                    majMeshes.append(desc.text)
+        majMesh = "|".join(majMeshes)
+        data["majMeshList"] = majMesh
+                
+        issns = rec.findall("ISSN")
+        data["eIssn"] = ""
+        data["pIssn"] = ""
+        if issns!=None:
+            for issn in issns:
+                if issn.attrib.get("IssnType", None)=="Electronic":
+                    data["eIssn"]=issn.text
+                if issn.attrib.get("IssnType", None)=="Print":
+                    data["pIssn"]=issn.text
+
+        data["issn"] = ""
+        issnLink = rec.find("IssnLinking")
+        if issnLink!=None:
+            data["issn"]=issnLink.text
+        else:
+            data["issn"]=data["pIssn"]
+            
+        row = Rec(**data)
+        yield row
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+logging.info("reading infile")
+filename = args[0]
+data = gzip.open(filename).read()
+logging.info("parsing xml into tree")
+data = "<nlm>"+data+"</nlm>"
+tree = etree.fromstring(data)
+
+logging.info("parsing tree")
+print "\t".join(headers.split(","))
+for rec in recIter(tree):
+    print (u"\t".join(rec)).encode("utf8")

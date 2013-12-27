@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+
+import re
+import sys
+
+if len(sys.argv)==1:
+  print " Will extract only certain records from a transfac matrix file."
+  print " You can specify several regular expressions that will be tried to be matched"
+  print " against the ID-field (!!) of a transfac database. All matching records"
+  print " will be printed to stdout."
+  print " "
+  print " SYNTAX: "
+  print " cat matrix.mat | tffilterID \'.*FOX.*\' \'HNF3\' "
+  sys.exit() 
+
+def extractID(record):
+	""" will return the ID of a transfac record """
+	for line in record:
+		if line.startswith("ID "):
+			line = line[2:]
+			bf = line.strip()
+			return bf
+
+def readmats(lines):
+	""" returns a dict with the factor names (BF-line) as keys and the
+	the whole matrix description lines as the values """
+
+	mats = {}
+	startdb = False
+	record = []
+	for line in lines:
+		line = line.strip()
+		if line=="//":
+			if startdb==True:
+				id = extractID(record)			
+				mats[id]=record
+				record = []
+			startdb = True
+		# skip until first line with //
+		if not startdb:
+			continue
+		# read into list until we find //
+		record.append(line)	
+	return mats
+
+lines = sys.stdin.readlines()
+mats = readmats(lines)
+del lines
+
+# print all records that have a key that matches
+# one of the parameters
+for param in sys.argv[1:]:
+	pat = re.compile(param)
+	for bf, record in mats.iteritems():
+		if pat.search(bf)!=None:
+			for line in record:
+				print line

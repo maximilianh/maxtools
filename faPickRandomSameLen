@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, random
+import maxbio
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] faFile pickFaFile - for each seq in faFile, pick a random sub-sequence from pickFaFile with the same length and output to stdout") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-m", "--max", dest="max", action="store", type="int", help="don't read more than X sequences from any fa file") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+faFname, pickFaFname = args
+
+pickSeqs = []
+logging.info("Reading %s" % pickFaFname)
+i = 0
+for id, seq in maxbio.parseFasta(pickFaFname):
+    pickSeqs.append(seq)
+    i+=1
+    if i > options.max:
+        break
+pickSeq = "".join(pickSeqs)
+pickLen = len(pickSeq)
+
+logging.info("Reading %s" % faFname)
+i = 0
+for id, seq in maxbio.parseFasta(faFname):
+    print ">%s" % id
+    seqLen = len(seq)
+    pickStart = random.randint(0, pickLen-seqLen)
+    rndSeq    = pickSeq[pickStart:pickStart+seqLen]
+    print rndSeq
+    i += 1
+    if i > options.max:
+        break

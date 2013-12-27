@@ -1,0 +1,209 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, maxbio, tabfile, dist, operator, iupacSearch
+
+try:
+    import psyco
+except (ImportError, ):
+    pass
+else:
+    psyco.full()
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] hitFile foregroundFile - read a list of motifs with annotations (tab-set, first column are the motifs, last column is genes), group similar ones together, and output scores relative to foreground") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("", "--test", dest="test", action="store_true", help="run tests") 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-m", "--maxMotifs", dest="maxMotifs", action="store", help="process only the best x motifs from input file, default %default", type="int", default=1000) 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+if options.test:
+    import doctest
+    doctest.testmod()
+    exit(1)
+
+# ==== FUNCTIONs =====
+    
+def differentLetters(string1, string2):
+    """ return number of different letters between strings, 
+    comparing only the last word and only if both strings have
+    equal length and first word is the same.
+    Returns -1 if unsuccessful.
+    >>> differentLetters("hallo","htllo")
+    1
+    """
+
+    # cannot compare different lengths
+    if not (len(string1)==len(string2)):
+        return -1
+    # only compare 2nd word
+    if " " in string1 and " " in string2:
+        string1Prefix = string1.split(" ")[0]
+        string2Prefix = string2.split(" ")[0]
+        if string1Prefix!=string2Prefix:
+            return -1
+
+        string1 = string1.split(" ")[1]
+        string2 = string2.split(" ")[1]
+    # cannot compare multiple strings
+    if ":" in string1 or ":" in string2:
+        return -1
+        
+    diffCount=0
+    for pos, char1 in enumerate(string1):
+        char2 = string2[pos]
+        if char1!=char2:
+            diffCount+=1
+    return diffCount
+
+def parseHits(filename, maxCount=1000):
+    count=0
+    for l in open(filename):
+        l = l.strip()
+        if l.startswith("#") or len(l)==0:
+            continue
+        if l.startswith("allObjects"):
+            background = set(l.split()[1].split(","))
+        if l.startswith("foreground"):
+            foreground = set(l.split()[1].split(","))
+        count+=1
+        if count>maxCount:
+            continue
+        fields = l.split("\t")
+        motifs = fields[0]
+        genes = fields[-1]
+        genes = set(genes.split(","))
+        motifData[motifs]=genes
+
+    return motifData, foreground, background
+
+def clusterMotifs(motifData):
+    #maxbio.prettyPrintDict(motifData)
+    clusters = {}
+    count =0
+    for motifs1, genes1 in motifData.iteritems():
+        count+=1
+        if count%100==0:
+            logging.info("processed %d" % count)
+        logging.debug("motifs1: "+motifs1)
+
+        for motifs2, genes2 in motifData.iteritems():
+            logging.debug("motifs2: "+motifs2)
+            if motifs2<=motifs1:
+                logging.debug("cont, smaller")
+                continue
+            diffLetters = differentLetters(motifs1, motifs2)
+            if diffLetters==-1:
+                logging.debug( "cont, not compareable")
+                continue
+
+            if diffLetters<=1:
+                logging.debug("OK, adding genes")
+                clusters.setdefault(motifs1,[(motifs1, genes1)]).append((motifs2, genes2))
+            else:
+                logging.debug("Too different")
+    return clusters
+
+def removeSingleCenters(clusters):
+    clusterMemberMotifs = set()
+    for clusterCenter, clusterMembers in clusters.iteritems():
+        for motif, genes in clusterMembers:
+            clusterMemberMotifs.add(motif)
+
+    newClusters = {}
+    for clusterCenter, clusterMembers in clusters.iteritems():
+        # remove single centers that are already clustered somewhere else
+        if len(clusterMembers)==1 and cluster in clusterMemberMotifs:
+            logging.debug(clusterCenter+" is a single motif which has been clustered elsewhere, skipping")
+            continue
+        #print "\tCLUSTER of %d motifs similar to  %s" % (len(motifAnnots), cluster)
+        newClusters[clusterCenter]=clusterMembers
+    return newClusters
+
+def scoreClusters(clusters, background, foreground):
+    backgroundProb = float(len(foreground)) / float(len(background))
+    logging.info("Background probability is %f" % backgroundProb)
+    scoredClusters = []
+    for clusterCenter, clusterMemberInfo in clusters.iteritems():
+        data = [clusterCenter]
+        motifList=[]
+        geneSet=set()
+        for motif, genes in clusterMemberInfo:
+            motifList.append(motif)
+            geneSet.update(genes)
+        score = maxbio.calcBinomScore(background, foreground, genes, backgroundProb)
+        data.append(motifList)
+        data.append(score)
+        data.append(geneSet)
+        scoredClusters.append(data)
+    scoredClusters.sort(key=operator.itemgetter(2), reverse=True)
+    return scoredClusters
+    
+def makeConsensus(motifs):
+    consensus = []
+    for i in range(0, len(motifs[0])):
+        letters = set([m[i] for m in motifs])
+        if len(letters)>1:
+            letterString = list(letters)
+            letterString.sort()
+            letterString = "".join(letterString)
+            letterString = letterString.upper()
+            letter = iupacSearch.nuclToIupac[letterString]
+        else:
+            letter = letters.pop()
+        consensus.append(letter)
+    return "".join(consensus)
+
+def outputClusters(clusters, foreground, background):
+    #for clusterCenter, clusterMemberInfo in clusters.iteritems():
+        #data = [clusterCenter]
+        #motifList=[]
+        #geneSet=set()
+        #for motifs, genes in clusterMemberInfo:
+            #motifList.append(motifs)
+            #geneSet.update(genes)
+        #data.append(motifList)
+        #data.append(geneSet)
+    headers = ["centerMotif", "consensus", "allMotifs", "binomialScore", "genes"]
+    print "\t".join( headers)
+    for motifCenter, motifs, score, genes in clusters:
+        # use only 2nd part of motifname
+        motifStrings = motifs
+        if " " in motifStrings.pop():
+            motifStrings = [m.split(" ")[1] for m in motifStrings]
+
+        data = [ motifCenter, makeConsensus(motifs), ",".join(motifStrings), score, genes ]
+        print "\t".join(maxbio.allToString(data))
+
+    print "allObjects", ",".join(background)
+    print "foreground", ",".join(foreground)
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+hitFilename  = args[0]
+motifData = {}
+maxMotifs = options.maxMotifs
+#foregroundFilename = args[1]
+#ddforeground = set(tabfile.slurplist(foregroundFilename))
+
+motifData, foreground, background = parseHits(hitFilename, maxCount  = maxMotifs)
+logging.info("Read info on %d motifs" % len(motifData))
+logging.info("Read %d background genes" % len(background))
+logging.info("Read %d foreground genes" % len(foreground))
+
+
+clusters  = clusterMotifs(motifData)
+clusters  = removeSingleCenters(clusters)
+sortedClusters = scoreClusters(clusters, background, foreground)
+
+outputClusters(sortedClusters, foreground, background)

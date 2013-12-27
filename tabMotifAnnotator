@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging
+import wordParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] tabFile lineCount wordFile - annotate the first lineCount lines of a list of motif combinations with the name of the sequence names from wordFile where they occur within x bp") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-w", "--window", dest="window", action="store", type="int", help="all matches have to fall within a window of x bp within a conserved column, default %default", default=200) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+tabFilename, lineCount, wordFilename = args
+lineCount = int(lineCount)
+winSize = options.window
+
+motifDescDicts = {} # dict motif-string -> dict of motif counts
+motifNo = 0 # just a counter
+tabMotifs = set() # list of motifs, to check if wordfile is OK
+
+# parse motifs into dicts
+for l in open(tabFilename):
+    if l.startswith("#"):
+        continue
+    motifDesc = l.split("\t")[0]
+    #motifDescIndex[motifDesc] = motifNo
+    motifDict = wordParser.parseWords(motifDesc.split())
+    for m in motifDict:
+        tabMotifs.add(m)
+    if motifDesc in motifDescDicts:
+        stderr.write("error: duplicate motif combination %s in tabfile\n" % motifDesc)
+        exit(1)
+    motifDescDicts[motifDesc]=motifDict
+    motifNo+=1
+    if lineCount==motifNo:
+        break
+    
+# check motifs against word file
+inFile = open(wordFilename, "r")
+wordFileMotifs = wordParser.readMotifs(inFile)
+wordFileMotifs = [a for (a,b) in wordFileMotifs]
+
+if len(tabMotifs.intersection(wordFileMotifs))!=len(tabMotifs):
+    stderr.write("error: at least one motif in tabfile is not contained in wordFile\n")
+    #print "tabMotifs", tabMotifs
+    #print "wordMotifs", wordFileMotifs
+    #print tabMotifs.difference(wordFileMotifs)
+    exit(1)
+
+# scan word file and update dicts
+seqNames = [] # for output
+seqNameIndex = {} # dict seqname -> number
+i=0
+
+motifDescMatches = {}
+for b in wordParser.readBlocks(inFile):
+    logging.debug("column name: %s" % (b.chrom))
+    seqNames.append(b.chrom)
+    seqNameIndex[b.chrom]=i
+    for mDesc, mDict in motifDescDicts.iteritems():
+        matchFound=b.wordsFound(mDict, winSize)
+        logging.debug("words: %s, found: %s" % (mDict, str(matchFound)))
+        if matchFound:
+            motifDescMatches.setdefault(mDesc, []).append(b.chrom)
+    i+=1
+
+#print motifDescMatches
+#print seqNameIndex
+
+i = 0
+for l in open(tabFilename):
+    l=l.strip()
+    if l.startswith("##"):
+        print l
+        continue
+    if l.startswith("#"):
+        print l+"\t"+"\t".join(seqNames)
+        continue
+    logging.debug("line: %s" % l)
+    fs=l.split("\t")
+    if l.startswith("#"):
+        fs.extend(seqNames)
+    else:
+        columnNameCounts = [0]*len(seqNames)
+        motifDesc = fs[0]
+        for seqName in motifDescMatches.get(motifDesc, []):
+            logging.debug("seqName found: %s" % seqName)
+            columnNo = seqNameIndex[seqName]
+            logging.debug("columnNo %d" % columnNo)
+            columnNameCounts[columnNo]=1
+        fs.extend([str(x) for x in columnNameCounts])
+    print "\t".join(fs)
+    if i==motifNo:
+        break
+    i+=1
+
+
+

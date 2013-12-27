@@ -1,0 +1,3 @@
+#!/bin/bash
+/usr/local/apache/cgi-bin/biobase/transfac/9.4/match/bin/match /usr/local/apache/cgi-bin/biobase/transfac/9.4/data/matrix.dat $1 /tmp/match.out /usr/local/apache/cgi-bin/biobase/transfac/9.4/match/data/minFN_good94.prf 
+cat /tmp/match.out

@@ -1,0 +1,31 @@
+#!/usr/bin/python
+
+from Bio.Blast import NCBIStandalone
+import sys
+from sys import *
+from Bio.Align import AlignInfo
+
+blast_out = open(argv[1], 'r')
+b_parser = NCBIStandalone.BlastParser()
+b_iterator = NCBIStandalone.Iterator(blast_out, b_parser)
+
+while 1:
+    b_record = b_iterator.next()
+
+    if b_record is None:
+        break
+
+    for alignment in b_record.alignments:
+        for hsp in alignment.hsps:
+            #print '****Alignment****'
+            summary_align = AlignInfo.SummaryInfo(alignment)
+            #print 'length:', alignment.length
+            #print 'e value:', hsp.expect
+
+            print ">"+b_record.query
+            print hsp.query
+            #print hsp.match
+            print alignment.title
+            print hsp.sbjct
+            #print summary_align.dumb_consensus()
+    print

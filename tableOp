@@ -1,0 +1,56 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import re
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""usage: %prog [options] command filename - do things with tables. commands: makeUnique """) 
+
+#parser.add_option("-l", "--lessThan", dest="maxValues", action="store", help="remove keys with less than NUMBER values [default: %default]", type="int", metavar="NUMBER", default=None) 
+parser.add_option("-k", "--column", dest="column", action="store", help="work only on column X, zero based", type="int", metavar="X", default=0) 
+#parser.add_option("-h", "--notValue", dest="notValue", action="store", help="ignore all keys that contain a certain value", default=None) 
+#parser.add_option("-o", "--onlyValue", dest="onlyValue", action="store", help="only use keys that contain certain values", default=None) 
+#parser.add_option("-e", "--replaceValues", dest="replaceValues", action="store", help="if a key has a combination of values, replace them all by one single value (format: a,b,c,d=z) ", default=None) 
+parser.add_option("", "--removeAndValues", dest="removeAndValues", action="store", help="remove keys that are associated to both of any of two lists, comma sep., e.g. 'val1,val2'/'val3,val4' will remove all keys that are associated with (val1 or val2) and (val3 or val4)", default=None) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+command  = args[0].lower()
+filename  = args[1]
+column = options.column
+
+alreadySeen = set()
+lineNo = 0
+
+if filename=="stdin":
+    fh = stdin
+else:
+    fh = open(filename)
+
+for l in fh:
+    l = l.strip()
+    lineNo+=1
+
+    fs = l.split("\t")
+    field = fs[column]
+
+    if command=="makeunique":
+        if field in alreadySeen:
+            field=field+"_DUP_"+str(lineNo)
+        alreadySeen.add(field)
+
+    newFs = fs[:column]
+    newFs.append(field)
+    if len(fs)>column+1:
+        newFs.extend(fs[column+1:])
+
+    print "\t".join(newFs)

@@ -1,0 +1,28 @@
+#!/usr/bin/perl
+
+# bedAnnotateName <list-file> <bedfile>
+# read in <from>tab<to>-pairs from listfile and try to add <to> to all
+# beds that have <from> as name
+
+open (FILE, "$ARGV[0]") or die "cannot open patterns";
+%repl = {};
+while (<FILE>) {
+    ($key, $value) = split;
+    $repl{$key}=$value;
+    
+}
+close FILE;
+
+open (FILE, "$ARGV[1]") or die "cannot open bedfile";
+while (<FILE>) {
+    #if ( // ) {
+        ($chrom, $start, $end, $name, $rest) = split;
+        if (exists $repl{$name}) {
+            $name = $name . "_" . $repl{$name}; 
+        }
+        print join("\t", $chrom, $start, $end, $name)."\n";
+        #print join("\t", $chrom, $start, $end, $name, $rest)."\n";
+
+#}
+
+}

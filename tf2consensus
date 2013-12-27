@@ -1,0 +1,137 @@
+#!/usr/bin/python
+
+import PWM
+import bed, util
+import re
+from Fasta import *
+from MultiAlign2Block import *
+from sys import *
+from optparse import OptionParser
+from os import environ
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] Tries to convert transfac matrices to consensus sequences.") 
+
+parser.add_option("-t", "--matrixfile", dest="matrixfile", action="store", help="the name of the file matrix.dat from Transfac/Jaspar/Genomatix, the default value is taken from the environment variable TFMATPATH [default: %default]", type="string", metavar="PATH", default=environ["TFMATPATH"]) 
+
+parser.add_option("-s", "--minsites", dest="minsites", action="store", help="remove matrices that have been built from less than x sites [default: %default]", default="10", type="int", metavar="NUMBER") 
+
+parser.add_option("-c", "--cutoff", dest="cutoff", type="int", help="% of the sequences where a nucleotide has to be present to be part of the consensus, otherwise will print N, default %default", default="70")
+
+parser.add_option("-x", "--trim", dest="trim", help="strip off leading and trailing Ns", action="store_true", default=False)
+parser.add_option("", "--trimIupac", dest="trimIupac", help="strip off leading and trailing iupac characters", action="store_true", default=False)
+
+parser.add_option("-u", "--upper", dest="upper", help="percentage from which on a letter will be capitalized, default=%default", type="int", action="store", default=70)
+
+parser.add_option("-l", "--len", dest="len", help="print length of consensus", action="store_true", default=False)
+parser.add_option("-i", "--showIC", dest="showIC", help="print information content", action="store_true", default=False)
+parser.add_option("-r", "--revcomp", dest="revcomp", help="add reverse complement", action="store_true", default=True)
+parser.add_option("", "--compact", dest="compact", help="return motifs in format needed for mafScan, all uppercase, inverse order of columns", action="store_true", default=False)
+
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# -----------------
+matrixfile = options.matrixfile
+minsites = options.minsites
+cutoff = float(options.cutoff) / 100
+upperCutoff = float(options.upper) / 100
+compact = options.compact
+showIC = options.showIC
+
+
+sys.stderr.write("Parsing matrix file...\n")
+pwms = PWM.readMatrices(matrixfile)
+if len(pwms)==0:
+    sys.stderr.write("Could not parse matrix.dat-file from "+matrixfile+"\n")
+    exit(1)
+
+print "IUPAC-codes: "
+print 'ac=m ag=r at=w cg=s gt=k'
+
+# remove pwms that are assembled from less than MINSITE (def: 6) sites, if they have int-counts
+if minsites!=0:
+    count = 0
+    delmats = []
+    for id, pwm in pwms.iteritems(): 
+        if pwm.float:
+            continue
+        row1val = pwm.weights[0].values()
+        s = sum(row1val)
+        if s < minsites:
+            count += 1
+            delmats.append(id)
+    for m in delmats:
+        del pwms[m]
+    sys.stderr.write(" Removed %u matrices because they did not contain more than %u sites .\n" % (count, minsites))
+
+if compact:
+    print "# tf2consensus, inputfile=%s, minsites=%d, cutoff=%f, upperCutoff=%f " % (matrixfile, minsites, cutoff, upperCutoff)
+# calc consensus
+for id, pwm in pwms.iteritems():
+    counts = pwm.weights
+    pwm.prepareScoring()
+    consensus = []
+    for v in counts:
+      nSites = sum(v.values())
+      # count -> freq
+      added = False
+      # check freq of single letter
+      for nucl,count in v.iteritems():
+            freq=float(count/nSites)
+            if freq >= cutoff:
+                if freq >= cutoff:
+                    nucl=nucl.upper()
+                consensus.append(nucl)
+                added = True
+                break
+      # check di-nucl freqs
+      if not added:
+          for nucls, iupac in [("ac", "m"), ("ag", "r"), ("at", "w"), ("cg", "s"), ("gt", "k")]:
+              total = 0.0
+              for nucl in nucls:
+                #print v
+                total+=float(v[nucl]/nSites)
+              if total>upperCutoff:
+                  consensus.append(iupac)
+                  added=True
+
+      if not added:
+          if upperCutoff==0:
+              consensus.append("N")
+          else:
+              consensus.append("n")
+    consStr = "".join(consensus)
+    if options.trim:
+        consStr = consStr.strip("n").strip("N")
+    if options.trimIupac:
+        consStr = consStr.strip("mrwskn")
+
+        
+    # output
+    data = []
+    if options.len: 
+         data.append(id)
+         data.append(consStr)
+         data.append(str(len(consStr)))
+    elif compact:
+        consStr = consStr.upper()
+        data.append(consStr)
+        data.append(id)
+    elif options.revcomp:
+        data.append(id)
+        data.append(consStr)
+        data.append(util.revComp(consStr))
+    else:
+        data.append(id)
+        data.append(consStr)
+
+    if showIC:
+        data.append(str(sum(pwm.IC)))
+    print "\t".join(data)
+
+
+
+    

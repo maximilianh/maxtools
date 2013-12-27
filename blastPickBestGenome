@@ -1,0 +1,86 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filenames : given blast matches from several genomes, for every sequence, pick the genome that has the highest total sum of scores and print it") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-p", "--psl", dest="psl", action="store_true", help="alignments are in psl format, not noative blast") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def myBlastParse(fname):
+    """ returns a dict: seqid -> list of (chrom, score, evalue) """
+    result={}
+    parseNow=False
+    for l in open(fname, "r"):
+        if l.startswith("Query="):
+            seqid = l.split("=")[1].strip().split(" ")[0]
+            continue
+        if l.startswith("Sequences producing significant alignments:"):
+            parseNow=True
+            continue
+        if l.startswith(">"):
+            parseNow=False
+            continue
+
+        if parseNow:
+            if len(l.strip())!=0:
+                fs = l.split()
+                chrom, score, evalue = fs
+                if evalue.startswith("e"):
+                    evalue = "1"+evalue
+                result.setdefault(seqid,[]).append([chrom, int(score), float(evalue)])
+
+    return result
+
+def myPslParse(fname):
+    """ returns a dict: seqid -> list of (chrom, score) """
+    result = {}
+    for l in open(fname, "r"):
+        fs = l.split()
+        score = fs[0]
+        chrom = fs[13]
+        seqid = fs[9]
+        result.setdefault(seqid,[]).append([chrom, int(score)])
+    return result
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filenames = args
+
+matches = {}
+
+for f in filenames:
+    stem, ext = os.path.splitext(os.path.basename(f))
+    stderr.write("reading %s\n" % stem)
+    if not options.psl:
+        blastMatches = myBlastParse(f)
+    else:
+        blastMatches = myPslParse(f)
+    matches[stem]=blastMatches
+
+allSeqs = set()
+for key,val in matches.iteritems():
+    allSeqs = allSeqs.union(set(val))
+    stderr.write("Matches on %s: %d\n" % (key, len(allSeqs)))
+
+stderr.write("Total number of alignable sequences: %d\n" % len(allSeqs))
+
+for seq in allSeqs:
+    seqScores = []
+    for org in matches:
+        orgmatches = matches[org].get(seq, None)
+        if orgmatches !=None:
+            scores = [data[1] for data in orgmatches]
+            seqScores.append( (org, sum(scores)))
+    seqScores.sort( key= lambda (x,y): y, reverse=True)
+    print "\t".join([seq, str(seqScores[0][0]), str(seqScores[0][1])])

@@ -1,0 +1,149 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, codecs
+import urllib2
+from lxml.cssselect import CSSSelector
+from lxml.html import parse
+from lxml import etree
+import util
+import os, time
+import urlparse
+import namedtuple
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename") 
+
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+
+def generatePath(baseDir, filename):
+    """ generate a two-level directory path for filename in baseDir, e.g. test.pdf will mkdir $(baseDir)/b1/74/ and return $(basedir)/b1/74/test.pdf"""
+    hashVal = hex(hash(filename) % 2**16)
+    hashVal = hashVal.split("x")[1]
+    dir1 = hashVal[:2]
+    dir2 = hashVal[2:]
+    basedir = os.path.join(baseDir, dir1, dir2)
+    try:
+        os.makedirs(basedir)
+    except OSError, ex:
+        if ex.errno==17:
+            pass
+        else:
+            raise
+    return os.path.join(basedir, filename)
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+MetaInfo = namedtuple.namedtuple("MetaInfoRec", "id, source, journal, issn, year, articleType, articleSection, authors, title, abstract, vol, issue, page, pmid, pmcId, doi, downloadDate, metaInfoFile, fulltextFile, suppFiles, origSuppFilenames")
+emptyMeta = MetaInfo(*21*[""])
+
+class GeneticsDownloader:
+    def __init__(self, filePath, indexFilename, baseUrl="http://www.genetics.org" ):
+        self.indexFh = codecs.open( indexFilename, "w", "utf-8" )
+        self.baseUrl = baseUrl
+        self.filePath = filePath
+
+    def _downloadGeneticsIssue(self, year, issueUrl):
+        print "Downloading issue %s" % str(issueUrl)
+
+        # extract nodes
+        tree = parse(issueUrl).getroot()
+        nodes = [node for node in tree.xpath("/html/body/div[1]/div/div/form/h2 | /html/body/div[1]/div/div/form/div/p/label | /html/body/div[1]/div/div/form/div/p/input |  /html/body/div[1]/div/div/form/div/p/br | /html/body/div[1]/div/div/form/div/p/nobr/a | /html/body/div[1]/div/div/form/p |  /html/body/div[1]/div/div/form/hr | /html/body/div[1]/div/div/form/div") if node.text!=None or node.tail!=None or node.tag=="hr" or node.tag=="div"]
+
+        # parse into list
+        tocData = []
+        rec = []
+        authors = ""
+        links = {}
+        for n in nodes:
+            #print (n.tag, n.text, n.tail)
+            if n.tag=="h2":
+                section=n.text.strip()
+            if n.tag=="label":
+                title=n.text_content().strip()
+            if n.tag=="input":
+                authors=n.tail.strip()
+            if n.tag=="br" and authors=="":
+                title = n.tail
+            if n.tag=="a":
+                fileType = n.text.strip("[]").split(" ")[0].lower()
+                # can be abstract full or pdf
+                url = n.attrib["href"]
+                if fileType=="PDF":
+                    url = url+".pdf" # this fix is needed
+                links[fileType]=url
+            if (n.tag=="div" or n.tag=="hr") and authors!="":
+                rec = [section, authors, title, links]
+                title=""
+                authors=""
+                links = {}
+                tocData.append(rec)
+        #rec = [section, authors, title, links]
+        #tocData.append(rec)
+
+        for article in tocData:
+            section, title, authors, links = article
+
+            # prefer html to pdf
+            if "full" in links:
+                url = links["full"]
+                outExt = ".html"
+            else:
+                url = links["pdf"]
+                outExt = ".pdf"
+#
+            vol, issue, page = url.replace(".pdf","").split("/")[-3:]
+            id = "genetics-%s-%s-%s" % (vol, issue, page)
+            filestem = generatePath(self.filePath, id)
+            metaInfo = emptyMeta._asdict()
+            metaInfo["id"]=id
+            metaInfo["source"]="genetics"
+            metaInfo["journal"]="Genetics"
+            metaInfo["year"]=year
+            metaInfo["articleSection"]=section
+            metaInfo["authors"]=authors
+            metaInfo["title"]=title
+            metaInfo["vol"]=vol
+            metaInfo["issue"]=issue
+            metaInfo["page"]=page
+            metaInfo["downloadDate"]=time.asctime()
+            metaInfoTuple = MetaInfo(**metaInfo)
+            metaInfoTuple = [unicode(x) for x in metaInfoTuple]
+            self.indexFh.write("\t".join(metaInfoTuple)+"\n")
+
+        # code to download html and pdf and supp Data goes here
+
+    def _getGeneticsIssueUrls(self, year):
+        print "Getting volume from year %s" % str(year)
+        url = "%s/contents-by-date.%s.dtl" % (self.baseUrl, str(year))
+        tree = parse(url).getroot()
+        links  = tree.cssselect("html>body>div>div>ul>li>a")
+
+        urls = []
+        for link in links:
+            urls.append(link.attrib["href"])
+        return urls
+
+    def downloadGenetics(self, startYear, endYear):
+        for year in range(startYear, endYear):
+            stdout.flush()
+            issueUrls = self._getGeneticsIssueUrls(year)
+            stdout.flush()
+            for issueUrl in issueUrls:
+                issueUrl = urlparse.urljoin(self.baseUrl, issueUrl)
+                self._downloadGeneticsIssue(year, issueUrl)
+
+gd = GeneticsDownloader("raw", "raw/genetics.tab")
+gd.downloadGenetics(2004, 2005)

@@ -1,0 +1,82 @@
+#!/usr/bin/python
+from sys import *
+from optparse import OptionParser
+from bed import *
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] bedfile: chain together two features (bed5-format) if they are closer than DIFF") 
+
+parser.add_option("-n", "--sameName", dest="sameName", action="store_true", help="only chain beds with the same name") 
+parser.add_option("-d", "--diff", dest="diff", action="store", help="distance allowed between two features, default=%default", default=50) 
+parser.add_option("-v", "--invert", dest="invert", action="store_true", help="invert output, print only features that could NOT be chained") 
+parser.add_option("-t", "--table", dest="table", action="store_true", help="output as a table: bedName<tab>chainNumber") 
+parser.add_option("-m", "--minCount", dest="minCount", action="store", type="int", help="only keep chain if it contains more than x features, default %default", default=0) 
+parser.add_option("-x", "--maxCount", dest="maxCount", action="store", type="int", help="only keep chain if it contains not more than x features, default %default", default=99999999) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def printFeature(chainNo, bed, minCount, maxCount, invert, asTable):
+    if invert:
+        return
+
+    if bed.score>minCount and bed.score<maxCount:
+        if asTable:
+            names = bed.name.split(",")
+            for name in names:
+                print name+"\t"+str(chainNo)
+        else:
+            print bed
+        return chainNo+1
+    else:
+        return chainNo
+
+def chainBed(beds, maxDiff, minCount, maxCount, invert, asTable, oneName=False):
+    lastbed           = beds[0]
+    lastbed.score     = 0
+    chainNo = 0
+
+    for b in beds[1:]:
+        diff = b.start - lastbed.end
+        if diff < maxDiff and b.chrom==lastbed.chrom:
+            lastbed.end = b.end
+            lastbed.score += 1
+            if oneName:
+                lastbed.name  = b.name
+            else:
+                lastbed.name  += ","+b.name
+        else:
+            if invert:
+                printFeature(chainNo, b, minCount, maxCount, False, asTable)
+            else:
+                chainNo = printFeature(chainNo, lastbed, minCount, maxCount, invert, asTable)
+                lastbed = b
+                lastbed.score=0
+    printFeature(chainNo, lastbed, minCount, maxCount, invert, asTable)
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+diff=int(options.diff)
+sameName = options.sameName
+#onlyChained = options.onlyChained
+minCount = options.minCount
+maxCount = options.maxCount
+asTable = options.table
+invert = options.invert
+
+bedfilename = args[0]
+#sortBedFile(bedfilename)
+
+logging.info("Chaining features closer than %d basepairs" % diff)
+
+if sameName:
+    bedByName = indexBedsName(bedfilename)
+    for beds in bedByName.values():
+        chainBed(beds, diff, minCount, maxCount, invert, asTable, True)
+else:
+    beds = parseBedFilename(bedfilename)
+    chainBed(beds, diff, minCount, maxCount, invert, asTable)
+

@@ -1,0 +1,56 @@
+#!/usr/bin/python
+
+import random
+import sys
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] length == Generate random sequence with given GC-content") 
+parser.add_option("-g", "--gccontent", dest="gccontent", action="store", help="the cg content as a value between 0 and 100", type="int", metavar="PERCENT", default="50") 
+parser.add_option("-r", "--repeat", dest="repeat", action="store", help="repeat x times", type="int", metavar="NUMBER", default="1") 
+parser.add_option("-p", "--percentId", dest="percentId", action="store", help="generate an alignment for the random sequence with given percent ID", type="int", metavar="PERCENTAGE", default=None) 
+parser.add_option("-l", "--lambdad", dest="lambdad", action="store_true", help="use LENGTH as a lambda. Changes the interpretation of the LENGTH parameter. Do not use a fixed length, but generate length according to exponential distribution with the given lambda") 
+parser.add_option("", "--contemplate", dest="contemplate", action="store_true", help="prefix sequences with a g") 
+
+# exp(125*-0.0184 + 5)
+(options, args) = parser.parse_args()
+if len(args)==0:
+    parser.print_help()
+    sys.exit(1)
+# -----------------
+gc = options.gccontent
+at = 100 - gc
+lengthMean = int(args[0])
+
+letters = ["a"] * (at/2) + ["c"] * (gc/2) + ["g"] * (gc/2) + ["t"] * (at/2)
+
+for j in xrange(0,options.repeat):
+    if options.lambdad:
+        length = int(random.expovariate(1.00/float(lengthMean)))
+    else:
+        length = int(lengthMean)
+
+    if length==0:
+        continue
+
+    seq = []
+    for i in xrange(0,length):
+        seq.append(random.choice(letters))
+
+    if options.contemplate:
+        seq.insert(0, "g")
+
+    print ">randomseq"+str(j)+"-GC"+str(gc)
+    print "".join(seq)
+
+    if options.percentId:
+        seq2 = []
+        for i in xrange(0,length):
+            randNo = random.randint(0,100)
+            if randNo < options.percentId:
+                seq2.append(seq[i])
+            else:
+                seq2.append(random.choice(letters))
+        print ">randomseq"+str(j)+"-aln-GC"+str(gc)
+        print "".join(seq2)
+

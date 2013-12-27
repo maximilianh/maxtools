@@ -1,0 +1,1050 @@
+#!/usr/bin/env python 
+
+from optparse import OptionParser
+import tabfile, bed, encode
+from encode import *
+
+import logging, sys, os, tempfile, math, os.path, random
+
+try:
+    import scipy.stats
+    import numpy as np
+    from numpy.testing import assert_, assert_approx_equal
+    from scipy.stats import hypergeom
+    sciPyLoaded=True
+except:
+    sciPyLoaded=False
+
+import warnings
+warnings.filterwarnings("ignore")
+
+# for fisher_exact
+
+# for encode statistics scripts
+verbose=0
+output = sys.stderr
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] chromSizes.tab bedFile1 bedFile2a bedFile2b bedFile2c ... - output significance of overlap of BedFile1 against all bedFiles2") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-n", "--gscNumSamples", dest="gscNumSamples", action="store", type="int", help="for GSC: how many samplings to run, default 20 (too low, increase this to 100!)", default=20) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+    verbose=1
+else:
+    logging.basicConfig(level=logging.INFO)
+    verbose=1
+
+# ==== FUNCTIONs =====
+def runProgram(cmdLine, useStdout=True):
+    logging.debug(cmdLine)
+    ret = os.system(cmdLine)
+    logging.debug("Running "+cmdLine)
+    if ret!=0:
+        logging.error("Could not run %s")
+        sys.exit(1)
+
+def runProgramGetNumber(cmdLine, useStdout=True):
+    # run command and return first word from output as a number
+    logging.debug(cmdLine)
+    sys.stdout.flush()
+    stdin, stdout, stderr = os.popen3(cmdLine)
+    if useStdout:
+        inFh = stdout
+    else:
+        inFh = stderr
+    line1 = inFh.readline().strip()
+    #logging.debug("Got line "+line1)
+    number1 = line1.split()[0]
+    logging.debug("Got number "+number1)
+    try:
+        number1 = int(number1)
+    except:
+        logging.error("Could not convert output from %s to integer" % cmdLine)
+        logging.error("Output was: %s" % line1)
+    return number1
+
+def overlapRegions(a,b):
+    """ get number of overlapped regions of file b"""
+    cmdLine = "overlapSelect %s %s stdout | wc -l" % (a,b)
+    return runProgramGetNumber(cmdLine)
+
+def iterItemsExcept(dict, exceptKey):
+    """ return key, val pairs, except for exceptKey """
+    for key, val in dict.iteritems():
+        if key!=exceptKey:
+            yield key, val
+
+def lineCount(filename):
+    return len(open(filename).readlines())
+
+# backport from scipy 0.9.0
+# Copyright (c) 2008-2010, David Simcha
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#       * Redistributions of source code must retain the above copyright
+#        notice, this list of conditions and the following disclaimer.
+#
+#       * Redistributions in binary form must reproduce the above copyright
+#        notice, this list of conditions and the following disclaimer in the
+#        documentation and/or other materials provided with the distribution.
+#
+#       * Neither the name of the authors nor the
+#        names of its contributors may be used to endorse or promote products
+#        derived from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED ''AS IS'' AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES
+# LOSS OF USE, DATA, OR PROFITS OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+def fisher_exact(c) :
+    """Performs a Fisher exact test on a 2x2 contingency table.
+
+    Parameters
+    ----------
+    c : array_like of ints
+        A 2x2 contingency table.
+
+    Returns
+    -------
+    oddsratio : float
+        This is prior odds ratio and not a posterior estimate.
+    p-value : float
+        P-value for 2-sided hypothesis of independence.
+
+
+    Examples
+    --------
+    >>> fisher_exact([[100, 2], [1000, 5]])
+    (0.25, 0.13007593634330314)
+    """
+
+    c = np.asarray(c, dtype=np.int64)  # int32 is not enough for the algorithm
+    odssratio = c[0,0] * c[1,1] / float(c[1,0] * c[0,1]) \
+                            if (c[1,0] > 0 and c[0,1] > 0) else np.inf
+    n1 = c[0,0] + c[0,1]
+    n2 = c[1,0] + c[1,1]
+    n  = c[0,0] + c[1,0]
+
+    mode = int(float((n + 1) * (n1 + 1)) / (n1 + n2 + 2))
+    pexact = hypergeom.pmf(c[0,0], n1 + n2, n1, n)
+    pmode = hypergeom.pmf(mode, n1 + n2, n1, n)
+
+    epsilon = 1 - 1e-4
+    if float(np.abs(pexact - pmode)) / np.abs(np.max(pexact, pmode)) <= 1 - epsilon:
+        return odssratio, 1
+
+    elif c[0,0] < mode:
+        plower = hypergeom.cdf(c[0,0], n1 + n2, n1, n)
+
+        if hypergeom.pmf(n, n1 + n2, n1, n) > pexact / epsilon:
+            return odssratio, plower
+
+        # Binary search for where to begin upper half.
+        min = mode
+        max = n
+        guess = -1
+        while max - min > 1:
+            guess = max if max == min + 1 and guess == min else (max + min) / 2
+
+            pguess = hypergeom.pmf(guess, n1 + n2, n1, n)
+            if pguess <= pexact and hypergeom.pmf(guess - 1, n1 + n2, n1, n) > pexact:
+                break
+            elif pguess < pexact:
+                max = guess
+            else:
+                min = guess
+
+        if guess == -1:
+            guess = min
+
+        while guess > 0 and hypergeom.pmf(guess, n1 + n2, n1, n) < pexact * epsilon:
+            guess -= 1
+
+        while hypergeom.pmf(guess, n1 + n2, n1, n) > pexact / epsilon:
+            guess += 1
+
+        p = plower + hypergeom.sf(guess - 1, n1 + n2, n1, n)
+        if p > 1.0:
+            p = 1.0
+        return odssratio, p
+    else:
+        pupper = hypergeom.sf(c[0,0] - 1, n1 + n2, n1, n)
+        if hypergeom.pmf(0, n1 + n2, n1, n) > pexact / epsilon:
+            return odssratio, pupper
+
+        # Binary search for where to begin lower half.
+        min = 0
+        max = mode
+        guess = -1
+        while max - min > 1:
+            guess = max if max == min + 1 and guess == min else (max + min) / 2
+            pguess = hypergeom.pmf(guess, n1 + n2, n1, n)
+            if pguess <= pexact and hypergeom.pmf(guess + 1, n1 + n2, n1, n) > pexact:
+                break
+            elif pguess <= pexact:
+                min = guess
+            else:
+                max = guess
+
+        if guess == -1:
+            guess = min
+
+        while hypergeom.pmf(guess, n1 + n2, n1, n) < pexact * epsilon:
+            guess += 1
+
+        while guess > 0 and hypergeom.pmf(guess, n1 + n2, n1, n) > pexact / epsilon:
+            guess -= 1
+
+        p = pupper + hypergeom.cdf(guess, n1 + n2, n1, n)
+        if p > 1.0:
+            p = 1.0
+        return odssratio, p
+
+def sortBed(bedFile):
+    cmd = "bedSort %s %s" % (bedFile, bedFile)
+    runProgram(cmd)
+
+def add_featLevel_overlap(refBedFilename, filenameRows, overlapData):
+    """ determine basic feature-level overlap statistics, like sens, spec, CC,... """
+
+    logging.info("Feature-level overlap...")
+    refCount = filenameRows[refBedFilename]["featCount"]
+    
+    for filename, fileData in filenameRows.iteritems():
+        if filename==refBedFilename:
+            continue
+
+        overlapData.setdefault(filename, {})
+        row = overlapData[filename]
+
+        predCount = fileData['featCount']
+        overlapCountRef  = overlapRegions(refBedFilename, filename)
+        overlapCountPred = overlapRegions(filename, refBedFilename)
+        logging.debug("refCount %d, predCount %d, overlapCountRef %d, overlapCountPred %d" % \
+            (refCount, predCount, overlapCountRef, overlapCountPred))
+
+        row["hitRefFeat"] = overlapCountRef
+        row["hitRefFeatShareRef"] = float(overlapCountRef) / refCount
+        row["hitRefFeatSharePred"] = float(overlapCountRef) / predCount
+        row["missedRefFeat"] = refCount - overlapCountRef
+
+        #TP  = float(overlapCountPred)
+        #FP  = predCount - overlapCountPred
+        TP  = float(overlapCountRef)
+        FP  = refCount - overlapCountRef
+
+        SN  = overlapCountRef / float(refCount)
+        PPV = overlapCountPred / float(predCount)
+
+        row["hitPredFeat"]  = overlapCountPred
+        row["snFeat"]    = SN
+        row["ppvFeat"]   = PPV
+
+    return overlapData
+
+def featureBits(chromSizesFile, assembly, filenames):
+    cmd = "featureBits %s %s" % (assembly, " ".join(filenames))
+    overlapBp = runProgramGetNumber(cmd, useStdout=False)
+    return overlapBp
+
+def add_nuclLevel_overlap(assembly, chromSizesFile, genomeSize, refBedFilename, filenameData, overlapData):
+    """ add standard nucleotide level overlap stats, like TP, FN, etc and calc correlation from it """
+
+    logging.info("Nucleotide-level overlap...")
+    def divide(top, bottom):
+        if bottom!=0:
+            return float(top) / float(bottom)
+        else:
+            return None
+
+    logging.debug("Nucleotide level overlap analysis")
+
+    refCount = filenameData[refBedFilename]["totalLength"]
+    lociCount = genomeSize
+
+    for filename, fileData in filenameData.iteritems():
+        if filename==refBedFilename:
+            continue
+        predCount = fileData["totalLength"]
+        overlapCount = featureBits(chromSizesFile, assembly, [filename, refBedFilename])
+        logging.debug("filename %s, refCount %d, predCount %d, overlapCount %d" % \
+            (filename, refCount, predCount, overlapCount))
+
+        #  Locus    |---------------------------------|
+        #  Pred          |=============|
+        #  Ref                   |==============|
+        #           |----|-------|-----|--------|-----|
+        #             TN   FP      TP      FN     TN
+        #
+        TP  = float(overlapCount)
+        TN  = float(lociCount + overlapCount - predCount - refCount)
+        FP  = float(predCount - overlapCount)
+        FN  = float(refCount  - overlapCount)
+        logging.debug("TP %f, TN %f, FP %f, FN %f" % (TP, TN, FP, FN))
+
+        if (TN+FP)==0:
+            logging.warning("TN+FP is negative, setting SP to -100")
+            SP = -100
+        else:
+            SP  = TN / (TN + FP)
+
+        SN  = TP / (TP + FN)
+        # Precision measures the proportion of the claimed true functional sites that are indeed true functional sites.
+        PPV = TP / (TP + FP) # PRECISION aka Positive predictive Value
+        # Accuracy  measures the proportion of predictions, both for true functional sites and false functional sites that are correct. 
+        ACC  = divide((TP + TN) , (TP + FP + FN + TN))
+
+        CC_top    = float(TP * TN - FN * FP)
+        underSqrt = (TP+FN)*(TN+FP)*(TP+FP)*(TN+FN)
+        logging.debug("under sqrt is %s" % str(underSqrt))
+        if underSqrt<0:
+            logging.warning("SQRT on negative number, setting CC to -100")
+            CC = -100
+        else:
+            CC_bottom = math.sqrt(underSqrt)
+            if CC_bottom > 0:
+                CC = CC_top / CC_bottom
+            else:
+                CC = -100
+
+        overlapData.setdefault(filename, {})
+        row = overlapData[filename]
+
+        row["overlapNuc"] = overlapCount
+        row["overlapNucShareRef"] = float(overlapCount) / refCount
+        row["overlapNucSharePred"] = float(overlapCount) / predCount
+        row["snNuc"]  = SN
+        row["spNuc"]  = SP
+        row["ppvNuc"] = PPV
+        row["accNuc"] = ACC
+        row["CC"]  = CC
+
+        overlapData[filename]=row
+
+    return overlapData
+
+
+def basicFileData(bedFilenames, chromSizes):
+    """ for all files: determine basic stats, like featureCount, coverage/totalLen and basename of the file """
+    filenameData = {}
+    chromSizesChroms = set(chromSizes.keys())
+
+    for filename in bedFilenames:
+        logging.debug("Parsing %s" % filename)
+        sortBed(filename)
+        beds = bed.parseBedFilename(filename, reqSorted=True)
+
+        bedChroms = beds.getChromosomes()
+        difference = bedChroms.difference(chromSizes)
+        if len(difference)!=0:
+            logging.error("File %s has features that are not on chromosomes" % (filename))
+            logging.error("Input file chromosomes: %s" % str(bedChroms))
+            logging.error("Chrom.sizes chromosomes: %s" % str(chromSizesChroms))
+            logging.error("Difference: %s" % str(difference))
+            logging.error("Will ignore this input file" )
+            continue
+
+        bedOutsideChrom = beds.bedsOutsideChrom(chromSizes)
+        if bedOutsideChrom:
+            logging.error("File %s has features that extend outside chromosome boundaries" % (filename))
+            logging.error("example feature is: %s" % str(bedOutsideChrom))
+            logging.error("Will ignore this input file")
+            continue
+
+        overlapBed = beds.anyFlankingOverlap()
+        if overlapBed:
+            logging.warn("File %s has overlapping feature %s: " % (filename, overlapBed))
+            #logging.error("Will ignore this input file")
+            #continue
+        basename = os.path.basename(filename).split(".")[0]
+        filenameData[filename] = {
+            'totalLength': beds.totalLength(),
+            'avgLength'  : beds.avgLength(),
+            'featCount'  : len(beds),
+            'basename'   : basename
+        }
+
+    return filenameData
+
+def add_poisson_pVal(genomeSize, filenameData, overlapData, refFilename):
+    """ assume that the query bed files are generated by a random process of 
+    independant basepairs where each basepair can be either part or not part of
+    the track.  
+    Determine poisson probability that we have >= x bp of overlap, given that we 
+    throw a coin length(queryTrack) times and have a probability of hitting the 
+    other track of length(refTrack)/genomeSize.
+    
+    """
+    logging.info("Poisson/Binomials based on nucleotide overlaps...")
+    refLen = filenameData[refFilename]['totalLength'] 
+    p = float(refLen) / genomeSize
+
+    for qfilename, qFileData in filenameData.iteritems():
+        if qfilename==refFilename:
+            continue
+
+        n = qFileData['totalLength']
+        k = overlapData[qfilename]['overlapNuc']
+        m = n*p
+        """ poisson probability from 0 to k, k is NOT INCLUDED!"""
+        logging.debug("Calculating poisson probablility with k=%d and m=%d" % (k,m))
+        poissonSum=scipy.special.pdtrc(k, m)
+        pVal = poissonSum
+        overlapData[qfilename]["poissonPVal"]=pVal
+
+        binomPVal = scipy.special.bdtrc(k, n, p)
+        # is the same as r.binom_test(k, n, p)
+        logging.debug("Calculating binomial probablility with k=%d, n=%d, p=%f" % (k,n,p))
+        overlapData[qfilename]["binomPVal"]=binomPVal
+
+    return overlapData
+
+def shuffleBedTemp(chromSizesFile, bedFile):
+    """ create temp file, shuffle Bed to temp file, return name of temp file
+    shuffling following Dave's rules:
+    - will keep all feature on their chromosomes 
+    - will keep upstream region size
+    - will just permutate features with their upstream region sizes
+    
+    """
+    dummy, tmpfilename = tempfile.mkstemp(prefix="bedOverlapSignificance", suffix=".bed")
+    tmpFile = open(tmpfilename, "w")
+
+    logging.debug("Shuffling %s to %s with Dave's process" % (bedFile, tmpfilename))
+    bedsByChrom = bed.indexBedsChrom(bedFile)
+    # go over all chromosomes
+    for chrom, beds in bedsByChrom.iteritems():
+        bedSpacers = []
+        lastEnd = 0
+        # transform beds into len, spacer tuples
+        for b in beds:
+            length = b.end - b.start
+            spacerLen = b.start - lastEnd
+            bedSpacers.append((length, spacerLen))
+            lastEnd = b.end
+
+        random.shuffle(bedSpacers)
+
+        # recreate beds from shuffled len,spacer tuples
+        start = 0
+        for lenSpacerLen in bedSpacers:
+            bedLen, bedSpacer = lenSpacerLen
+
+            start += bedSpacer
+            end   =  start + bedLen
+            data = [chrom, str(start), str(end)]
+            tmpFile.write("\t".join(data)+"\n")
+            start = end
+
+
+    tmpFile.close()
+    return tmpfilename
+
+def add_shuffled_overlaps(chromSizesFile, filenameData, overlapData, refBedFilename):
+    logging.info("Shuffle reference bed files and count overlapping features/nucleotides...")
+    shuffledBedTemp = shuffleBedTemp(chromSizesFile, refBedFilename)
+    for filename, fileData in iterItemsExcept(filenameData, refBedFilename):
+        overlapNuc = featureBits(chromSizesFile, assembly, [shuffledBedTemp, filename])
+        overlapRegionCount = overlapRegions(shuffledBedTemp, filename)
+        overlapData[filename]["rndOverlapNuc"] = overlapNuc
+        overlapData[filename]["rndHitRefFeat"] = overlapRegionCount
+        try:
+            os.remove(shuffledBedTemp)
+        except OSError:
+            logging.error("Could not remove file %s" % shuffledBedTemp)
+    return overlapData
+
+def add_chiSq_pVal(genomeSize, filenameData, overlapData, refBedFilename):
+    """ add a chi-square test of shuffled bedfiles versus """
+    """overlapSignificance_chiSq(overlap, nonOverlap, rndOverlap, rndNonOverlap):"""
+    logging.info("Chi-Square tests of shuffled nucleotide overlaps...")
+    for filename, fileOverlapData in iterItemsExcept(overlapData, refBedFilename):
+        fileData = filenameData[filename]
+
+        #overlapObs    = fileOverlapData["overlapNuc"]
+        #overlapRnd    = fileOverlapData["rndOverlapNuc"]
+        #totalSizeRef  = filenameData[refBedFilename]["totalLength"]
+        #nonOverlapObs = totalSizeRef - overlapObs
+        #nonOverlapRnd = totalSizeRef - overlapRnd
+
+        overlapObs    = fileOverlapData["hitRefFeat"]
+        overlapRnd    = fileOverlapData["rndHitRefFeat"]
+        totalSizeRef  = filenameData[refBedFilename]["featCount"]
+        nonOverlapObs = totalSizeRef - overlapObs
+        nonOverlapRnd = totalSizeRef - overlapRnd
+
+        matrix = [[overlapObs, nonOverlapObs], [overlapRnd, nonOverlapRnd]]
+        logging.debug("fisher matrix is %s" % str(matrix))
+        result = r.chisq_test(np.asarray(matrix))
+        #logging.debug("complete result from R is %s" % str(result))
+        pVal = result['p.value']
+        logging.debug("chi square p-value is %g" % pVal)
+        fileOverlapData["chiSqPVal"] = pVal
+    return overlapData
+
+def writeChromSizesAsBed(chromSizes):
+    dummy, tmpFileName = tempfile.mkstemp(prefix="encodeStats.chromSizes", suffix=".bed")
+    tmpFile = open(tmpFileName, "w")
+    for chrom, size in chromSizes.iteritems():
+        tmpFile.write("\t".join([chrom, "0",str(size)]))
+        tmpFile.write("\n")
+    tmpFile.close()
+    logging.debug("Written chromsizes in bed format to %s" % tmpFileName)
+    return tmpFileName
+
+def add_gsc_pVal(filenameData, overlapData, refBedFilename, chromSizes, numSamples=20):
+    logging.info("GSC measure of nucleotide overlaps...")
+    
+    chromSizesBedName = writeChromSizesAsBed(chromSizes)
+
+    coveredAnnotations = encode.parse_bed_file(open(refBedFilename), open(chromSizesBedName))
+    for filename, fileOverlapData in iterItemsExcept(overlapData, refBedFilename):
+        logging.debug("Running GSC on %s versus %s" % (refBedFilename, filename))
+        coveringAnnotations = encode.parse_bed_file(open(filename), open(chromSizesBedName))
+        region_fraction = 0.04
+        pVal = conditional_bp_overlap_stat( coveringAnnotations, coveredAnnotations, region_fraction, numSamples)
+        fileOverlapData['gscPVal'] = pVal
+
+    os.remove(chromSizesBedName)
+    return overlapData
+
+# FROM ENCODESTATISTICS.ORG / block_bootstrap.py ==============================
+try: from scipy.stats.stats import mean, cov, std
+except ImportError:
+    def std(data): return math.sqrt( var(data) )
+    def mean(data): return float(sum(data))/len(data)
+
+    def var(data):
+        ev = mean(data)
+        return sum( [ (entry - ev)**2 for entry in data ] )/( len(data) - 1 )
+
+    def cov(data):
+        """ Takes an iterable of 'vectors' ( by which I mean iterables of the same length )
+        """
+        # make sure they are all the same length
+        for entry in data: assert len(entry) == len(data[0])
+
+        # its expecting to get the entries in the opposite order that we want them
+        data = zip(*data)
+
+        # pairwise covariance
+        def _cov(X,Y):
+            assert len(X) == len(Y)
+            mx = mean(X)
+            my = mean(Y)
+            return sum( [ float((x-mx)*(y-my)) for x,y in zip(X,Y) ] )/( len(X) - 1 )
+
+        # first, make a zeros covariance matrix
+        covMat = [ [0]*len(data) for loop in xrange(len(data)) ]
+        # fill in the covaraince matrix entries
+        for oloop in xrange(len(data)):
+            for iloop in xrange(oloop, len(data)):
+                tmpVar = _cov(data[oloop], data[iloop])
+                covMat[iloop][oloop] = tmpVar
+                covMat[oloop][iloop] = tmpVar
+        return covMat
+
+try:
+    from scipy.stats.distributions import norm as norm_dist
+    sn_cdf = norm_dist(loc=0, scale=1).cdf
+except ImportError:
+    def sn_cdf(x):
+        # brute force integration of the sn pdf
+        # probably accumualtes errors and has all sorts of other
+        # undesirable properties
+        # however, it is still accurate to 1e-8 for the worst case
+        #
+        # this could be much faster/more accurate if I weighted
+        # the points better
+
+        # if we're more than 20 sd over the mean, return 0.0
+        if x > 20: return 0.0
+
+        # if we're more than 20 sd less than the mean, return 0
+        if x < -20: return 1.0
+
+        def norm_pdf(x, u, s):
+            from math import pi, sqrt, exp
+
+            constTerm = 1/(s*sqrt(2*pi))
+            expTerm = exp(-0.5*(s**-2)*((x-u)**2))
+
+            return constTerm*expTerm
+
+        # if we are past 20, the added value to the cdf
+        # is unsubstantial: so just integrate to 20
+        a = max(-20, float(x))
+        b = 20.0
+
+        estimate = 0
+        num = 10000
+        for loop in xrange(num):
+            ln = a + loop*((b-a)/num)
+            hn = a + (loop+1)*((b-a)/num)
+            local_est = (hn-ln)*norm_pdf((hn+ln)/2.0, 0, 1)
+            estimate += local_est
+
+        # this integrates above x - so reverse it
+        estimate = 1-estimate
+
+        ## some code to test my approximation
+        #from scipy.stats.distributions import norm as norm_dist
+        #sci_sn_cdf = norm_dist(loc=0, scale=1).cdf
+        #print estimate, sci_sn_cdf(x), sci_sn_cdf(x) - estimate
+
+        return estimate
+
+
+try:
+    import cBasePairOverlap
+    
+    def random_regions_bp_overlap(coveredRegion, coveringRegion, sampleLength, number=1):
+        for entry in cBasePairOverlap.regions_random_bp_overlap(coveredRegion, coveringRegion, sampleLength, number):
+            rv = overlap_sample_dict()
+            for key in entry:
+                overlap1, overlap2, covered_fl1, covered_fl2, covering_fl1, covering_fl2 = entry[key]
+                rv[key] = bp_overlap_sample( overlap1, overlap2, covered_fl1, covered_fl2, covering_fl1, covering_fl2 )
+            yield rv
+        return
+
+except ImportError, inst:
+    print >> output, """
+
+    ********************************************************************************
+    Error importing the cBasePairOverlap module. Has it been installed?
+    The cmodule will drastically increase the speed.
+    Reverting to the pure python version...
+    ********************************************************************************
+    """
+        
+
+    def random_regions_bp_overlap(coveredRegion, coveringRegion, sampleLength, number=1):
+        """Calculate the basepair overlap.
+
+        
+        """
+        ss = sampleLength
+
+        rv = []
+
+        for loop in xrange(number):
+            sample = overlap_sample_dict()
+            for key in coveringRegion.keys():
+                cA = coveringRegion[key]
+                eA = coveredRegion[key]
+
+                rn1 = random.uniform(0,1-ss)
+                rn2 = random.uniform(0,1-ss)
+
+                s11 = eA[rn1:(rn1+ss)]
+                s12 = eA[rn2:(rn2+ss)]
+
+                s21 = cA[rn1:(rn1+ss)]
+                s22 = cA[rn2:(rn2+ss)]
+
+                covered_fl1 = s11.featuresLength() 
+                covered_fl2 = s12.featuresLength()
+
+                covering_fl1 = s21.featuresLength() 
+                covering_fl2 = s22.featuresLength()
+                
+                overlap1 = s22.overlap(s11) 
+                overlap2 = s21.overlap(s12)
+
+                sample[key] = \
+                    bp_overlap_sample( 
+                        overlap1, overlap2, 
+                        covered_fl1, covered_fl2, 
+                        covering_fl1, covering_fl2 
+                    )
+
+            yield sample
+
+def conditional_overlap_stat(coveredRegion, coveringRegion):
+    totalLength = sum([ value.length for value in coveredRegion.values() ])
+
+    Obs_num = 0.0
+    Obs_den = 0.0
+    I_num = 0.0
+    for key in coveredRegion.keys():
+        # stores the feature length of the covered region ( self )
+        covered_feature_len = coveredRegion[key].featuresLength()
+
+        # stores the feature length of the covering region ( coveringRegion )
+        covering_feature_len = coveringRegion[key].featuresLength()
+
+        # stores the observed total feature overlap between the region's
+        overlap_feature_len = coveredRegion[key].overlap(coveringRegion[key])
+
+        # stores this regions length fraction of the total
+        # this is lambda_i in the paper
+        regionFraction  = float(coveredRegion[key].length)/totalLength
+
+        # stores the length of this region for both features
+        region_length = float(coveredRegion[key].length)
+        
+        Obs_num += regionFraction*overlap_feature_len/region_length
+        Obs_den += regionFraction*covered_feature_len/region_length
+
+        I_num += regionFraction*covering_feature_len*covered_feature_len/(region_length**2)
+
+    J_n = I_num/Obs_den;
+
+    O_n = Obs_num/Obs_den;
+
+    return { 'theoretical': J_n, 'observed': O_n, 'test_stat': O_n - J_n } 
+class sample(tuple):
+    pass
+
+class sample_dict(dict):
+    def __setitem__(self, key, item):
+        assert isinstance(item, sample)
+        dict.__setitem__(self, key, item)   
+
+class overlap_sample(sample):
+    def __init__(self, *args, **kwargs):
+        tuple.__init__(self, *args, **kwargs)
+        assert len(self) == 6
+
+    def __mul__(self, other):
+        """Multiply a sample by a scalar.
+
+        eg 0.5*(1,1,1,1,2,1) = (0.5,0.5,0.5,0.5,1.0,0.5)
+        """
+        return type(self)(
+            other*self[0],
+            other*self[1],
+            other*self[2],
+            other*self[3],
+            other*self[4],
+            other*self[5]
+        )
+        
+
+    def __add__(self, other):
+        """Add two overlap samples together pointwise.
+
+        eg (0,0,0,0,0,0) + (1,1,1,1,2,1) = (1,1,1,1,2,1)
+
+        """
+        return type(self)(
+            self[0]+other[0],
+            self[1]+other[1],
+            self[2]+other[2],
+            self[3]+other[3],
+            self[4]+other[4],
+            self[5]+other[5]
+        )
+
+    overlap = property(lambda self: self[0]+self[1])
+    overlap1 = property(lambda self: self[0])
+    overlap2 = property(lambda self: self[1])
+
+    covered_fl = property(lambda self: self[2]+self[3])
+    covered_fl1 = property(lambda self: self[2])
+    covered_fl2 = property(lambda self: self[3])
+
+    covering_fl = property(lambda self: self[4]+self[5])
+    covering_fl1 = property(lambda self: self[4])
+    covering_fl2 = property(lambda self: self[5])
+
+class bp_overlap_sample(overlap_sample):
+    def __new__(obj, overlap1, overlap2, covered_fl1, covered_fl2, covering_fl1, covering_fl2):
+        return tuple.__new__(bp_overlap_sample, ( overlap1, overlap2, covered_fl1, covered_fl2, covering_fl1, covering_fl2 ))
+
+class region_overlap_sample(overlap_sample):
+    def __new__(obj, overlap1, overlap2, covered_fl1, covered_fl2, covering_fl1, covering_fl2):
+        return tuple.__new__(region_overlap_sample, ( overlap1, overlap2, covered_fl1, covered_fl2, covering_fl1, covering_fl2 ))
+
+class overlap_sample_list(list):
+    def append(self, newItem):
+        assert isinstance(newItem, sample)
+        list.append(self, newItem)
+
+    def extend(self, newItems):
+        assert isinstance(newItems, samples)
+        list.extend(self, newItems)
+
+    def insert(index, newItem):
+        assert isinstance(newItem, sample)
+        list.insert(self, index, newItems)
+
+    def __setitem__(self, key, item):
+        assert isinstance(item, sample)
+        list.__setitem__(self, key, item)   
+
+class overlap_sample_dict(dict):
+    def __setitem__(self, key, item):
+        assert isinstance(item, sample)
+        dict.__setitem__(self, key, item)   
+
+    def sum(self):
+        """Returns the sum of all the overlap_sample objects.
+
+        In example, if the values in this container were
+            (0,0,0,0,2,4)
+        and (1,4,5,7,2,4)
+
+        this would return (1,4,5,7,4,8).
+        """
+
+        if len(self) == 0: 
+            raise ValueError, "Can't sum an empty sequence"
+
+        # define a container to hold the values
+        empty = type(self.values()[0])(0,0,0,0,0,0)
+
+        # iterate through the items, and add them to the empty container
+        for item in self.values():
+            empty += item
+
+        return empty
+
+    def weightedSum(self, weights):
+        """Returns the sum of all overlap_sample objects weighted by weights.
+
+        In example, if the values in this container were
+            'R1': (0,0,0,0,2,4)
+        and 'R2': (1,4,5,7,2,4)
+
+        and the weighte were 
+            'R1': 0.1   
+        and 'R2': 0.9
+
+        then this would return 
+
+           (0, 0, 0, 0, .2, .4) + (0.9, 3.6, 4.5, 6.3, 1.8, 3.6)
+        =  (0.9, 3.6, 4.5, 6.3, 2.0, 4.0)
+
+        """
+
+        if len(self) == 0: 
+            raise ValueError, "Can't sum an empty sequence"
+
+        # make sure that the keys are identical
+        assert set(weights.keys()) == set(self.keys())
+
+        # make sure that the weights sum to 1
+        assert round( sum( weights.values() ), 5) == 1.0
+
+        # define a container to hold the values
+        empty = type(self.values()[0])(0,0,0,0,0,0)
+
+        # BAD python2.3 compatability change
+        return sum( [ self[key]*weights[key] for key in self.keys() ], empty )
+
+def conditional_overlap_sample_stat(samples, regionLengths, sampleLength):
+    #assert isinstance(samples, bp_overlap_sample_dict)
+
+    Fn = 0
+    Jn_den = 0
+    Jn_nom = 0
+
+    # make sure this isnt a bug
+    total_length = sum(regionLengths.values())
+
+    # make sure the sample and the regions have the same set of keys
+    assert len( set(samples.keys()).difference(set(regionLengths.keys())) ) == 0
+
+    for key in samples.keys():
+        regionLength = float(regionLengths[key])
+        sampleRegionLength = sampleLength*regionLength
+        sample = samples[key]
+
+        I_1 = sample.covered_fl1/sampleRegionLength
+        I_2 = sample.covered_fl2/sampleRegionLength
+
+        J_1 = sample.covering_fl1/sampleRegionLength
+        J_2 = sample.covering_fl2/sampleRegionLength
+
+        IJ_1 = sample.overlap1/sampleRegionLength
+        IJ_2 = sample.overlap2/sampleRegionLength
+
+        # lambda in the paper
+        length_frac = float(regionLength)/total_length
+
+        Fn += 0.5*length_frac*(IJ_1/max(I_1, 1.0/sampleRegionLength) + IJ_2/max(I_2, 1.0/sampleRegionLength))      
+
+        Jn_den += length_frac*0.5*(I_1 + I_2);
+        
+        Jn_nom += length_frac*0.25*(I_1 + I_2)*(J_1 + J_2);
+
+    return { 'Jn': Jn_nom/Jn_den, 'Fn': Fn, 'Tn':Fn-Jn_nom/Jn_den } 
+
+def conditional_bp_overlap_stat( covering_region, covered_region, region_fraction, num_samples ):
+    #% Lastly, scale the bootstrap distribution to get the null distribution of
+    #% the test statistic.
+    #
+    #% 2*frac = 2L/n.  So sqrt(2*frac)*T_n has the correct SD.  We can compute
+    #% this by pulling the constant out:
+    #
+    #% store the samples from n and N
+    #%SD = sqrt(2*frac)*std(Tn);
+    #
+
+    Tns = []
+    Tns_2 = []
+    # calculate the overlap stat num_samples times
+    samples = random_regions_bp_overlap(covered_region, covering_region, region_fraction, num_samples)
+    # BAD python2.3 compat change
+    lengths = dict([ (key, covered_region[key].length) for key in covered_region.keys() ])
+    
+    if verbose:
+        print >> output, "#### Sample Distribution Info"
+        print >> output, "Sample #".rjust(8), "Tn".rjust(15)
+    
+    loop = 0
+    for sample in samples:
+        stats = conditional_overlap_sample_stat(sample, lengths, region_fraction)
+        Tns.append(stats['Tn'])
+        if verbose: print >> output, str(loop).rjust(8), str("%.8f" % stats['Tn']).rjust(15)
+        loop += 1
+    
+    SD = math.sqrt(2*region_fraction)*std(Tns)
+    if verbose:
+        print >> output
+        print >> output, 'mean: ', mean(Tns)
+        print >> output, 'SD:   ', SD, '\n'
+
+    real_stats = conditional_overlap_stat(covered_region, covering_region) 
+
+    theoretical_stat_mean = real_stats['theoretical']
+    observed_stat_mean = real_stats['observed']
+    test_stat = real_stats['test_stat']
+
+    if verbose:
+        print >> output, 'NULL stat mean: ', theoretical_stat_mean
+        print >> output, 'observed stat mean: ', observed_stat_mean      
+        print >> output, 'test_stat: ', test_stat
+
+    # Finally, refer the "mean zero" test statistic "test_stat" to the
+    # distribution Tn.  Compute the SD and whatnot.
+    #
+    #%z_score = test_stat/SD;
+    #%p_value = 1 - normcdf(test_stat,0,SD);
+
+    z_score = test_stat/SD
+    if verbose: print >> output, 'z_score: ', z_score
+
+    p_value = min(1 - sn_cdf(z_score), sn_cdf(z_score))
+    print >> output, 'p_value: ', p_value, "\n"
+
+    return p_value
+
+def outputOverlapData(filenameData, overlapData, refBedFilename, outFile=sys.stdout):
+    """ output essential stats to file """
+    headerToKey = [
+            ("referenceFile"            , None)                  , 
+            ("queryFile"                , None)                  , 
+            ("refLength"                , None)                  , 
+            ("queryLength"              , None)                  , 
+            ("overlapNuc"               , "overlapNuc")          , 
+            ("overlapNucShareRef"       , "overlapNucShareRef")  , 
+            ("overlapNucShareQuery"     , "overlapNucSharePred") , 
+            ("overlapRegions"           , "hitRefFeat")          , 
+            ("overlapRegionsShareRef"   , "hitRefFeatShareRef")  , 
+            ("overlapRegionsShareQuery" , "hitRefFeatSharePred") , 
+            ("correlation"              , "CC")                  , 
+            ("rndOverlapRegions"        , "rndHitRefFeat")       , 
+            ("rndOverlapNuc"            , "rndOverlapNuc")       , 
+            ("poissonPVal"              , "poissonPVal")         , 
+            ("binomPVal"                , "binomPVal")           , 
+            ("chiSqPVal"                , "chiSqPVal")           , 
+            ("gscPVal"                  , "gscPVal")
+        ]
+
+    headers = [x for x,y in headerToKey]
+    outFile.write("\t".join(headers)+"\n")
+
+    # construct data lines for each query file
+
+    for qFilename, qFileData in overlapData.iteritems():
+        values = []
+
+        i = 0
+        for header, key in headerToKey:
+            value = ""
+            # first four fields are not in qFileData
+            if i==0:
+                value = filenameData[refBedFilename]["basename"]
+            elif i==1:
+                value = filenameData[qFilename]["basename"]
+            elif i==2:
+                value = str(filenameData[refBedFilename]["totalLength"])
+            elif i==3:
+                value = str(filenameData[qFilename]["totalLength"])
+
+            else:
+                value = str(qFileData.get(key, "NotFound"))
+
+            values.append(value)
+            i+=1
+
+        outFile.write("\t".join(values)+"\n")
+
+    return
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+chromSizesFilename, refBedFilename = args[:2]
+compBedFilenames = args[2:]
+assembly = os.path.splitext(os.path.basename(chromSizesFilename))[0]
+
+chromSizes = tabfile.slurpdict(chromSizesFilename, asInt=True)
+genomeSize = sum(chromSizes.values())
+
+allFilenames = compBedFilenames
+allFilenames.append(refBedFilename)
+
+filenameData = basicFileData(allFilenames, chromSizes)
+
+overlapData = {}
+for filename in filenameData:
+    overlapData[filename]={}
+
+overlapData = add_nuclLevel_overlap(assembly, chromSizesFilename, genomeSize, refBedFilename, filenameData, overlapData)
+overlapData = add_featLevel_overlap(refBedFilename, filenameData, overlapData)
+overlapData = add_shuffled_overlaps(chromSizesFilename, filenameData, overlapData, refBedFilename)
+if sciPyLoaded:
+    overlapData = add_poisson_pVal(genomeSize, filenameData, overlapData, refBedFilename)
+    overlapData = add_chiSq_pVal(genomeSize, filenameData, overlapData, refBedFilename)
+overlapData = add_gsc_pVal(filenameData, overlapData, refBedFilename, chromSizes, options.gscNumSamples)
+
+del overlapData[refBedFilename]
+
+outputOverlapData(filenameData, overlapData, refBedFilename)
+
+#$headers = ["bed1", "bed2"]
+#print "\t".join(headers)
+
+#print filenameData
+#p = float(rndOverlap)/bed1Count
+#logging.debug("p is %f" %p)
+#print overlap, bed2Count, p
+#print scipy.stats.binom_test(overlap, bed2Count, p)
+#print "%g" % scipy.stats.distributions.binom.pmf(overlap, bed2Count, p)
+#print "%g" % fisher_exact([[overlap, nonOverlap], [rndOverlap, rndNonOverlap]])
+#print math.log10(r.chisq_test(np.asarray([[overlap, nonOverlap], [rndOverlap, rndNonOverlap]]))['p.value'])
+#print r.chisq_test(np.asarray([[overlap, nonOverlap], [rndOverlap, rndNonOverlap]]))
+#print r.fisher_test(np.asarray([[overlap, nonOverlap], [rndOverlap, rndNonOverlap]]))
+#fisher_exact([[overlap, nonOverlap], [rndOverlap, rndNonOverlap]])
+#os.remove(shuffledBedTemp)

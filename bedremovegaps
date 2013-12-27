@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+def gaplen(seq, pos):
+	len = 0
+	for nucl in seq[pos:]:
+		if nucl=="-":
+			len = len + 1
+		else:
+			return len
+	return len
+
+if len(argv)==1:
+  print
+  print "This is the companion to savegaps. See its documentation before readint this here."
+  print "Removes gaps from a bedfile."
+  print "Gaps have to be sorted by their starting field!"
+  print "Features that are modified will have a '!' appended to their NAME "
+  print "to indicate the change."
+  print " syntax: "
+  print " cat test.bed | bedremovegaps test.gaps"
+  exit() 
+
+# read features from stdin
+lines = sys.stdin.readlines()
+# remove header
+while not lines==[] and (lines[0].startswith("track") or lines[0].startswith("browser")) :
+  lines.pop(0)
+  if lines==[]:
+	  break
+# parse faturespositions, keep everthing
+features = []
+for line in lines:
+  if line.startswith("#"):
+	    continue
+  line = line.strip()
+  fields = line.split(" ", 4)
+  # [0] = seqname, [1] = startpos, [2] = endpos, [3] = rest crap
+  ##sys.stderr.write(line)
+  features.append([fields[0], int(fields[1]), int(fields[2]), fields[3], fields[4:]])
+del lines
+
+#read gaps
+f = open(argv[1], 'r')
+lines = f.readlines()
+gaps = {}
+for line in lines:
+  line = line.strip()
+  fields = line.split(" ")
+  seqname = fields[0]
+  gappos = int(fields[3])
+  gaplength = int( fields[2])
+  if not gaps.has_key(seqname):
+	  gaps[seqname]=[]
+  gaps[seqname].append([gappos,gaplength])
+del lines
+
+# transpose coodinates
+for f in features:
+  seqname = f[0]
+  if gaps.has_key(seqname):
+   for gap in reversed(gaps[seqname]):
+    if f[1] -1 > gap[0] and f[2] > gap[0]:
+       f[1]-=gap[1] 
+       f[2]-=gap[1]
+    if f[1] -1 <= gap[0] and f[2]-1 > gap[0]+gap[1]:
+       f[2]-=gap[1]
+       if not f[3].endswith("!"):
+	       f[3]= f[3]+("!")
+
+# print features
+for f in features:
+  print f[0], f[1], f[2], f[3], " ".join(f[4])

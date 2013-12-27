@@ -1,0 +1,4 @@
+#!/bin/bash
+cat $1 | sort -k4 > /tmp/1.lst
+cat $2 | sort -k1 > /tmp/2.lst
+join -1 4 -2 1 /tmp/1.lst /tmp/2.lst -o 1.1,1.2,1.3,2.2,1.5,1.6

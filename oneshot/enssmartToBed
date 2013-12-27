@@ -1,0 +1,15 @@
+#!/usr/bin/gawk -f
+
+BEGIN {OFS="\t"}
+
+NR==1 { print "dropping first line" > "/dev/stderr"; next; }
+
+
+// { 
+    if ($4=="1") 
+        strand="+"
+    else
+        strand="-";
+    
+    print $1, $2,$3, $5,"0",strand;
+    }

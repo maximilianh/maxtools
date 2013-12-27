@@ -1,0 +1,282 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import operator
+import wordParser
+import tabfile
+import util
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wordFile aniseedFile tissueFile - search heuristically for best combinations of motifs") 
+
+parser.add_option("-b", "--bgGenes", dest="bgGenes", action="store", help="read list of annotated genes from separate textfile", default=None) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+
+def readAniseed(asFile, tissueKeywords, bgGenesFile):
+    # read annotation, tissueKeywords is list of keywords that have to be found for a gene
+    asAnnot = tabfile.slurpdictlist(asFile, reverse=True)
+    targetGenes = set()
+    bgGenes = set()
+    for annot, genes in asAnnot.iteritems():
+        for kw in tissueKeywords:
+            if annot.find(kw)!=-1 or kw=="all":
+                targetGenes.update(genes)
+        bgGenes.update(genes)
+    stderr.write("Found %d target genes in file %s\n" % (len(targetGenes), asFile))
+    if bgGenesFile:
+        bgGenes = set(tabfile.slurplist(bgGenesFile, field=0))
+        stderr.write("Found %d background genes in file %s\n" % (len(bgGenes), bgGenesFile))
+        bgGenes = bgGenes.union(targetGenes)
+        stderr.write("Added genes from foreground, final background contains %d genes.\n" % (len(bgGenes)))
+    return targetGenes, bgGenes
+
+def initBlockFile(f):
+    """ count blocks and make a list of the genes that occur around """
+    motifs = wordParser.readMotifs(f)
+    blockCount=0
+    genes = set()
+    blocks = []
+    blockToGene = {}
+    i=0
+    for b in wordParser.readBlocks(f):
+        gs, intronic = b.getGenes(flankType=1)
+        assert(len(gs)==1)
+        gene = gs[0]
+        blockCount+=1
+        genes.add(gene)
+        blocks.append(b)
+        blockToGene[i]=gene # this is wasting memory -> 500.000 ident string objects
+        i+=1
+    genes = list(genes)
+
+    # translate gene <-> numbers
+    #geneToNumber = {}
+    #numberToGene = []
+    #i=0
+    #for g in genes:
+    #    numberToGene.append(g)
+    #    geneToNumber[g]=i
+    #    i+=1
+        
+    return motifs, blocks, blockToGene
+    #return blocks, geneToNumber, numberToGene
+
+def motifIndex(motifs, blocks):
+    # parse blocks 
+    # create a hash motifs -> block numbers
+    # create a hash motif -> block No -> number of occurences
+
+    #wordIndex = {}
+    wordOccIndex = {}
+
+    for m, desc in motifs:
+        #wordIndex[m]=[]
+        wordOccIndex[m]={}
+
+    i = 0
+    for b in blocks:
+        for w in b.words:
+            #if len(b.words[w])>2:
+            #print "block %d, word %s, %d matches" % (i, w, len(b.words[w]))
+            #wordIndex[w].append(i)
+            wordOccIndex[w][i]=len(b.words[w])
+        i+=1
+    return wordOccIndex
+
+class predScores(list):
+    pass
+
+def findBestMotifs(minCount, motifToBlockOccs, blockToGene, fgGenes, notFgGenes, bgGenes):
+    stderr.write("Searching best singles of %d motifs...\n" % len(motifToBlockOccs))
+    predResults = predScores()
+    predCache = {}
+    for mot in motifToBlockOccs:
+        blockDict = motifToBlockOccs[mot]
+        if minCount>1:
+            filtBlockList = []
+            #blockDict = motifToBlockOccs[mot]
+            for block, occ in blockDict.iteritems():
+               if occ >= minCount:
+                   filtBlockList.append(block)
+            #blockDict = zip(filtBlockList, [0] * len(filtBlockList))
+            predBlocks = set(filtBlockList)
+        else:
+            predBlocks = set(blockDict)
+                
+        #predCache[mot] = set(blockDict)
+        predGenes = set([blockToGene[c] for c in predBlocks])
+        #print "motif", mot
+        #print "back ", len(bgGenes)
+        #print "back and not pred", len(bgGenes.difference(predGenes))
+        #print "back and pred", len(bgGenes.intersection(predGenes))
+        #print "pred", len(predGenes)
+        #print "fg", len(fgGenes)
+        #print "inters", len(set(predGenes).intersection(bgGenes))
+        stats = util.hitStats(bgGenes, predGenes, fgGenes, notFgGenes)
+        #print "TP+FP", stats.TP+stats.FP
+        #print "not annotated", predGenes.difference(bgGenes)
+
+        #print "CC", CC
+        predResults.append((stats.CC, stats, str(minCount)+"x"+mot, predBlocks))
+
+    predResults.sort(key=operator.itemgetter(0), reverse=True)
+    #predResults.predCache=predCache
+    return predResults
+
+def printLines(title, lines, maxEl=25, fromStart=True, addPVal=False, fgGenes=None, bgGenes=None, tissue=None):
+    if title!=None:
+        print "---------- %s ---------- " % title
+    #for fs in lines:
+    start = 0
+    end = maxEl
+    if not fromStart:
+        start = -maxEl
+        end = -1
+
+    for fs in lines[start:end]:
+        cc, stats, desc, predGenes = fs
+        #lines.append((stats.CC, stats, motif1+"+"+motif2, predGenes))
+        fields = []
+
+        if tissue:
+            fields.append(tissue)
+            fields.append(str(len(fgGenes))+" genes")
+
+        fields.extend([str(desc), str(cc), str(stats.TP), str(stats.TP+stats.FP), str(stats.PC), str(stats.Sens)])
+
+        if addPVal:
+            stats = util.statsAddPVal(stats, predGenes.intersection(fgGenes), predGenes.intersection(bgGenes), fgGenes, bgGenes)
+            pVal = stats.hypergPval
+            fields.append(str(pVal))
+            pVal = stats.pVal_poisson
+            fields.append(str(pVal))
+
+        print "\t".join(fields)
+
+def initIndexFile_BROKEN(f):
+    for l in f:
+        if l.startswith("bf"):
+            fs = l.strip().split("\t")
+            bf, number, geneLeft, distLeft, geneRight, distRight, upstream = fs
+            if distLeft < distRight:
+                gene = geneLeft
+            else:
+                gene = geneRight
+            blockToGene[number]=gene.split("_")[0]
+        else:
+            word, occs = l.strip().split("\t")
+            motifs.add(word)
+
+def findBestCombinations(motifs1, motifs2, blockToGene, fgGenes, notFgGenes, bgGenes):
+    lines = []
+    for motifData1 in motifs1:
+        for motifData2 in motifs2:
+            cc1, stats1, motif1, predCns1 = motifData1
+            cc2, stats2, motif2, predCns2 = motifData2
+            if motif2<motif1:
+                continue
+            predCns = predCns1.intersection(predCns2)
+            predGenes = set([blockToGene[c] for c in predCns])
+            stats = util.hitStats(bgGenes, predGenes, fgGenes, notFgGenes)
+            lines.append((stats.CC, stats, motif1+"+"+ motif2, predGenes))
+    lines.sort(key=operator.itemgetter(0), reverse=True)
+    return lines
+
+def findBestUnions(bestCombinations, fgGenes, notFgGenes, bgGenes):
+    for motifData1 in bestCombinations:
+        for motifData2 in bestCombinations:
+            if motifData1>=motifData2:
+                continue
+            cc1, stats1, desc1, genes1 = motifData1
+            cc2, stats2, desc2, genes2 = motifData2
+            predGenes = genes1.union(genes2)
+            stats = util.hitStats(bgGenes, predGenes, fgGenes, notFgGenes)
+            lines.append((stats.CC, stats, desc1+" or "+desc2, predGenes))
+    lines.sort(key=operator.itemgetter(0), reverse=True)
+    return lines
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infname = args[0]
+asFile = args[1]
+tissueFile = args[2]
+bgGenesFile = options.bgGenes
+
+# tissues
+if tissueFile=="all":
+    tissueKeywordList = ["all"]
+else:
+    tissueLines = tabfile.slurplist(tissueFile)
+    tissueKeywordList = [line.strip().split(",") for line in tissueLines]
+
+# motifs
+stderr.write("Reading words...\n")
+f = open(infname, "r")
+motifs, blockToGene, motifToBlockOccs = wordParser.parseIndex(f)
+
+for tissueKeywords in tissueKeywordList:
+    bestLines=[]
+    #print "====================="
+    print "Tissue: %s" % str(tissueKeywords)
+
+    # annotations
+    fgGenes, bgGenes = readAniseed(asFile, tissueKeywords, bgGenesFile)
+    #print "fgGenes, bgGenes", fgGenes, bgGenes
+    notFgGenes = bgGenes.difference(fgGenes) 
+    #print "notFgGenes", notFgGenes
+    stderr.write( "%s: Found %d foreground genes and %d background genes\n" % ("/".join(tissueKeywords), len(fgGenes), len(bgGenes)))
+    assert (len(fgGenes.intersection(bgGenes))==len(fgGenes))
+
+    maxMotifs = 1000
+    lines = findBestMotifs(1, motifToBlockOccs, blockToGene, fgGenes, notFgGenes, bgGenes)
+    printLines("best single motifs", lines, maxMotifs)
+    #printLines("worst single motifs", lines, 500, False)
+    #singlePredCache = lines.predCache
+    #bestSingles = [mot for cc, mot in lines[0:200]]
+    bestSingles = lines[0:200]
+    bestLines.extend(bestSingles)
+
+    lines = findBestMotifs(2, motifToBlockOccs, blockToGene, fgGenes, notFgGenes, bgGenes)
+    printLines("best double motifs", lines, maxMotifs)
+    #bestDoubles = [mot for cc, mot in lines[0:200]]
+    #doublePredCache = lines.predCache
+    bestDoubles = lines[0:200]
+    bestLines.extend(bestDoubles)
+
+    lines = findBestMotifs(3, motifToBlockOccs,  blockToGene,fgGenes, notFgGenes, bgGenes)
+    #printLines("best triple motifs", lines, maxMotifs)
+    bestTriples = lines[0:200]
+    bestLines.extend(bestTriples)
+
+    lines = findBestCombinations(bestSingles, bestSingles, blockToGene, fgGenes, notFgGenes, bgGenes)
+    printLines("best combinations of best singles", lines, maxMotifs)
+    printLines("worst combinations of best singles", lines, 100, False)
+    bestCombinations = lines[:200]
+    bestLines.extend(bestCombinations)
+
+    lines = findBestCombinations(bestDoubles, bestSingles, blockToGene, fgGenes, notFgGenes, bgGenes)
+    #printLines("best combinations of best singles and best doubles", lines, maxMotifs)
+    bestLines.extend(lines[:200])
+
+    bestLines.sort(key=operator.itemgetter(0), reverse=True)
+    printLines(None, bestLines, 1, True, True, fgGenes, bgGenes, tissue="/".join(tissueKeywords))
+
+    # try to take unions of best combinations to increase CC
+    #lines = findBestUnions(bestCombinations, fgGenes, notFgGenes, bgGenes)
+    #printLines("best unions of best single combinations", lines, maxMotifs)
+    #bestUnions = lines[:200]
+    #bestLines.extend(lines[:200])
+
+    # try to take unions of best combinations to increase CC
+    #lines = findBestUnions(bestUnions, fgGenes, notFgGenes, bgGenes)
+    #bestLines.extend(lines[:200])
+    #printLines("best unions of best unions of best single combinations", lines, maxMotifs)
+
+

@@ -1,0 +1,60 @@
+#!/usr/bin/python
+
+# === importing of modules
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] queryHashFile targetHashFile - display differences between two key-value lists that can be 1:n ") 
+
+parser.add_option("-d", "--diff", dest="diff", action="store_true", help="print only if values for a key are different") 
+(options, args) = parser.parse_args()
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+
+# data input
+onlyDiff = options.diff
+f1, f2 = args
+stderr.write("Reading file1\n")
+hash1 = tabfile.slurpdictlist(f1)
+stderr.write("Reading file2\n")
+hash2 = tabfile.slurpdictlist(f2)
+
+# processing
+stderr.write("Processing\n")
+keys1 = set(hash1.keys())
+keys2 = set(hash2.keys())
+allkeys = keys1.union(keys2)
+
+for key in allkeys:
+    if key not in hash1:
+        print "%s absent from query" % key
+        continue
+    if key not in hash2:
+        print "%s absent from target" % key
+        continue
+    vals1 = set(hash1[key])
+    vals2 = set(hash2[key])
+    inters = vals1.intersection(vals2)
+
+    if len(inters)==len(vals1)==len(vals2):
+        print "%s completeMatch" % key
+    if len(inters)==0:
+        print "%s diff allDifferent query=%s target=%s" % (key, ",".join(vals1), ",".join(vals2))
+    elif len(inters)!=len(vals1) or len(inters)!=len(vals2):
+        if len(vals1) > len(vals2):
+            type="queryBigger"
+        else:
+            type="targetBigger"
+        print "%s diff partialMatch querySize=%d targetSize=%d overlap=%d type=%s query=%s target=%s" % (key, len(vals1), len(vals2), len(inters), type, ",".join(vals1), ",".join(vals2))
+    
+
+
+

@@ -1,0 +1,40 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import Fasta
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - convert vista fasta alignment files to semi-UCSC-compatible fasta files") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-1", "--org1", dest="org1", action="store", help="dbname of 1st species", default="org1") 
+parser.add_option("-2", "--org2", dest="org2", action="store", help="dbname of 2nd species", default="org2") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if len(args)<2: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+ofh = open(args[1], "w")
+
+orgnames = [options.org1, options.org2]
+stderr.write("Reading maf/fasta sequences...\n")
+seqs = Fasta.readFastaAsList(filename)
+for i in range(0, len(seqs)):
+    fs = seqs[i].fullid.split()
+    if fs[5]=="(-)":
+        revComp=True
+    else:
+        revComp=False
+    id = "%s range=%s revComp=%s" % (orgnames[i % 2], fs[4], str(revComp))
+    ofh.write(">%s\n" % id)
+    ofh.write(seqs[i].nucl)
+    ofh.write("\n")
+
+ofh.close()

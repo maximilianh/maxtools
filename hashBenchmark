@@ -1,0 +1,273 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] predHash refHash - compare two hashes of objects associated to values (tab separted lists of object<tab>value), calculate Precision, Recall and F1 and various other options to compare the two datasets")
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-q", "--quiet", dest="quiet", action="store_true", help="do not output warning messages")
+parser.add_option("-v", "--verbose", dest="verbose", action="store_true", help="output a lot of messages to stderr")
+parser.add_option("", "--verboseErrors", dest="verboseErrors", action="store_true", help="if verbose: only output errors, suppress verbose for perfect matches")
+parser.add_option("", "--outputCounts", dest="outputCounts", action="store_true", help="only output the number of values associated in each file and the percentage of matches (format is: object, predCount, refCount, precision)") 
+parser.add_option("-t", "--errFile", dest="errFile", action="store", help="for all non-perfect matches, output the details of the error (predicted, expected) to a separate file") 
+parser.add_option("", "--noMatchFile", dest="noMatchFile", action="store", help="output the list of objects that have no prediction at all but some reference")
+parser.add_option("", "--partialMatchErrors", dest="errorFilePartialMatchOption", action="store_true", help="if ERRFILE: consider partial matches as correct, print only something to errorfile is there is a complete mismatch.") 
+parser.add_option("", "--resultTable", dest="resultTable", action="store", help="output a table with the comparison results for each object")
+parser.add_option("", "--pmin", dest="pmin", action="store", type="int", help="limit to objects that have >= x values associated in prediction")
+parser.add_option("", "--pmax", dest="pmax", action="store", type="int", help="limit to objects that have <= x values associated in prediction")
+parser.add_option("", "--rmin", dest="rmin", action="store", type="int", help="limit to objects that have >= x values associated in reference")
+parser.add_option("", "--rmax", dest="rmax", action="store", type="int", help="limit to objects that have <= x values associated in reference")
+parser.add_option("", "--tablePrefix", dest="tablePrefix", action="store", type="string", help="output in table format and prefix row with this string")
+parser.add_option("", "--limitRefValues", dest="limitRefValues", action="store", type="str", help="limit to objects that are associated to certain values in the reference file, comma-separated list, e.g. in cases where we can exclude some references because we could never predict them anyways")
+parser.add_option("", "--objType", dest="objType", action="store", type="str", help="type of things that are benchmarked, default is %default", default="document")
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def printResults():
+    if objects==0:
+        print "error: number of %s in common between prediction and reference is zero" % objType
+        exit(1)
+
+    if TP+FP > 0:
+        Prec    = float(TP) / (TP + FP)
+    else:
+        print "Warning: Cannot calculate Prec because TP+FP = 0"
+        Prec = 0
+
+    if TP+FN > 0:
+        Recall  = float(TP) / (TP + FN)
+    else:
+        print "Warning: Cannot calculate Recall because TP+FN = 0"
+        Recall = 0
+        
+    if Recall>0 and Prec>0:
+        F       = 2 * (Prec * Recall) / (Prec + Recall)
+    else:
+        print "Warning: Cannot calculate F because Recall and Prec = 0"
+        F = 0
+
+    if tablePrefix:
+        Prec = "%2.2f" % Prec
+        Recall = "%2.2f" % Recall
+        F = "%2.2f" % F
+        print "Run\tN\tTP\tFP\tFN\tPrec\tRecall\tF"
+        print "\t".join([str(x) for x in [tablePrefix, predCount, TP, FP, FN, Prec, Recall, F]])+"\n"
+    else:
+        print "Number of %ss in prediction set %s: %d" % (objType, file1, len(predDict))
+        print "Number of total %s/value assignments in prediction set: %d" % (objType, assCount)
+        print "Average number of predicted values per %s in prediction set: %f" % (objType, float(assCount) / len(predDict))
+        print
+        print "Number of %s in reference set %s: %d" % (objType, file2, len(refDict))
+        print "Number of total %s/value assignments in reference set: %d" % (objType, refValCount)
+        print "Average number of predicted values per %ss in reference set: %f" % (objType, float(refValCount) / len(refDict))
+        print
+        print "Number of %ss with common key in prediction set and reference set: %d" % (objType, len(set(predDict).intersection(set(refDict))))
+        if pmax or rmax:
+            print
+        if pmax:
+            print "Filtering: Analysis is limited to %ss where count(predictions) <= %d  in prediction " % (objType, pmax)
+        if rmax:
+            print "Filtering: Analysis is limited to %ss where count(references) <= %d times " % (objType, rmax)
+
+        print "Number of %ss considered: %d" % (objType, objects)
+        print
+        print "Details on a per-prediction-basis"
+        print "  - Number of predictions: %d" % predCount
+        print "  - N=%d, TP=%d, FP=%d, FN=%d, Prec=%f, Recall=%f, F=%f" % (predCount, TP, FP, FN, Prec, Recall, F)
+        print "TP : correct predictions"
+        print "FP : incorrect predictions"
+        print "FN : missed targets"
+        print "Prec : correct predictions relative to all predictions"
+        print "Recall : correct predictions relative to targets"
+        print
+        print "Details on a per-%s-basis:" % objType
+        print "- Perfect predictions: %d, %f %%" % (completeMatch, (float(completeMatch) / objects))
+        print "- At least one correct prediction: %d, %f %%" % (atLeastOneHit, (float(atLeastOneHit) / objects))
+        print "- Not a single correct prediction: %d, %f %%" % (completeMismatch, (float(completeMismatch) / objects))
+        print "- Over- or underpredicting?"
+        print "  - %s with too few predictions: %d, %f %%" % (objType, notEnoughPred, (float(notEnoughPred) / objects))
+        print "  - %s with too many predictions: %d, %f %%" % (objType, tooManyPred, (float(tooManyPred) / objects))
+        print
+
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+# parse options
+file1, file2 = args
+quiet = options.quiet
+verbose = options.verbose
+verboseErrors = options.verboseErrors
+errFile = options.errFile
+errorFilePartialMatchOption = options.errorFilePartialMatchOption
+pmax = options.pmax
+rmax = options.rmax
+pmin = options.pmin
+rmin = options.rmin
+limitRefValues = options.limitRefValues
+resultTable = options.resultTable
+outputCounts = options.outputCounts
+tablePrefix = options.tablePrefix
+objType = options.objType
+noMatchFname = options.noMatchFile
+
+if limitRefValues:
+    limitRefValues = set(limitRefValues.split(","))
+
+# prep output files 
+if resultTable:
+    resultFh = open(resultTable, "w")
+
+if errFile:
+    errFh = open(errFile, "w")
+    #headers = ["Object", "Prediction", "Reference", "False Positives", "False Negatives", "PartialyMatch?"]
+    headers = ["Object", "Prediction", "Reference", "TruePositives", "FalsePositives", "FalseNegatives"]
+    errFh.write("\t".join(headers)+"\n")
+
+if outputCounts:
+    data = ["objectId", "predCount", "refCount", "Precision"]
+    print "\t".join(data)
+
+# read input files
+if not quiet:
+    stderr.write("Reading prediction hash...\n")
+predDict = tabfile.slurpdictset(file1)
+assCount = 0
+for key, values in predDict.iteritems():
+    assCount+=len(values)
+
+if not quiet:
+    stderr.write("Reading reference hash...\n")
+refDict = tabfile.slurpdictset(file2)
+
+if noMatchFname:
+    nmfh = open(noMatchFname, "w")
+    noPredSet = set(refDict.keys()).difference(predDict)
+    for p in noPredSet:
+        nmfh.write("%s\n" % p)
+
+# prepare counters
+refValCount = 0
+for key, values in refDict.iteritems():
+    refValCount+=len(values)
+
+TP, FN, FP = 0, 0, 0
+objects = 0
+atLeastOneHit = 0
+
+completeMatch = 0
+completeMismatch = 0 
+tooManyPred = 0
+notEnoughPred = 0
+limitPassed = 0
+predCount = 0 
+
+# iterate over objects and update counters
+for obj, predSet in predDict.iteritems():
+    perfectMatch=False
+    partialMatch=False
+
+    if pmax and not len(predSet)<=pmax:
+        if verbose:
+            stdout.write("warning: count of %s is > %d in prediction set, ignoring this pbject\n" % (obj, pmax))
+        continue
+
+    if pmin and not len(predSet)>=pmin:
+        if verbose:
+            stdout.write("warning: count of %s is < %d in prediction set, ignoring this pbject\n" % (obj, pmin))
+        continue
+
+    if obj not in refDict:
+        #if verbose:
+            #stdout.write("warning: %s not in reference, ignoring this object\n" % obj)
+        continue
+    else:
+        refSet = refDict[obj]
+
+    if rmax and not len(refSet)<=rmax:
+        if verbose:
+            stdout.write("warning: count of %s is more than %d in reference, ignoring this pbject\n" % (obj, rmax))
+        continue
+
+    if rmin and not len(refSet)>=rmin:
+        if verbose:
+            stdout.write("warning: count of %s is < %d in reference, ignoring this pbject\n" % (obj, rmax))
+        continue
+
+    # check if all ref values are in the allowed set 
+    if limitRefValues and len(refSet.intersection(limitRefValues))!=len(refSet):
+        if verbose:
+            stdout.write("info: obj %s has values in refs (%s) that are not allowed by limitRefValues (%s), ignoring this object\n" % (obj, str(refSet), str(limitRefValues)))
+        continue
+
+    objects+=1
+
+    predCount += len(predSet)
+    tpSet = predSet.intersection(refSet)# true positives:  are in pred and in reference
+    fnSet = refSet.difference(predSet)  # false negatives: are in reference but not in prediction
+    fpSet = predSet.difference(refSet)  # false positives: are in prediction but not in refernce
+    #tnSet = refSet.difference()        # true  positives: are not in prediction and not in reference
+
+    TP += len (tpSet)
+    FN += len (fnSet) 
+    FP += len (fpSet) 
+    if len(tpSet)>0:
+        atLeastOneHit+=1
+        partialMatch=True
+    if len(tpSet)==len(predSet)==len(refSet):
+        completeMatch+=1
+        perfectMatch=True # set flag to avoid checking several times below
+    if len(tpSet)==0:
+        completeMismatch+=1
+    if len(predSet)>len(refSet):
+        tooManyPred+=1
+    if len(predSet)<len(refSet):
+        notEnoughPred+=1
+
+    if verbose and (verboseErrors==None or (verboseErrors and not perfectMatch)):
+        stdout.write ("object=%s\n" % obj)
+        stdout.write ("  TP, correct: %s\n" % ",".join(tpSet))
+        stdout.write ("  FP, wrong: %s\n" % ",".join(fpSet))
+        stdout.write ("  FN, missed: %s\n" % ",".join(fnSet))
+        if len(tpSet)==0:
+            stdout.write("Desc=complete mismatch\n")
+        elif len(tpSet)==len(predSet)==len(refSet):
+            stdout.write("Desc=complete match \n")
+        elif len(predSet)>len(refSet):
+            stdout.write("Desc=too many predictions\n")
+        elif len(predSet)<len(refSet):
+            stdout.write("Desc=not enough predictions\n")
+        stdout.write("\n")
+
+    # if errFilePartMatch is set: write only if not perfect match, otherwise write if not partialMatch
+    if (errFile and not perfectMatch and not errorFilePartialMatchOption) or \
+        (errFile and not partialMatch and errorFilePartialMatchOption):
+        data = [obj, ",".join(predSet), ",".join(refSet), ",".join(tpSet), ",".join(fpSet), ",".join(fnSet)]
+        errFh.write ("\t".join(data))
+        errFh.write ("\n")
+
+    if resultTable:
+        resultFh.write(obj+"\t")
+        if perfectMatch:
+            resultFh.write("1\n")
+        else:
+            resultFh.write("0\n")
+    
+    # output per-object data
+    if outputCounts:
+        #printCounts()
+        data = [obj, len(predSet), len(refSet), float(len(tpSet)) / len(predSet)]
+        print "\t".join([str(d) for d in data])
+
+# output overall results
+if not outputCounts:
+    printResults() # subroutine which uses all global vars, bad progr style
+

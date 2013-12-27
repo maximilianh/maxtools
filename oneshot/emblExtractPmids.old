@@ -1,0 +1,50 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import os.path
+import sets
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] - parse embl files and output them as a pmid -> taxon table")
+
+#parser.add_option("-m", "--maxMatches", dest="maxMatches", action="store", help="ignore sequences (not pmids) with more than Xmatches per genome, default %default", default=MAXMATCHES, metavar="X", type="int")
+(options, args) = parser.parse_args()
+
+# == MAIN ==
+
+files = args
+
+if len(args)==0:
+    parser.print_help()
+    exit(1)
+
+for f in files:
+
+    stderr.write("Reading file %s\n" % f)
+    acc = None
+    lines = open(f).read().splitlines()
+
+    stderr.write("Parsing file %s\n" % f)
+    for line in lines:
+
+        #AC   AB000001;
+        if line.startswith("AC"):
+            if acc!=None and org!=None and len(refs)!=0:
+                for ref in refs:
+                    print "%s\t%s\t%s" % (ref, org, acc)
+            acc = line.split()[1].strip(";")
+            org = None
+            refs = sets.Set()
+
+        #OS   Thanatephorus cucumeris
+        if line.startswith("OS"):
+            org = line.split("   ")[1]
+
+        #RX   PUBMED; 9339350.
+        if line.startswith("RX   PUBMED"):
+            pmid = line.split()[2].strip(".")
+            refs.add(pmid)
+
+    for ref in refs:
+        print "%s\t%s\t%s" % (ref, org, acc)

@@ -1,0 +1,44 @@
+#!/usr/bin/python
+
+import bed
+import sys
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] args\nReads bed from stdin and moves start fields of features by a couple of bases according to a second file which has the format featurename-space-distance. (features have to bed sorted, use ucsc's bedSort)") 
+
+#parser.add_option("-w", "--winsize", dest="winsize", help="size of clustering window [default: %default]", type="int", default="50", metavar="SIZE")
+#parser.add_option("-n", "--name", dest="names", action="append", help="specify name to search for (can be used multiple times), separate number of minimal number of instances in window separated with ':', e.g. V$FOX_Q2:2", type="string", metavar="STRING") 
+#parser.add_option("-d", "--mindist", dest="distcond", action="append", help="specify minimum distance between two names, format name1,name2=dist, e.g. V$FOX-V$PITX_Q2:50", type="string", metavar="NAME1,NAME2=DIST-DIST") 
+#parser.add_option("-q", "--quiet", dest="quiet", action="store_true", help="supress debugging output",default="False") 
+#parser.add_option("-t", "--tripledist", dest="triplecond", action="append", help="triple distance condition, e.g. -t f1,f2,f3=10-20,30-40, NO REVERSE STRAND YET", type="string", metavar="" ) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+     
+# ==== MAIN ====
+if len(args)==0:
+    sys.stderr.write("\nPlease specify a distance-file. Use '-h' for help. \n")
+    sys.exit(1)
+
+##if options.distcond==None and options.names==None and options.triplecond==None:
+#    sys.stderr.write("\nYou have to specify at least one condition. Use -h for help. \n")
+#    sys.exit(1)
+#
+
+# read dist file
+distfile = open(args[0], "r").readlines()
+dists = {}
+for line in distfile:
+    (name, dist) = line.split()
+    dists[name] = int(dist)
+    
+for line in sys.stdin:
+    fields = line.split()
+    (seq, begin, end, name) = fields[0:4]
+    if len(fields)>4:
+        rest = fields[4:]
+    else:
+        rest = []
+    print seq, str(int(begin)+dists.get(name,0)), end, name, " ".join(rest)

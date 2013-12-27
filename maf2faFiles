@@ -1,0 +1,74 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+from re import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] mafFilename faPrefix  - converts ucsc maf format to multi-fasta. outputfiles have the format prefix-(numberOfalignment).fa.") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-o", "--oneFile", dest="oneFile", action="store_true", help="concat all sequences and output to only one single file") 
+parser.add_option("-n", "--removeGaps", dest="removeGaps", action="store_true", help="remove Gaps") 
+(options, args) = parser.parse_args()
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+f = open(argv[1], 'r')
+fPrefix = argv[2]
+lines = f.readlines()
+
+# remove header
+stop=0
+while lines[0].startswith("#"):
+  lines.pop(0)
+
+aligncount = 0
+if options.oneFile:
+    faFile = open(fPrefix, "w")
+else:
+    faFile = None
+size = 0
+#convert lines
+for line in lines:
+    # filter out newlines
+    if line.strip()=="":
+      continue
+     
+    # start new file if a-Line
+    if line.startswith("a "):
+      if not options.oneFile:
+          if not faFile is None:
+              faFile.close()
+          fname = fPrefix+"%03d"%aligncount+".fa"
+          aligncount = aligncount + 1
+          faFile = open(fname, 'w')
+      #jif size>0:
+      continue
+
+    if line.startswith("s"):
+        fields = line.split()
+        if "." in fields[1]:
+            srcparts = fields[1].split(".")
+            org  = srcparts[0]
+            chrom = srcparts[1]
+        else:
+            org = chrom = fields[1]
+        start = fields[2]
+        size = fields[3]
+        strand = fields[4]
+        srcSize = fields[5]
+        seq = fields[6]
+        if options.removeGaps:
+            seq = seq.replace("-", "")
+       
+        faFile.write(">"+org+" range="+chrom+":"+start+"-"+(str(int(start)+int(size)))+"\n") 
+        faFile.write(seq+"\n")
+
+
+print "Wrote "+str(aligncount)+" files to "+fPrefix+"xxx.fa."
+
+

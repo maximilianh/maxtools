@@ -1,0 +1,103 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, tabfile, string, os, types
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] refFile predFiles - obtain TP/FP/TN for files in key-tab-0/1 format") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-n", "--headers", dest="headers", action="store_true", help="ignore the first line of all input files") 
+parser.add_option("-o", "--output", dest="output", action="store_true", help="write tp, fp, fn, tn IDs to four files, TP.txt, FN.txt, ...", default=False)
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+class Stats:
+    pass
+
+def printHeaders(refDict):
+    refPos = len([x for x in refDict.values() if x==1])
+    refNeg = len(refDict)-refPos
+    print "##reference: pos=%d, neg=%d" % (refPos, refNeg)
+    headers = "#Name,N,pos,neg,TP,FP,FN,TN,Sens,Spec,F,PPV,Acc,Prec,GainPrec".split(",")
+    print string.join(headers, "\t")
+
+def printData(s):
+    " print list as tab sep line, take care of floats "
+    data = [s.fname, s.N, s.pos, s.neg, s.TP, s.FP, s.FN, s.TN, s.Sens, s.Spec, s.F, s.PPV, s.Acc, s.Prec, s.GainPrec]
+    strList = []
+    for num in data:
+        if type(num)==types.IntType:
+            string = str(num)
+        elif type(num)==types.FloatType:
+            string = "%.2f" % num
+        else:
+            string = num
+        strList.append(string)
+    print "\t".join(strList)
+
+fileHandles = {}
+def output(doOutput, type, id):
+    " write ids of tp, fp, fn, tn to four files in the current dir "
+    global fileHandles
+    if doOutput:
+        if len(fileHandles)==0:
+            for name in ["TP", "FP", "FN", "TN"]:
+                fileHandles[name] = open(name+".tab", "w")
+        fileHandles[type].write(id+"\n")
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+refFile = args[0]
+predFiles = args[1:]
+
+s = Stats() # 
+refDict = tabfile.slurpdict(refFile, headers=options.headers, asInt=True)
+s.N = len(refDict)
+s.pos = len([x==1 for x in refDict.values()])
+s.neg = s.N-s.pos
+printHeaders(refDict)
+
+for predFile in predFiles:
+    predDict = tabfile.slurpdict(predFile, asInt=True, headers=options.headers)
+    assert(len(predDict)==len(refDict))
+    s.pos = len([x for x in predDict.values() if x==1])
+    s.neg = s.N-s.pos
+    s.TP, s.FP, s.FN, s.TN = 0, 0, 0, 0
+    s.fname = os.path.splitext(os.path.basename(predFile))[0]
+    for key, val in predDict.iteritems():
+        pred = predDict[key]
+        ref  = refDict[key]
+        tuple = (pred, ref)
+        if   tuple==(1, 1):
+            s.TP += 1
+            output(options.output, 'TP', key)
+        elif tuple==(0, 1):
+            s.FN += 1
+            output(options.output, 'FN', key)
+        elif tuple==(0, 0):
+            s.TN += 1
+            output(options.output, 'TN', key)
+        elif tuple==(1, 0):
+            s.FP += 1
+            output(options.output, 'FP', key)
+    logging.debug("TP=%d, FP=%d, FN=%d, TN=%d" % (s.TP, s.FP, s.FN, s.TN))
+
+
+    s.Sens = float(s.TP) / (s.TP + s.FN)
+    s.Spec = float(s.TN) / (s.TN + s.FP)
+    s.F    = 0.5*s.Sens+0.5*s.Spec
+    s.PPV  = float(s.TP) / (s.TP + s.FP)
+    s.Acc  = float(s.TP + s.TN) / s.N
+    s.Prec = float(s.TP + s.FN) / s.N
+    s.r    = float(s.pos) / s.N
+    s.GainPrec = s.Prec / s.r
+    printData (s)
+        

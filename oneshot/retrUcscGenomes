@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+
+# Maximilian Haussler, Manchester University, 1/2010
+
+from sys import *
+from optparse import OptionParser
+import os, re
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - download most current version of all UCSC genomes on hgwdownload via rsync") 
+
+parser.add_option("-t", "--test", dest="test", action="store_true", help="test: do not download, only show urls that would be downloaded and final paths") 
+parser.add_option("-f", "--forceVersion", dest="forceVersion", action="append", help="do not use the newest version of given assembly but force a specified version, e.g. -f hg=18, can be specified several times", default=None) 
+(options, args) = parser.parse_args()
+
+testMode = options.test
+forceVersionStrings = options.forceVersion
+
+# ----------- MAIN --------------
+
+# parse the force version string parameters
+forceVersions = {}
+if forceVersionStrings:
+    for forceElement in forceVersionStrings:
+        org, version = forceElement.split("=")
+        forceVersions[org]=int(version)
+
+# download info with rsync and parse rsync output
+print "Getting file information via rsync..."
+rsyncOutput = os.popen("rsync -r rsync://hgdownload.cse.ucsc.edu/gbdb/")
+genomeVersions = {}
+for line in rsyncOutput:
+    line = line.strip()
+    if line.endswith(".2bit"):
+        fields = line.split()
+        filePath = fields[4]
+        basename = os.path.basename(filePath)
+        genome = basename.replace(".2bit","")
+        try:
+            version = int(re.compile("([0-9]*)$").search(genome).groups(0)[0])
+        except:
+            print "Does not look like an assembly name: filename %s" % filePath
+            continue
+
+        organism = genome.strip("0123456789")
+        #print filePath, genome, organism, version
+        genomeVersions.setdefault(organism, set()).add(( version, filePath) )
+
+files = []
+for org, assList in genomeVersions.iteritems():
+    # select highest assembly version file for each organism
+    if org in forceVersions:
+        version = forceVersions[org]
+        filePath = org+str(version)+"/"+org+str(version)+".2bit" # try to guess the filename
+    else:
+        versions = [version for version, filePath in assList]
+        filePaths = [filePath for version, filePath in assList]
+        maxAss = max(versions)
+        maxAssIdx = versions.index(maxAss)
+        filePath = filePaths[maxAssIdx]
+    files.append(filePath)
+
+# download files to current dir
+baseUrl = "rsync://hgdownload.cse.ucsc.edu/gbdb/"
+fileUrls = [baseUrl+filePath for filePath in files]
+fileUrlString = " ".join(fileUrls)
+cmd = "rsync -vzP --progress "+fileUrlString+"  ./"
+ret = os.system(cmd)
+if ret!=0:
+    print "error occured: %s" % cmd
+    exit(1)
+
+    

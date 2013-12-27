@@ -1,0 +1,19 @@
+# this scripts needs alias logmenu=source ~/usr/bin/scripts/logmenu 
+# in your bashrc otherwise the cmds will not find the way into your history
+#!/bin/bash
+if [ "$1" == "-h" -o -z $1 ]; then
+    echo logmenu: display the file \"log\" as a menu and let the user choose a command to execute
+    echo uses the program \"dialog\"
+fi
+
+echo -n dialog --menu logfile 24 70 18\  > /tmp/menu
+cat .log | tr -d \' | gawk "{ ORS=\" \"; print NR, \"\'\" \$0 \"\'\" } " >> /tmp/menu
+
+. /tmp/menu 2> /tmp/menuresult
+line=`cat /tmp/menuresult`
+echo $line
+head -n $line .log | tail -n 1 > /tmp/line
+history -r /tmp/line
+. /tmp/line
+
+rm -f /tmp/line /tmp/menuresult /tmp/menu

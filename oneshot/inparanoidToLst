@@ -1,0 +1,49 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] infile organism1 organism2- convert inparanoid sql to normal tab delimited textfile") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+stderr.write("Reading infile...\n")
+f = open(filename, "r")
+clusters = {}
+# slurp in
+# cluster is a dict
+# clusters[clustid][species][list of (geneid, score, clustid)]
+for l in f:
+    fs = l.split()
+    cluster = clusters.setdefault(fs[0], {}).setdefault(fs[2], {})
+    cluster[fs[4]] = fs[4], fs[3], fs[1] # geneid, score, clustid
+    #clusters.setdefault(fs[0], {}).setdefault(fs[2], []).append([fs[4], fs[3], fs[1]]) # geneid, score, clustid
+
+# spit out
+for clustid, cluster in clusters.iteritems():
+    #org1 = cluster.keys()[0]
+    #org2 = cluster.keys()[1]
+    org1 = args[1]
+    org2 = args[2]
+    for gene1 in cluster[org1]:
+        id1, score1, clustid1 = cluster[org1][gene1]
+        for gene2 in cluster[org2]:
+            id2, score2, clustid2 = cluster[org2][gene2]
+	    if id1!=id2:
+		print "\t".join([id1, id2,  clustid1, score1, score2])
+        
+
+
+

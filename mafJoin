@@ -1,0 +1,166 @@
+#!/usr/bin/perl  
+use strict;
+$|++;                       # force auto flush of output buffer
+
+use Bio::AlignIO;
+use Bio::SeqIO;
+use Bio::FeatureIO;
+use Bio::SeqFeature::Collection;
+use Bio::Range;
+
+my %options;
+my $BASESEQ = 1;
+my $COMPSEQ = 2;
+
+
+# -------- FUNCTIONS -----------------
+sub options () {
+    use Getopt::Std;
+    getopts("h",\%options) or die("unrecognized option.");
+    if ($options{"h"}) {
+        print << "END";
+        $0 <options> filename:  join maf-fragments if they are adjacent on the base species
+options:
+   -h           : this help
+END
+        exit(1);
+    }
+
+}
+
+sub fillGapsRightSide() {
+    my $a1 = shift;
+    my $a2 = shift;
+    # replace seqs from a1 (that are not found in a2) with new long gaps
+    foreach my $seq ($a1->each_seq()) {
+        my @missSeq = $a2->each_seq_with_id($seq->id());
+        if (@missSeq==0) {
+            #printf "Add Gap sequence ".$seq->id()."\n";
+            #$a1->remove_seq($seq);
+            my $str = $a2->get_seq_by_pos(1)->seq;
+            $str =~ tr/[actgACTG]/\-/;
+            my $newseq = new Bio::LocatableSeq(-seq => $str, -id => $seq->id, -start=>$seq->start, -end=>$seq->end, -strand=>$seq->strand);
+            $a2->add_seq($newseq);
+        }
+    }
+    return $a2;
+}
+
+# join two given alignments into one and return it, drop sequencesthat are missing
+# on the second alignment
+sub joinAln() {
+    my $a1 = shift;
+    my $a2 = shift;
+    my $newAln = my $aln = new Bio::SimpleAlign();
+
+    $a2 = &fillGapsRightSide($a1,$a2);
+    $a1 = &fillGapsRightSide($a2,$a1);
+
+    # concat
+    foreach my $seq1 ( $a1->each_seq() ) {
+        # get seqs for given id from a1
+        my @seqs2 = $a2->each_seq_with_id($seq1->id());
+        if (@seqs2 > 1) {
+            die("ERROR: double organism in maf!\n");
+        }
+        # concat seqs
+        if (@seqs2 == 1) {
+            my $seq2 = $seqs2[0];
+            $seq1->direct_seq_set( $seq1->seq() . $seq2->seq() );
+            $seq1->end($seq2->end);
+            $a2->remove_seq($seq2);
+        }
+    }
+
+    return $a1;
+}
+sub printAln() {
+    my $aln=shift;
+    # print alignment
+    my $seq1 = $aln->get_seq_by_pos(1);
+    if (length($seq1->seq)==0) {
+        return;
+    }
+    print "a score=0\n";
+    foreach my $seq ( $aln->each_seq() ) {
+        printf "s %25s %15d %7d %1s %10d %s\n",$seq->id(), $seq->start-1, length($seq->seq), $seq->strand(), 900000000, $seq->seq();
+        #printf "s %25s %15d %7d %1s %10d %s\n",$seq->id(), $seq->start-1, $seq->end() - $seq->start() + 1, $seq->strand(), 900000000, $seq->seq();
+    }
+    print "\n";
+}
+
+sub getChrom() {
+    my $seq=shift;
+    my @parts = split(/\./, $seq->id);
+    my $chrom = @parts[1];
+    return $chrom;
+}
+# === MAIN =======
+&options();
+
+my $nal = 0;
+my $last = 0;
+my $joined = 0;
+if ($ARGV[0] eq "") {
+    print "first parameter needs to be maf-filename\n";
+    exit(1);
+}
+print STDERR  "Note that this script will fuse blocks even if they are not even CLOSE on the query species.";
+print STDERR  "You can safely ignore all coordinates on the query species.";
+print STDERR  "Reading file...\n";
+my $alignio = Bio::AlignIO->new(-file => $ARGV[0], -format => 'maf');
+
+print "##maf version=1\n";
+while(my $aln = $alignio->next_aln()){
+    #print STDERR "MAF$nal\n";
+    #print "aln\tno seq\ths-start\ths-end\taln-len\ths-len\tperc-id\t";
+
+    # ignore blocks with only one sequences (but mafFilter can do that as well)
+    if ($aln->no_sequences <=1) {
+        next;
+    }
+
+    my $base = $aln->get_seq_by_pos($BASESEQ);
+    my $comp = $aln->get_seq_by_pos($COMPSEQ);
+    my $baseChrom = &getChrom($base);
+    my $compChrom = &getChrom($comp);
+
+    # print info
+    $nal++;
+    #print "MAF$nal\t";
+    #print $base->start, "\t";
+    #print $base->end, "\t";
+    #print $aln->no_sequences, "\t";
+    #print $aln->len."\t";
+    #print $base->end - $base->start, "\t";
+    #printf "%d\t", $aln->identity();
+
+    # compare with last fragment
+    my $lastbase;
+    my $lastcomp;
+
+    if ($last != 0) {
+        $lastbase = $last->get_seq_by_pos($BASESEQ);
+        $lastcomp = $last->get_seq_by_pos($COMPSEQ);
+        my $lastBaseChrom = &getChrom($lastbase);
+        my $lastCompChrom = &getChrom($lastcomp);
+
+        #print $lastbase->end, $base->start(),"\n";
+        #print "base, chrom, lastBase, lastChrom: $baseChrom, $compChrom, $lastBaseChrom, $lastCompChrom\n";
+        if (($lastbase->end+1 == $base->start) && ($baseChrom eq $lastBaseChrom) && ($compChrom eq $lastCompChrom)) {
+            #print ("Joining\n");
+            $last=&joinAln($last,$aln);
+        }
+            else {
+                &printAln($last);
+                $last=$aln;
+            }
+        }
+    else {
+        $last = $aln;
+    }
+
+}
+if ($last!=0) {
+    &printAln($last);
+}

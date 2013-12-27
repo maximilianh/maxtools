@@ -1,0 +1,2 @@
+#!/bin/bash
+cat $1 | cut -f4 | sort -k4 | uniq -c | tr -s ' ' | sort -rn | gawk '{OFS="\t"; print $2, $1;}'

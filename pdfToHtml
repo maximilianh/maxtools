@@ -1,0 +1,121 @@
+#!/usr/bin/python
+
+
+from sys import *
+from optparse import OptionParser
+import os
+import shutil
+import os.path
+import time
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] pdfDir tmpDir inDir htmlDir: iterate over all files in pdfDir, convert them using tmpDir, copy them to inDir one by one, each time waiting until the corresponding html file has arrived in htmlDir") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-t", "--triggerFile", dest="triggerFile", action="store", help="File that is created to trigger OCR, default %default", default="/media/windows/startOcr") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def isEncrypted(pdfname):
+    return False
+    
+def execCmd(cmd):
+    ret = os.system(cmd)
+    stderr.write("running: %s\n" % cmd)
+    if ret != 0:
+        stderr.write("error while executing: %s.\n" % cmd)
+        exit(1)
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+triggerFile = options.triggerFile
+pdfDir, tmpDir, inDir, htmlDir = args
+files = os.listdir(pdfDir)
+pdfFiles = [f for f in files if f.endswith(".pdf")]
+
+for pdf in pdfFiles:
+    if isEncrypted(pdf):
+        os.system('echo mv %s ')
+        continue
+    pdfPath = os.path.join(pdfDir, pdf)
+    pdfBase = os.path.splitext(pdf)[0]
+
+    stop=False
+    # check if html file that starts with basename already exists in htmlDir
+    for f in os.listdir(htmlDir):
+	if f.startswith(pdfBase):
+	    stderr.write("Found %s, skipping %s\n" % (f, pdfBase))
+	    stop=True
+	    break
+    if stop:
+	continue
+
+    # cleaning tmpdir
+    execCmd("rm -f %s" % os.path.join(tmpDir, "*"))
+
+    # convert pdf to ppm files
+    stderr.write("Converting %s to pgm files into dir %s\n" % (pdfBase, tmpDir))
+    execCmd("pdftoppm -r 600 -gray %s %s" % (pdfPath, os.path.join(tmpDir,pdfBase)))
+
+    # convert ppm files to png files, remove ppms
+    stderr.write("Converting all files in %s to png and delete pgm\n" % (tmpDir))
+    lastPng=None
+    for f in os.listdir(tmpDir):
+        inpath = os.path.join(tmpDir, f)
+        outpath = os.path.join(tmpDir, os.path.splitext(f)[0]+".png")
+        execCmd("convert %s %s" % (inpath, outpath))
+        os.remove(inpath)
+        lastPng = f
+ 
+    # move from tmp to ocr indir
+    x = 0
+    for f in os.listdir(tmpDir):
+	#shutil.move(os.path.join(tmpDir,f),inDir)
+	src = os.path.join(tmpDir,f)
+	dest = inDir
+	execCmd("mv %s %s" % (src, dest))
+	x+=1
+ 
+    # trigger ocr
+    stderr.write("Creating file %s to start ocr\n" % (triggerFile))
+    f = open(triggerFile, "w")
+    f.write("000")
+    f.close()
+    execCmd("ls /media/windows/")
+
+    # now wait
+    files = os.listdir(htmlDir)
+    htmFiles = [f for f in files if f.endswith(".htm")]
+    origCount = len(htmFiles)
+    stderr.write("Waiting for %s new html files to appear in %s (old=%d, new=%d)\n" % (x, htmlDir, origCount, origCount+5))
+    while True:
+        time.sleep(1)
+	files = os.listdir(htmlDir)
+	htmFiles = [f for f in files if f.endswith(".htm")]
+	if len(htmFiles)==origCount+x:
+	    stderr.write("Found %d html files\n" % len(htmFiles))
+            break
+
+    # give ocr a little time to finish saving the last images
+    time.sleep(15)
+
+    # delete png files from tmp and indir
+    for f in os.listdir(tmpDir):
+        os.remove(os.path.join(tmpDir, f))
+    for f in os.listdir(inDir):
+        os.remove(os.path.join(inDir, f))
+
+    # move html files to target dir
+    #for f in os.listdir(outDir):
+    #shutil.move(os.path.join(outDir,f), htmlDir+"/")
+    #src = os.path.join(outDir,f)
+    #execCmd('cp "%s" "%s"' % (src, htmlDir))
+
+
+
+

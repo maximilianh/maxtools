@@ -1,0 +1,238 @@
+#!/usr/bin/perl
+
+# Downloads splite sites on peptides and positions of introns from ensembl for all (longest) transcripts from one species
+use strict;
+use Bio::EnsEMBL::DBSQL::DBAdaptor;
+use Bio::EnsEMBL::Compara::DBSQL::DBAdaptor;
+use vars qw(%opt);
+
+sub init()
+{
+   use Getopt::Std;
+   my $opt_string = 'v:b:hu:d:';
+   getopts( "$opt_string", \%opt ) or usage();
+   usage() if $opt{h} or @ARGV==0;
+}
+
+sub usage() {
+    print "ensSpliceAndIntrons: Download splice sites (on peptides) and introns between coding exons (on genome) from ensembl\n";
+    print "                     Reads transcript ids from stdin\n"; 
+    print "usage: cat trans.lst | ensSpliceSites [options] species peptideBedfile genomicIntronsBedfile\n";
+    print "options:\n";
+    #print "   -b <file> : write splice sites to this bedfile \n";
+    exit(1);
+}
+
+sub openFile() {
+    my ($fname, $desc) = @_ ;
+    printf STDERR "Writing $desc to $fname\n";
+    open BED,">$fname";
+    #truncate BED, 0;
+    #close BED;
+    return *BED;
+}
+
+
+#----------------------------------------------------------------------
+=head1 
+ NB:
+ I've stolen this source code from the ensembl api (pep_splice_sites) eand added print statements 
+ MAX 4/2007
+
+ bed output format for splice sites:
+ <transcriptid> <start> <end>
+ end = start +1 if splice site after start
+ start = pos - 1, end = pos + 1 if splice site ON pos
+ example:
+   # >test
+   # MEKATA
+   #(012345)
+ spliced ON 2 (K):
+ test 2 4
+ spliced BEFORE 2:
+ test 2 3
+
+=cut
+# -------------------------
+sub transcript_splices{
+  my ($trans, $SPLICEBED, $INTRONBED) = @_ ;
+  my $chrom = $trans->seq_region_name();
+  if ($chrom =~ /^[0-9XY].*/) # gna ...std ensembl chrom names hack
+      {$chrom="chr".$chrom};
+  if ($chrom =~ /chr[0-9][pq]/) { # hack for ucsc compat bed files for ascidians
+      $chrom =~ s/r/r0/;
+  }
+
+  my @exons = @{$trans->get_all_translateable_Exons};
+  my $transcript_id = $trans->stable_id;
+  #if (! $trans->translation) {
+  #      my $msg = "error: gene $transcript_id does not seem to have a peptide associated with it\n";
+  #      printf STDERR $msg;
+  #      open ERRLOG,">>error.log";
+  #      printf ERRLOG $msg;
+  #      return;
+  #}
+  #my $prot_id = $trans->translation->stable_id;
+  my @exonids;
+  my @exonseqs;
+  my %splice_site;
+  my $overlap_len = 0;
+  my $i;
+  my @spliceStarts;
+  my @spliceEnds;
+  my $pos=0;
+  my $lastExStart=-1;
+  my $lastExEnd=-1;
+  my $cIntron =0;
+
+  for my $exon (@exons){
+    $i++;
+    my $exon_id = $exon->stable_id || $i;
+    my $exon_len = $exon->length;
+    my $pep_seqlen = $exon->peptide($trans)->length;
+    my $exon_seq = $exon->peptide($trans)->seq;
+    my $exon_start = $exon->start();
+    my $exon_end = $exon->end();
+    my $intron_start = 0;
+    my $intron_end = 0;
+
+    my $strand = $exon->strand();
+    #print STDERR "STRAND = $strand\n";
+    if ($strand==1) {
+        $intron_start = $lastExEnd;
+        $intron_end = $exon_start-1;
+    }
+    else {
+        $intron_start = $exon_end;
+        $intron_end = $lastExStart-1;
+    }
+
+    if ($lastExStart!=-1) {
+        #print STDERR "Intron: $exon_id : $intron_start - $intron_end\n";
+    }
+    #print STDERR "EXON: $exon_id : $exon_start - $exon_end\n";
+    $lastExStart = $exon_start;
+    $lastExEnd = $exon_end;
+
+    # for printing to bed, see below
+    if ($strand==-1) {
+        $strand = "-";
+    }
+    else {
+        $strand = "+";
+    }
+
+    # remove the first char of seq if overlap ($exon->peptide()) return full overlapping exon seq   
+    if ($overlap_len = (($exon_len + $overlap_len ) %3)){          # there is an overlap splining occurs ON the codon (!)
+        #$overlap = $pos - 1;
+        chop $exon_seq;
+        if ($intron_start > 0 && $intron_end > 0) { # we don't print if we are on first exon as there is no intron yet
+           printf $SPLICEBED "%s\n", join "\t", ($transcript_id, $pos-1, $pos+1, $exon_id, 0, $strand);
+           printf $INTRONBED "%s\n", join "\t", ($chrom, $intron_start, $intron_end, $exon_id, 0, $strand);
+           $cIntron+=1;
+      }
+    } else { # this is a normal exon, splicing does not occur WITHIN the codon
+      $overlap_len = 0; 
+      if ($intron_start > 0 && $intron_end > 0) { # we don't print if first exon
+           printf $SPLICEBED "%s\n", join "\t", ($transcript_id, $pos, $pos+1, $exon_id, 0, $strand, $chrom, $intron_start, $intron_end);
+           printf $INTRONBED "%s\n", join "\t", ($chrom, $intron_start, $intron_end, $exon_id, 0, $strand);
+           $cIntron+=1;
+      }
+    }        
+    $pep_seqlen -= 1 if ($overlap_len);
+    $pos += $pep_seqlen;
+    #push @exonids, $exon_id;
+    #push @exonseqs, $exon_seq;
+
+  }  # for each exon
+
+    #my $pep_splice = \%splice_site;
+    #return $pep_splice;
+    #my $exonidstr = join(",", @exonids);
+    #my $exonseqs = join(" ", @exonseqs);
+    #my $transId = $trans->stable_id;
+    #print ">$prot_id exons=".$exonidstr." transcript=$transId\n";
+    #print $exonseqs."\n";
+    print STDERR "Written $cIntron splice sites / introns to bedfiles\n";
+
+
+}  # function
+
+
+# MAIN -----------------------------------
+&init();
+print STDERR "Loading strange Ensembl registry...";
+Bio::EnsEMBL::Registry->load_registry_from_db( -host => 'ensembldb.ensembl.org', -user => 'anonymous', -port => 3306);
+print STDERR "OK\n";
+
+my $species=@ARGV[0];
+my $splicefile = @ARGV[1];
+my $intronfile = @ARGV[2];
+
+print STDERR "Getting transcript adaptor...";
+my $trans_adaptor = Bio::EnsEMBL::Registry->get_adaptor($species, 'core', 'Transcript');
+print STDERR "OK\n";
+
+open SPLICEBED, "> $splicefile" or die "can't write to $splicefile";
+open INTRONBED, "> $intronfile" or die "can't write to $intronfile";
+
+print STDERR "Reading IDs from stdin...\n";
+open ERRLOG,">error.log";
+
+while (<STDIN>) {
+    chop;
+    my $transId = $_;
+    # get object for transcript ID
+    print STDERR "Searching transcript $transId\n";
+    my $trans = $trans_adaptor->fetch_by_stable_id($transId);
+    if (! $trans) {
+        my $msg = "error: cannot find trans with gene/trans id $transId in species $species\n";
+        printf STDERR $msg;
+        open ERRLOG,">>error.log";
+        printf ERRLOG $msg;
+        next;
+    }
+    printf STDERR "Found trans %s in $species\n", $trans->stable_id() ;
+
+    &transcript_splices($trans, *SPLICEBED, *INTRONBED);
+}
+
+close SPLICEBED;
+close INTRONBED;
+
+printf STDERR "check error.log for error messages\n";
+
+# garbage
+
+#my $gene_adaptor = Bio::EnsEMBL::Registry->get_adaptor($species, 'core', 'Gene');
+# http://www.ensembl.org/info/software/Pdoc/ensembl/modules/Bio/EnsEMBL/DBSQL/GeneAdaptor.html
+#my $gene = $gene_adaptor->fetch_by_translation_stable_id($pepId);
+#my @genes = @{$gene_adaptor->fetch_all_by_gene_stable_id($geneId)};
+#my $gene = $gene_adaptor->fetch_by_stable_id($geneId);
+#my $gene = $gene_adaptor->fetch_by_transcript_stable_id($geneId);
+#my @transcripts = @{$gene->get_all_Transcripts()};
+
+
+
+## get compara members for human gene
+#my $member_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Multi', 'compara', 'Member'); my $member = $member_adaptor->fetch_by_source_stable_id( 'ENSEMBLGENE',$human_id); # print out some information about the Member #if ($member!=0) { #    print "chr".$member->chr_name, ":", $member->chr_start, "-", $member->chr_end, "NAME: ", $member->display_label(), "\n"; #} my $homology_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Multi', 'compara', 'Homology'); my $homologies = $homology_adaptor->fetch_by_Member($member); #my $homologies = $homology_adaptor->fetch_all_by_Member_method_link_type($member, "ortholog"); 
+#my %already = ();
+#foreach my $homology (@{$homologies}) {
+#  if ($homology->description =~ /ortholog/) {
+#      foreach my $member_attribute (@{$homology->get_all_Member_Attribute}) {
+#        my ($member, $attribute) = @{$member_attribute};
+#        my $id = $member->stable_id;
+#        my $taxon = $member->taxon;
+#        my $species = $taxon->get_tagvalue('scientific name');
+#        foreach my $spec (@species) {
+#            if ($species =~ /$spec/i) {
+#                    $species =~ s/ /_/g;
+#                    if (! exists $already{$id}) {
+#                        print get_Seq($id, $species, $up, $down, $bedfile, $vistafile);
+#                        $already{ $id } = 1;
+#                        }
+#                    }
+#            } 
+#        }
+#  }
+#}

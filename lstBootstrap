@@ -1,0 +1,71 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import random
+import os.path, copy
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] file1 file2 dir - remove 10% of identifiers from file1, add 10% of random identifiers from file2 to file1 and output the whole thing. repeat this X times. repeat this 100 times and output results to directory") 
+
+parser.add_option("-p", "--percentage", dest="percentage", action="store", help="percentage to add, default is %default", type="int", metavar="NUMBER", default=10) 
+parser.add_option("-r", "--repeats", dest="repeats", action="store", help="how often to repeat, default is %default", type="int", metavar="NUMBER", default=100) 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+file1, file2, baseDir = args
+
+ids1 = tabfile.slurplist(file1)
+ids2 = tabfile.slurplist(file2)
+origIds1, origIds2 = copy.copy(ids1), copy.copy(ids2)
+
+repeats = options.repeats
+percentage = options.percentage / 100.0
+
+assert(len(set(ids1))==len(ids1))
+assert(len(set(ids2))==len(ids2))
+assert(percentage<1.0)
+assert(percentage>0.0)
+assert(repeats>0)
+
+for r in range(0, repeats):
+    ids1 = copy.copy(origIds1)
+    ids2 = copy.copy(origIds2)
+
+    # remove elements
+    delCount = int(len(ids1) * percentage)
+    delList = set()
+    for i in range(0,delCount):
+        rnd = random.randint(0,len(ids1)-1)
+        delList.add(ids1[rnd])
+        del ids1[rnd]
+
+    #print "deleted", delList
+    #stderr.write("List1: Size before removal was %d. Removed %d elements from list. Size is now %d.\n" % (len(origIds1), len(delList), len(ids1)))
+
+    # add elements
+    addList = set()
+    while delCount!=0:
+        rnd = random.randint(0,len(ids2)-1)
+        newEl = ids2[rnd]
+        if newEl not in delList and newEl not in ids1:
+            ids1.append(newEl)
+            addList.add(newEl)
+            delCount-=1
+    #print "added", addList
+
+    assert(len(set(ids1))==len(ids1))
+    # output
+    of = open(os.path.join(baseDir, os.path.basename(file1)+"."+str(r+1)), "w")
+    of.write("\n".join(ids1))
+    of.close()
+stderr.write("Bootstrapped file %s into dir %s, %d times, sampling factor %f\n" % (file1, baseDir, repeats, percentage))

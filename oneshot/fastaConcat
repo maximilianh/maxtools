@@ -1,0 +1,46 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import Fasta
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] faAlnFile1 faAlnFile2 ... - concatenate fasta alignments") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+files = args
+
+cseqs = {}
+
+# get all ids
+allids = set()
+for f in files:
+    allids = allids.union(Fasta.readFasta(f))
+
+# for each file, concat all seqs, replace missing ids with gaps
+for f in files:
+    seqs = Fasta.readFasta(f)
+    seqlen = len(seqs.values()[0])
+
+    for s in seqs.values():
+        cseqs.setdefault(s.id, []).append(s.nucl)
+
+    missingIds = allids.difference(seqs.keys())
+    for id in missingIds:
+        cseqs.setdefault(id, []).append("".join("-"*seqlen))
+
+for id, seqs in cseqs.iteritems():
+    print ">"+id
+    print "".join(seqs)
+

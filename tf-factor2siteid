@@ -1,0 +1,92 @@
+#!/usr/bin/python
+
+import PWM
+import bed
+import re
+import sys
+from optparse import OptionParser
+from os import environ
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] factor id\noutput site-ids given a certain factor ID.") 
+
+parser.add_option("-t", "--tffile", dest="matrixfile", action="store", help="the name of the file matrix.dat from Transfac/Jaspar/Genomatix, the default value is taken from the environment variable TFMATPATH [default: %default]", type="string", metavar="PATH", default=environ["TFMATPATH"]) 
+
+parser.add_option("-i", "--id", dest="matrices", action="append", help="specify matrix id (example: V$FOXI_Q2, meaning vertebrate, Forkheadbox I, Quality 2. You can specify regular expressions, so .*FOX.* is also fine.). Take care to escape $-signs from the shell and makefiles. Separate the cutoff with '/' (Example: V$FOXI_Q2/0.9). Default value for cutoff is 0.75. You can specify this option multiple times. If you don't specify it at all, sequences will be scanned for all matrices in the file (this is SLOW at the moment).", type="string", metavar="'ID'") 
+
+# ==== FUNCTIONs =====
+# -----------------
+(options, args) = parser.parse_args()
+matrixfile = options.matrixfile
+matrices = args
+
+if args==[] :
+    sys.stderr.write("\nNo factors given. Use -h for help. \n")
+    sys.exit(1)
+
+sys.stderr.write("Parsing matrix file...\n")
+pwms = PWM.readMatrices(matrixfile)
+if len(pwms)==0:
+    sys.stderr.write("Could not parse matrix.dat-file from "+matrixfile+"\n")
+    sys.exit(1)
+
+
+# parse include pwms from cmdline 
+matrixids=[]
+if matrices != None:
+    for id in matrices:
+        # find all matching pwms and set their cutoffs
+        regexid = re.compile(id)
+        for realid in pwms.keys():
+            if regexid.match(realid):
+                matrixids.append(realid) # to prevent it from being deleted
+    # delete all other pwms
+    dellist = []
+    count = 0
+    for id,pwm in pwms.iteritems():
+        if not id in matrixids:
+            dellist.append(id)
+    for id in dellist:
+        del pwms[id]
+        count += 1
+    sys.stderr.write(" Removed %u matrices since they specified\n" %count)
+
+## regularize pwms
+#sys.stderr.write("Regularizing matrices...\n")
+#for pwmid,pwm in pwms.iteritems():
+#    #try:
+#    #    pwm = pwms[pwmid]
+#    #except KeyError:
+#    #    sys.stderr.write("Matrix ID "+pwmid+" not found in transfac file!")
+#    #    exit(1)
+#    pwm.prepareScoring()
+
+### remove pwms that have an IC that is too low
+#countIC = 0
+#delmats = []
+#if minIC!=0:
+#    for id, pwm in pwms.iteritems(): 
+#        if pwm.getRealIC() < minIC:
+#            countIC += 1
+#            delmats.append(id)
+#for m in delmats:
+#    del pwms[m]
+#sys.stderr.write(" Removed %u matrices because they had an IC lower than %u.\n" % (countIC, minIC))
+
+if pwms.values()==[]:
+    sys.stderr.write("No matrices left, all were excluded!\n");
+    sys.stderr.write("Make sure to lower your exclusion citeria.");
+    sys.exit(1)
+
+for id in pwms.keys():
+    sys.stderr.write("Found: %s\n"%id)
+    pwm = pwms[id]
+    for i in range(len(pwm.siteacs)):
+        ac = pwm.siteacs[i]
+        start = pwm.sitestarts[i]
+        len = pwm.sitelens[i]
+        strand = pwm.sitestrands[i]
+        if not ac.startswith("C"):
+            print ac, strand, start, len
+
+

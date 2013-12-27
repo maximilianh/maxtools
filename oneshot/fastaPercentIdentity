@@ -1,0 +1,11 @@
+#!/usr/bin/env perl
+
+use Bio::AlignIO;
+my $in = Bio::AlignIO->new(-file   => "$ARGV[0]",
+                           -format => "fasta" );
+
+while ( my $aln = $in->next_aln() ) { 
+    my $seqname = $aln->id;
+    my $percent_ident = $aln->percentage_identity;
+    print "$seqname\t$percent_ident\n";
+    }

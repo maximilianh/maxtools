@@ -1,0 +1,5 @@
+#!/bin/sh
+echo refs
+mysql text2genome -NB -e "select distinct pmcId as docId, displayId, authors, title, journal, year, pages, pmid, abstract from refs JOIN features USING (pmcId) JOIN genomes USING (genomeId) WHERE ucscDb='$1'" > t2gArticles.$1.tsv
+echo sequences
+mysql text2genome -NB -e "select distinct pmcId as docId, sequences.seqId, sequence from sequences JOIN features USING (pmcId) JOIN genomes USING (genomeId) WHERE ucscDb='$1'" > t2gSequences.$1.tsv

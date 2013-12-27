@@ -1,0 +1,126 @@
+#!/usr/bin/perl
+# make sure, that the path of perl is right (try: which perl)
+
+###############################################################
+#
+# Pix2tn by Michael Hahsler 1999
+# 
+# This script free for use and modification.
+# History: 	V1.0 Oct 18 1999
+#		V1.1 Mar 08 2004 includes options code by 
+#			Juan Carlos Rey Anaya <jcrey@uma.es>
+#
+# Usage: Copy this script into the directory with your photos or in
+#   your directory for executables (e.g. ~/bin). Change to the directory
+#   with the photos and run the script. The script will generate the
+#   file welcome.html (the index) and the sub-directories tn and med 
+#   (for the thumpnails).
+#   If you want to have the index and the pictures on the Web, the directory
+#   you have to move everything to a directory used by your Web-server 
+#   (e.g. ~\www).
+#
+# Copyright: This script is under GNU GENERAL PUBLIC LICENSE (GPL)
+#
+# Enjoy,
+# Michael Hahsler
+# hahsler@ai.wu-wien.ac.at               http://wwwai.wu-wien.ac.at/~hahsler
+#
+
+use Getopt::Std;
+
+print "pix2tn by Michael Hahsler\n\n";
+
+usage() unless getopts("ht:o:");
+usage() if $opt_h;
+$filename = $opt_o || "index.html";
+$title    = $opt_t || "My Pics";
+$dir = shift || ".";
+chdir $dir || die "Cannot change to $dir.\n";
+
+my $tnperrow=4;   # thumbnails per row
+my $tnsize=400;    # size of thumbnails
+my $tnquality=100; # quality of thumbnails [0..100]
+# use small thumbnails with poor quality to speed up your index-page
+
+my $medsize=500;    # size of thumbnails
+my $medquality=70; # quality of thumbnails [0..100]
+# used to create medium sized pictures
+
+# possible image extensions (jpg, gif)
+my @pics = (<*.jpg>,<*.gif>,<*.png>);
+
+unless (@pics) {
+ print "Nothing to do in '$dir'\n" ;
+ exit;
+}
+
+if (-e $filename) { 
+  rename $filename, $filename.".bak"; 
+  print "I saved the old $filename as $filename.bak\n"; 
+  }
+open (PAGE, ">$filename") || die "Problem: Can't write to filename\n";
+
+# create a directory for the thumbnails
+system ("mkdir tn") if (!-d "tn");
+system ("mkdir med") if (!-d "med");
+
+# create the index page
+print PAGE qq*
+<html><head><title>$title</title></head>
+<body bgcolor=white><h1>$title</h1>
+<table cellspacing=10>
+*;
+
+my $counter=0;
+
+foreach $_ (sort @pics) {
+  print $_;
+  system ("convert -geometry ".$tnsize."x".$tnsize.
+      " -quality $tnquality $_ tn/$_") == 0 
+      || die "Problems with convert: $?\n";
+
+
+  system ("convert -geometry ".$medsize."x".$medsize.
+      " -quality $medquality $_ med/$_") == 0
+      || die "Problems with convert: $?\n";
+
+
+
+print PAGE "<tr valign=bottom>" if (!($counter++%$tnperrow));
+  print PAGE "<td>";
+
+  @stat = stat $_;
+  print PAGE qq*<center>
+    <a href="med/$_"><img src="tn/$_" alt="click to enlarge"></a><br>
+    <small><b>$_</b><br>*.
+    localtime($stat[9]).qq*<br><a href="$_">original - *.
+    int($stat[7]/1024).qq* kB</a>*.
+    qq*</small>\n*;
+  print " ... done\n";
+}
+
+print PAGE qq*
+  </table><hr>
+  Index created on *. localtime(time) .qq* with 
+  <big><tt>
+  <a href="http://wwwai.wu-wien.ac.at/~hahsler/pix2tn">pix2tn</a>
+  </tt></big> written by Michael Hahsler
+  </body></html>
+*;
+
+close PAGE;
+
+
+sub usage() {
+print <<EOM;
+usage: $0 [options] [directory]
+options:
+    -t title
+        Head page with this title.
+    -o file
+        Name output file with this name instead "index.html"
+    -h  Show this text and exits
+
+EOM
+exit;
+}

@@ -1,0 +1,51 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging
+
+import maxbio
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename start end - extract part of fasta file that contains an alignment, coordinates are interpreted as ungapped coordinates") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+def ungappedToGapped(seq, ungappedPosList):
+    # determine stringpos of all pos in posList, yield values
+    ungappedPos = 0
+    for gappedPos in range(0, len(seq)):
+        #print gappedPos, posList, len(seq)
+        if seq[gappedPos]!="-":
+            ungappedPos+=1
+            if ungappedPos in ungappedPosList:
+                yield gappedPos
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename, start, end, outfilename = args
+start = int(start)
+end = int(end)
+outfh = maxbio.openFile(outfilename)
+
+fr = maxbio.FastaReader(filename)
+seqs = list(fr.parse())
+seq0Nuc = seqs[0][1]
+
+startGapped, endGapped = list(ungappedToGapped(seq0Nuc, [start, end]))
+
+for seqId, seq in seqs:
+    outfh.write(">%s_%d-%d_%d-%d\n" % (seqId, start, end, startGapped, endGapped))
+    outfh.write("%s\n" % seq[startGapped:endGapped])

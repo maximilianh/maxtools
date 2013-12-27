@@ -1,0 +1,32 @@
+#!/usr/bin/python
+#
+# reads bed file, reads in lines until line with matching regexp is hit
+# writes fts into tmpfile and run given command on it 
+# example: bedSplitIterate test.bed '[:]' 'cat $$'
+
+from sys import *
+from re import *
+import os
+
+inf = argv[1]
+regstr = argv[2]
+cmd = argv[3]
+tmpfile = "/tmp/bedSplitIterate.bed"
+
+lines = []
+regexp = compile(regstr)
+f = open(inf, "r")
+
+for l in f:
+    lines.append(l) 
+    if regexp.search(l): 
+        f = open(tmpfile, "w")
+        for l in lines:
+            f.write(l)
+        f.close()
+
+        cmd = cmd.replace("$$", tmpfile)
+        os.system(cmd)
+        lines = []
+
+        

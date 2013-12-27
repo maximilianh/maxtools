@@ -1,0 +1,90 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import bed
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""usage: %prog [global-options] bedfile COMMAND [special options] - filter beds in bedfile with some operation\n
+
+Commands:
+nameCount: lets only pass features that have a name which occurs >= x times, 
+nameCommon: only passes beds with a name that occurs in a second file
+minLength: only accepts beds with the minimum length specified
+
+Examples: 
+'bedFilter test.bed nameCount 2' 
+'bedFilter test.bed nameCommon test2.bed' 
+'bedFilter test.bed minLength 200' 
+""") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def limitLength(beds, maxLength=999999999999, minLength=-999999999999):
+    stderr.write("filtering out features with length > %d and < %d\n" % (minLength, maxLength))
+    newbeds = bed.Features()
+
+    for b in beds:
+        length = b.end - b.start
+        if length > minLength and length < maxLength:
+            newbeds.append(b)
+
+    return newbeds
+
+def nameCount(beds, args):
+    minCount=int(args[0])
+    stderr.write("filtering out names with less than %d occurences\n" % minCount)
+
+    newbeds = bed.Features()
+
+    nameDict = {}
+    for b in beds:
+        count = nameDict.setdefault(b.name, 0)
+        count +=1
+        nameDict[b.name]=count
+    
+    for b in beds:
+        if nameDict[b.name] >= minCount:
+            newbeds.append(b)
+    
+    return newbeds
+    
+def nameCommon(beds, args):
+    fname = args[0]
+    beds2 = bed.parseBedFilename(fname)
+    names = set()
+    for b2 in beds2:
+        names.add(b2.name)
+    
+    newbeds = bed.Features()
+    for b in beds:
+        if b.name in names:
+            newbeds.append(b)
+    return newbeds
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+op = args[1]
+
+beds = bed.parseBedFilename(filename)
+stderr.write("input: %d features.\n" % len(beds))
+if op.lower()=="namecount":
+    beds = nameCount(beds, args[2:])
+elif op.lower()=="namecommon":
+    beds = nameCommon(beds, args[2:])
+elif op.lower()=="minlength":
+    beds = limitLength(beds, minLength=int(args[2]))
+else:
+    stderr.write("error: could not recognize command '%s'\n" % op) 
+    exit(1)
+
+stderr.write("output: %d features\n" % len(beds))
+print beds

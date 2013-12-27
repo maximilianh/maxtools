@@ -1,0 +1,238 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import os.path
+from ftplib import *
+
+# Max's libraries
+import Fasta 
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] DOMAIN RELEASE SEQTYPE TARGETDIR - download ensembl sequence data in fasta format to target directory, DOMAIN is one of ensembl (=mostly vertebrates),protists,bacteria,fungi,plants,metazoa or ensemblgenomes (includes the five preceding ones), RELEASE is a number, SEQTYPE can be cdna,ncrna,dna or pep") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-f", "--formatdb", dest="formatdb", action="store_true", help="run formatdb on all fasta files", default=False) 
+parser.add_option("-b", "--bwa", dest="bwa", action="store_true", help="run bwa index on all fasta files", default=False) 
+parser.add_option("", "--twoBit", dest="twoBit", action="store_true", help="run faTo2Bit on all fasta files", default=False) 
+parser.add_option("-d", "--deleteFasta", dest="deleteFasta", action="store_true", help="delete fasta file after formatdb", default=False) 
+parser.add_option("", "--rewriteIds", dest="rewriteIds", action="store_true", help="rewrite the ID lines of fasta files such that the format is transcriptId|geneId, this will make sure that you can find out the gene directly from BLAST reports without a map transcript->gene") 
+parser.add_option("", "--subType", dest="subType", action="store", help="type of cdna or protein sequences, one of all/abinitio/toplevel, by default is toplevel for dna and 'all' for protein and cdna", default=None) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def handleDownload(block):
+    locFileH.write(block)
+
+def mkdir(dir):
+    # silent mkdir
+    try:
+        os.makedirs(dir)
+    except OSError:
+        pass
+
+def openFtpConn(host):
+    """ returns ftp conection object """
+    # format for ftp_proxy http://updateproxy.manchester.ac.uk:3128
+    #ftpProxyString=os.environ.get("ftp_proxy")
+
+    #if ftpProxyString==None:
+    ftp = FTP()           # connect to host, default port
+    ftp.connect(host)
+    ftp.login()               # user anonymous, passwd anonymous@
+    #else:
+        #ftp = FTP()
+        #port = int(ftpProxyString.split(":")[2])
+        #proxyHost = ftpProxyString.split("//")[1].split(":")[0]
+        #print "using proxy %s, port %d" % (proxyHost, port)
+        #print "connecting to host %s" % (host)
+        ##ftp.connect(proxyHost, port, 5) # only defined after py 2.5
+        #ftp.connect(proxyHost, port)
+        #ftp.login("anonymous@%s" % host, "maximilianh@gmail.com")
+        #print "ok"
+
+    return ftp
+
+def getFtpDir(ftp, dir, onlySubdirs=False):
+    """ return urls of directories in ftp-folder, needs a ftp connection object"""
+    #print dir
+    try:
+        ftp.cwd(dir)
+    except:
+        errMsg = str(exc_info()[1])
+        errCode = errMsg.split(" ")[0]
+        print ("error: error when cd'ing into directory %s, host %s" % (dir, ftp.host))
+        print "details:", errMsg
+        return None
+    lines = []
+    dirs = [] 
+    ftp.retrlines('LIST', lines.append)     # list directory contents
+    for l in lines:
+        if onlySubdirs and not l.startswith("d"):
+            continue
+        fs = l.split()
+        subdir = fs[8]
+        dirs.append(os.path.join(dir, subdir))
+    return dirs
+
+def execCmdLine(cmdLine, progName=""):
+    ret = os.system(cmdLine)
+    if ret==None or ret!=0:
+        print("error while running this command: "+cmdLine)
+    return ret
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+domain, release, seqtype, baseTargetDir  = args
+domain, release, seqtype = domain.lower(), release.lower(), seqtype.lower()
+domainOrig = domain # keep a copy of the original parameter for final report
+formatdb = options.formatdb
+bwa = options.bwa
+deleteFasta = options.deleteFasta
+rewriteIds = options.rewriteIds
+twoBit = options.twoBit
+
+# check seqTypes and domain parameter
+seqTypesAllow = ["cdna", "pep", "dna", "ncrna"]
+if seqtype not in seqTypesAllow:
+    stderr.write("error: Unknown seqtype: %s.\n" % ",".join(seqTypesAllow))
+    exit(1)
+
+allEnsemblGenomes = ["bacteria", "plants", "fungi", "protists", "metazoa"]
+
+domainsAllow = list(allEnsemblGenomes)
+domainsAllow.append("ensembl")
+domainsAllow.append("ensemblgenomes")
+
+if domain not in domainsAllow:
+    stderr.write("error: Unknown domain. Use one of: %s.\n" % ",".join(domainsAllow))
+    exit(1)
+
+# set domains to download based on domain parameter
+if domain=="ensemblgenomes":
+    domains=allEnsemblGenomes
+elif domain=="all":
+    domain = allEnsemblGenomes
+    domain.append("ensembl")
+else:
+    domains=[domain]
+
+# set subType
+subType = options.subType
+subTypes=[]
+if subType==None:
+    if seqtype=="cdna" or seqtype=="pep":
+        subTypes=["all"]
+    elif seqtype=="dna":
+        subTypes=["rm.toplevel", "rm.seqlevel"]
+if len(subTypes)==0:
+    subTypes=[subType]
+
+mkdir(baseTargetDir)
+fileCount=0
+for domain in domains:
+    # set ftp host
+    if domain=="ensembl":
+        host = "ftp.ensembl.org"
+        baseDir = "/pub/release-%s/fasta" % release
+    else:
+        host = "ftp.ensemblgenomes.org"
+        baseDir = "/pub/%s/release-%s/fasta" % (domain, release)
+
+    print("Accessing host %s, downloading organism list" % host)
+    ftp = openFtpConn(host)
+    orgs = getFtpDir(ftp, baseDir, onlySubdirs=True)
+    if orgs==None:
+        print ("error: Could not download directory list from %s, dir %s" % (host, baseDir))
+        exit(1)
+
+
+    # Wed Oct 21 11:23:56 BST 2009
+    # This changed with EnsemblGenomes-3, no collections anymore
+    #if domain in ["bacteria"]:
+        #print "Special case bacteria: going through collections"
+        #collDirs=orgs
+        #orgs = []
+        #for d in collDirs:
+            #print "Collection ",d
+            #someDirs = util.getFtpDir(f, d, onlySubdirs=True)
+            #orgs.extend(someDirs)
+
+    print("Found %d organisms, organisms=%d" % (len(orgs), len(orgs)))
+
+    targetDir=os.path.join(baseTargetDir, domain)
+    mkdir(targetDir)
+
+    for dir in orgs:
+        seqdir = os.path.join(dir, seqtype)
+        files = getFtpDir(ftp, seqdir)
+        if files==None:
+            print "FTP Error, Trying to reconnect..."
+            ftp = openFtpConn(host)
+            files = getFtpDir(ftp, seqdir)
+        if files==None:
+            print "FTP error while downloading files"
+
+        if subTypes!=None:
+            for subType in subTypes:
+                filtFiles = [file for file in files if file.endswith(subType+".fa.gz") or file.endswith(subType+".fa")]
+                if len(filtFiles)!=0:
+                    files=filtFiles
+
+        org = os.path.basename(dir)
+        locDir = os.path.join(targetDir,org)
+        mkdir(locDir)
+
+        for file in files:
+            basename = os.path.basename(file)
+            basename.replace(".fa.gz", ".fa")
+            locFile = os.path.join(locDir, basename)
+            print ("Downloading %s --> %s" % (file, locFile))
+            locFileH = open(locFile, "wb")
+            ftp.retrbinary('RETR ' + file, handleDownload)
+            locFileH.close()
+            fileCount+=1
+            #locFiles.append(locFiles)
+
+            if locFile.endswith(".gz"):
+                print "gunzip...",
+                stdout.flush()
+                execCmdLine("gunzip -f %s" % locFile)
+                locFile = locFile.replace(".gz","")
+            if rewriteIds:
+                print "rewriting IDs...",
+                stdout.flush()
+                Fasta.fastaIdReformat("ensTrans", locFile, None, inplace=True)
+            if formatdb:
+                cmdLine = "formatdb -i %s" % locFile
+                if not seqtype=="pep":
+                    cmdLine+=" -p F"
+                print "formatdb...",
+                stdout.flush()
+                execCmdLine(cmdLine)
+            if bwa:
+                if os.path.getsize(locFile)>1500000000:
+                    indexType = "bwtsw"
+                else:
+                    indexType = "is"
+                cmdLine = "bwa index -a %s %s" % (indexType, locFile)
+                print "bwa index...",
+                stdout.flush()
+                execCmdLine(cmdLine)
+            if twoBit:
+                newFname = locFile + ".2bit"
+                cmdLine = "faToTwoBit -ignoreDups %s %s" % (locFile, newFname)
+                print "faToTwoBit...",
+                stdout.flush()
+                execCmdLine(cmdLine)
+            if deleteFasta:
+                print "deleting...",
+                os.remove(locFile)
+            print
+
+#print "Now processing local files"
+#for locFile in locFiles:
+
+print "Total genome/transcript/peptide files downloaded: %d, %s_%s_fileCount=%d" % (fileCount, domainOrig, seqtype, fileCount)

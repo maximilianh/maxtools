@@ -1,0 +1,170 @@
+#!/usr/bin/perl  
+use strict;
+# $|++;                       # force auto flush of output buffer
+
+use Bio::AlignIO;
+use Bio::SeqIO;
+use Bio::FeatureIO;
+use Bio::SeqFeature::Collection;
+use Bio::Range;
+use Bio::Tools::GFF;
+
+my $PREFIX = "JSCNS";
+my $BASESEQ = 1;
+my $BASEURL = "http://genome.ucsc.edu/cgi-bin/hgTracks?clade=vertebrate&org=Human&db=hg17&position=chr4:";
+my $MAFFILE = "http://max.butterbrot.org/biofiles/cns3.html";
+my %options=();
+
+# -------- FUNCTIONS -----------------
+sub options () {
+    use Getopt::Std;
+    getopts("eg:r:h",\%options) or die("unrecognized option.");
+    if ($options{"h"}) {
+        print << "END";
+$0 <options> filename:  Annotate Maf-file
+options:
+   -r <species> : require all printed fragments to include a certain species,
+                  e.g. "fr1"
+   -g <gfffile> : report which of the fragments are overlapped by gff
+   -e           : suppres evoprinter output for each element
+   -h           : this help
+END
+        exit(1);
+    }
+
+}
+
+sub readfeatures() {
+    my $filename = shift(@_);
+    #print "NAME $filename\n";
+    #my $in  = Bio::FeatureIO->new(-file => $filename, -format => 'gff');
+    my $in  = my $gffio = Bio::Tools::GFF->new(-file=>$filename, -gff_version => 2); 
+    my $col = new Bio::SeqFeature::Collection();
+    my @features = ();
+    while(my $feature = $in->next_feature()) {
+        push @features, $feature;
+    }
+    $in->close();
+    # add these features to the object
+    my $totaladded = $col->add_features(\@features);
+    return $col;
+
+}
+
+
+sub getSeqBySpecies() {
+    my $aln = shift(@_);
+    my $species = shift(@_);
+    my $found = 0;
+
+    foreach my $seq ( $aln->each_seq() ) {
+        my @parts = split(/\./, $seq->id());
+        #print $required,$parts[0]."\n";
+        if ($parts[0] eq $species) {
+            $found = 1;
+            return $seq;
+        }
+    }
+    return 0;
+}
+
+# === MAIN =======
+&options();
+
+my $nal = 1;
+print STDERR  "Reading file...\n";
+print "# no\ths-range\tUCSC link\\tseqs\tlen\tid\tgff-feat-name\tmaf-JGIstart\tJGIend-maf\tFugu-Region\tevoprint\n";
+
+my $required = $options{"r"};
+my $evoprint = $options{"e"};
+my $alignio = Bio::AlignIO->new(-file => $ARGV[0], -format => 'maf');
+
+#read gff
+my $gff ;
+if ($options{"g"}) {
+    my $gffname = $options{"g"};
+    $gff = &readfeatures($gffname);
+}
+
+# iterate over alignments
+while(my $aln = $alignio->next_aln()){
+    my $match_line = $aln->match_line;
+
+    # see if we find the required species id:
+    my $reqOrgSeq = 0;
+    if ($required) {
+        $reqOrgSeq = &getSeqBySpecies($aln, $required);
+    }
+
+    if ($required && $reqOrgSeq==0) {
+        next;
+    }
+
+    print "$PREFIX$nal\t";
+    print STDERR $PREFIX.$nal."\n";
+    my $base = $aln->get_seq_by_pos($BASESEQ);
+    my @parts = split(/\./,$base->id);
+    print $parts[1].":";
+    print $base->start."-";
+    print $base->end, "\t";
+    print $BASEURL.$base->start."-".$base->end."\t";
+    print $MAFFILE. "#" .$PREFIX . $nal. "\t";
+    print $aln->no_sequences, "\t";
+    print $base->end - $base->start+1, "\t";
+    #print $aln->no_residues, "\t";
+
+    my $seq= $base->seq();
+    my $consseq = $aln->match_line();
+    #my $consseq = $aln->consensus_string(60);
+    #my $consseq = $aln->consensus_iupac();
+    #my $consseq = $aln->gap_line();
+    #print $consseq."\n";
+
+    #printf "%d \t", $aln->overall_percentage_identity;
+    #printf "%d \t", $aln->average_percentage_identity;
+    printf "%d \t", $aln->percentage_identity;
+    $nal++;
+
+    # make range and find overlapping features
+    if ($gff) {
+        my $range = new Bio::Range(-start=>$base->start, -end=>$base->end, -strand=>$base->strand);
+        my @fts = $gff->features_in_range(-range=>$range, -contain=>0);
+        my @names = ();
+        foreach my $ft (@fts) {
+            push @names, $ft->primary_tag();
+        }
+        print join(",", @names)."\t";
+        if (@fts > 0) {
+            my $ft0 = $fts[0];
+            printf "%d\t%d\t", $base->start - $ft0->start, $base->end - $ft0->end;
+        }
+        else {
+            printf("\t\t");
+        }
+    }
+
+    # other org coordinates
+    if ($required) {
+        my @parts = split(/\./, $reqOrgSeq->id());
+        printf "%s:%d-%d\t",$parts[1],$reqOrgSeq->start,$reqOrgSeq->end;
+    }
+
+    # evoprint
+    if ($evoprint) {
+    for (my $i=0; $i<=$aln->length;$i++) {
+        my $char =  substr($seq, $i, 1);
+        my $cons =  substr($consseq,$i,1);
+        if ($char ne "-") {
+            if ($cons eq "*" || $cons eq ":") {
+                print uc($char);
+            }
+            else {
+                print lc($char);
+            }
+        }
+    }
+    }
+    print "\n";
+
+}
+

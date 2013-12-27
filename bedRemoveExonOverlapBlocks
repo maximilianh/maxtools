@@ -1,0 +1,230 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, tempfile, os, copy
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inBed12 geneBed12 outBed12File - remove BLOCKS from inBed12 that overlap coding exons in geneBed12.") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+def coordOverlap(start1, end1, start2, end2):
+    """ returns true if two Features overlap """
+    result = (( start2 <= start1 and end2 > start1) or \
+            (start2 < end1 and end2 >= end1) or \
+            (start1 >= start2 and end1 <= end2) or \
+            (start2 >= start1 and end2 <= end1))
+    return result
+
+    
+def execCmdLine(cmdLine, progName=""):
+    logging.debug("Running %s" %cmdLine)
+    ret = os.system(cmdLine)
+    if ret==None or ret!=0:
+        logging.error("error while running this command: "+cmdLine)
+        exit(1)
+
+def makeTempFile(suffix=None):
+    handle, filename = tempfile.mkstemp(suffix=suffix)
+    return filename
+
+class MergedFeature:
+    """ a bed12 feature which is overlapped by a list of bed4 ranges """
+    def __init__(self, line=None):
+        """ parse overlapSelect -merge format """
+        if line==None:
+            return
+
+        fields = line.strip("\n").split("\t")
+        #logging.debug("adding lines %s" % line)
+        self.chrom, self.start, self.end, self.name, self.score, self.strand, self.thickStart, self.thickEnd, self.itemRgb, blockCount, blockSizes, blockStarts, cChrom, cStart, cEnd, cName, cScore, cStrand = fields
+        self.start = int(self.start)
+        self.end = int(self.end)
+        self.thickStart = int(self.thickStart)
+        self.thickEnd   = int(self.thickEnd)
+
+        self.blockStarts = [self.start+int(x) for x in blockStarts.strip(",").split(",")]
+        blockSizes = [int(x) for x in blockSizes.strip(",").split(",")]
+        self.blockEnds = []
+        for i in range(0, len(self.blockStarts)):
+            self.blockEnds.append(self.blockStarts[i]+blockSizes[i])
+            
+        self.overlapRanges = {}
+        self.addOverlapRange(line)
+
+    def __repr__(self):
+        lines = []
+        featData = [self.chrom, self.start, self.end, self.name, self.score, self.strand, self.thickStart, self.thickEnd, self.itemRgb]
+        featData = [str(x) for x in featData]
+        lines.append("\t".join(featData))
+        for id, startEndName in self.overlapRanges.iteritems():
+            start, end, name = startEndName
+            lines.append("Overlapping: ID=%s, %d, %d, %s" % (id, start, end, name))
+        return "\n".join(lines)+"\n"
+
+    def writeAsBed12(self, file, suppressNoBlockFeats=False):
+        """ write the features with >=1 blocks as bed 12 """
+        if len(self.blockStarts)==0:
+            if suppressNoBlockFeats:
+                return
+            start = self.start
+            end   = self.end
+            blockCount = 1
+            blockStarts = "0"
+            blockSizes = str(end-start)
+        else:
+            start = self.blockStarts[0]
+            end   = self.blockEnds[-1]
+            #print self.blockEnds
+            blockCount = len(self.blockStarts)
+
+            blockSizes = []
+            for i in range(0, len(self.blockStarts)):
+                blockSizes.append(str(self.blockEnds[i]-self.blockStarts[i]))
+            blockSizes  = ",".join(blockSizes)
+
+            blockStarts  = [x - start for x in self.blockStarts]
+            blockStarts  = ",".join([str(x) for x in blockStarts])
+
+        data = [self.chrom, start, end, self.name, self.score, self.strand, start, end, self.itemRgb, blockCount, blockSizes, blockStarts]
+        data = [str(x) for x in data]
+        file.write("\t".join(data))
+        file.write("\n")
+        
+    def addOverlapRange(self, line):
+        cStart, cEnd, cName = line.split("\t")[13:16]
+        cStart = int(cStart)
+        cEnd   = int(cEnd)
+        #logging.debug("adding range %d-%d" % (cStart, cEnd))
+        featId = "%d-%d" % (cStart, cEnd)
+        self.overlapRanges[featId]= (cStart, cEnd, cName) 
+
+class OverlapRemover:
+    def parseOverlapMerge(self, filename):
+        """ 
+    chr2L	26163	26691	frag9871_chain3	702	+	26163	26691	0	8	15,16,19,45,18,37,14,149,	0,45,90,119,179,212,354,379,	chr2L	26520	26688	NM_001103574	0	-
+        """
+        overlapData = {}
+        logging.debug("Parsing %s" % filename)
+        for line in open(filename):
+            chrom, start, end = line.split("\t")[:3]
+            featId = chrom+':'+start+"-"+end
+            if featId not in overlapData:
+                newFeat = MergedFeature(line)
+                overlapData[featId]=newFeat
+            else:
+                oldFeat = overlapData[featId]
+                oldFeat.addOverlapRange(line)
+        self.overlapData = overlapData
+
+    def toString(self):
+        lines = []
+        for id, featString in self.overlapData.iteritems():
+            lines.append("ID: %s" % id)
+            lines.append(repr(featString))
+        return "\n".join(lines)
+
+    def writeAsBed12_splitBlocks(self, file, suppressNoBlockFeats=False):
+        for id, featData in self.overlapData.iteritems():
+            featData.writeAsBed12(file, suppressNoBlockFeats)
+
+    def removeOverlappedBlocks_splitFeatures(self):
+        newFeatData = {}
+        for id, featData in self.overlapData.iteritems():
+            blockGroups = [[]] # grouping of blocks for split feature
+            # iterate over all blocks
+            for i in range(0, len(featData.blockStarts)):
+                blockStart = featData.blockStarts[i]
+                blockEnd   = featData.blockEnds[i]
+                # check if block is overlapped by exon
+                overlapFound = False
+                for overlapId, startEndName in featData.overlapRanges.iteritems():
+                    start, end, name = startEndName
+                    #print "comparing", blockStart, blockEnd, ", exon=",start, end
+                    if coordOverlap(start, end, blockStart, blockEnd):
+                        #print "overlap"
+                        overlapFound = True
+                        break
+                # if an exon overlaps the block, ignore block and
+                # start a new blockGroup
+                if overlapFound:
+                    if blockGroups[-1]!=[]:
+                        blockGroups.append([])
+                # otherwise add to current block group
+                else:
+                    #print "no overlap"
+                    blockGroups[-1].append((blockStart, blockEnd))
+
+            #print blockGroups
+            # now go over the blockGroups, splitting feature if necessary
+            i = 0
+            for bg in blockGroups:
+                #print "writing", bg
+                if len(bg)==0:
+                    continue
+                mf = MergedFeature()
+                mf.chrom = featData.chrom
+                mf.start = bg[0][0]
+                mf.end   = bg[-1][1]
+                mf.thickStart = mf.start
+                mf.thickEnd   = mf.end
+                mf.name  = featData.name+"_split"+str(i)
+                mf.blockStarts = [x for x,y in bg]
+                mf.blockEnds   = [y for x,y in bg]
+                mf.itemRgb = featData.itemRgb
+                mf.score = featData.score
+                mf.strand = featData.strand
+                newFeatId = "%s:%d-%d" % (mf.chrom, mf.start, mf.end)
+                newFeatData[newFeatId] = mf
+                i+=1
+
+        self.overlapData = newFeatData
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+inFilename, geneFilename, outFilename = args
+
+exonFilename = makeTempFile(suffix=".bed")
+nonOverlappingFilename = makeTempFile(suffix=".bed")
+overlappingTableFilename = makeTempFile(suffix=".tab")
+overlappingTableFilenameSorted = makeTempFile(suffix=".sorted.tab")
+#
+execCmdLine("bedToExons -cds %(genes)s %(exons)s" %
+    {'genes': geneFilename, 'exons': exonFilename})
+
+execCmdLine("overlapSelect -nonOverlapping %(exons)s %(in)s %(out)s" %
+    {'exons': exonFilename, 'in': inFilename, 'out' : nonOverlappingFilename})
+
+execCmdLine("overlapSelect -nonOverlapping %(exons)s %(in)s %(out)s" %
+    {'exons': exonFilename, 'in': inFilename, 'out' : nonOverlappingFilename})
+
+execCmdLine("overlapSelect -inCds -mergeOutput %(exons)s %(in)s %(out)s" %
+    {'exons': exonFilename, 'in': inFilename, 'out' : overlappingTableFilename})
+
+execCmdLine("sort -k4 %(out)s > %(outSorted)s" % 
+    {'out' : overlappingTableFilename, 'outSorted' : overlappingTableFilenameSorted})
+
+om = OverlapRemover()
+om.parseOverlapMerge(overlappingTableFilenameSorted)
+om.removeOverlappedBlocks_splitFeatures()
+
+outFile = open(outFilename, "w")
+outFile.write(open(nonOverlappingFilename).read())
+om.writeAsBed12_splitBlocks(outFile, suppressNoBlockFeats=True)
+
+if not options.debug:
+    os.remove(overlappingTableFilename)
+    os.remove(nonOverlappingFilename)
+    os.remove(overlappingTableFilenameSorted)

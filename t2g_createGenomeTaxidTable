@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import urllib
+import subprocess
+import MySQLdb
+import os
+
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] outFile - create a genome <-> taxid table by downloading data from ensembl\nWill add an entry with id 0 for univec. Output format is OrganismName,Description,TaxonID") 
+
+parser.add_option("", "--host", dest="host", action="store", help="Host of ensembl mysql server, default: %default", default="ensembldb.ensembl.org") 
+parser.add_option("", "--port", dest="port", action="store", help="Post on ensembl mysql server to use, default: %default", default="5306")
+parser.add_option("", "--db", dest="db", action="store", help="Database on ensembl mysql server to use, default: %default", default="ensembl_compara_55") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# def getNCBIBacterialData(bactDir):
+#    """ download bacterial genomes info from ncbi and since these xxxxxx rndomly change directory names and do not use their own 
+#        taxon names, we have to use their mapping file and use this as a description for the genomes to keep the info for t2g_blastConvert"""
+#    data = []
+#
+#    accToDir = {}
+#    # traverse bactDir and collect genebankAcc -> dirname map
+#    #stderr.write("Mapping accession to dirname using directory %s\n" % bactDir)
+#    #for (dirpath, dirnames, filenames) in os.walk(bactDir):
+#        #for fn in filenames:
+#            #dir = os.path.basename(dirpath)
+#            #if fn.endswith(".nin"):
+#                #acc = os.path.splitext(os.path.splitext(os.path.basename(fn))[0])[0]
+#                #accToDir[acc]=dir
+#
+#    # get file from ftp and add to data
+#    url = "ftp://ftp.ncbi.nlm.nih.gov/genomes/Bacteria/summary.txt"
+#    stderr.write("Downloading %s\n" % (url))
+#    lines = urllib.urlopen(url).readlines()
+#    descByTaxid = {}
+#    nameByTaxid = {}
+#    for l in lines:
+#        if l.startswith("Accession"):
+#            continue
+#        fs = l.split("\t")
+#        acc, gbacc, len, taxid, projid, taxname, replicon, create, update = fs
+#        acc = acc.split(".")[0]
+#        #if acc in accToDir:
+#            #dir = accToDir[acc] # if this fails then there you have found an inconsistency between summary.txt and your ncbi dir
+#        #else:
+#            #dir = acc
+#            #stderr.write("warning: no genome data for accession %s although it is listed in NCBI's summary.txt\n" % acc)
+#            #continue
+#        descByTaxid.setdefault(taxid, []).append(acc)
+#        nameByTaxid[taxid]=taxname
+#
+#    for taxid in descByTaxid:
+#        taxname = nameByTaxid[taxid]
+#        desc = ",".join(descByTaxid[taxid])
+#        rec = (taxname, desc, taxid)
+#        data.append(rec)
+#
+#    return data
+
+def getEnsemblData(ensHost, ensPort, ensemblDb):
+    """ download info about ensembl's genomes """
+    data = []
+    # ensHost = "ensembldb.ensembl.org"
+    # ensembl_compara_bacteria_2_54
+    stderr.write("Connecting to mysql db %s on %s\n" % (ensemblDb, ensHost))
+    db=MySQLdb.connect(passwd="",db=ensemblDb,host=ensHost, user="anonymous", port=int(ensPort))
+
+    c = db.cursor()
+    #query = 'select distinct genome_db.name, assembly, genome_db.taxon_id from genome_db, ncbi_taxa_name where ncbi_taxa_name.taxon_id=genome_db.taxon_id and name_class="ensembl alias name"'
+    query = 'select distinct genome_db.name, assembly, genome_db.taxon_id, genebuild from genome_db where taxon_id<>0;'
+    c.execute(query)
+    for l in c.fetchall():
+        name, desc, taxid, genebuild = l
+        if taxid=='0':
+            continue
+        data.append(l)
+    return data
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+#ensemblVersion, bactDir, outfile = args
+#data1 = getNCBIBacterialData(bactDir)
+#data1.extend(data2)
+
+port = options.port
+host = options.host
+db = options.db
+
+outfile = args[0]
+data = getEnsemblData(host, port, db)
+
+if outfile=="stdout":
+    outfh = stdout
+else:
+    outfh = open(outfile, "w")
+
+#outfh.write("#genome name	desc or alternative name	taxon id\n")
+#outfh.write("univec	Univec	0\n")
+
+for rec in data:
+    rec = [str(x) for x in rec]
+    rec.append(host)
+    outfh.write("\t".join(rec)+"\n")
+outfh.close()
+stderr.write("output written to %s\n" % outfile)

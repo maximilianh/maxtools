@@ -1,0 +1,83 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, glob, os
+
+# this strange construct is necessary to make this work across all python versions and 
+# also in machines without lxml 
+try:
+  from lxml import etree
+  print("running with lxml.etree")
+except ImportError:
+  try:
+    # Python 2.5
+    import xml.etree.cElementTree as etree
+    print("running with cElementTree on Python 2.5+")
+  except ImportError:
+    try:
+      # Python 2.5
+      import xml.etree.ElementTree as etree
+      print("running with ElementTree on Python 2.5+")
+    except ImportError:
+      try:
+        # normal cElementTree install
+        import cElementTree as etree
+        print("running with cElementTree")
+      except ImportError:
+        try:
+          # normal ElementTree install
+          import elementtree.ElementTree as etree
+          print("running with ElementTree")
+        except ImportError:
+          print("Failed to import ElementTree from any known place")
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] infile outfile - extract information from uspto xml format and output as table") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+indir, outfile = args
+
+outfh = open(outfile, "w")
+infiles = glob.glob(os.path.join(indir, "*.xml"))
+
+for infile in infiles:
+    print "Parsing",infile
+
+    t = etree.parse(infile)
+
+    grants = t.findall("us-bibliographic-data-grant")
+    for grant in grants:
+        patentYear=""
+        applicationYear=""
+
+        publDoc = grant.find("publication-reference/document-id")
+        patentId = publDoc.findtext("doc-number")
+        patentDate = publDoc.findtext("date")
+        if patentDate:
+            patentYear = patentDate[:4]
+
+        applDoc = grant.find("application-reference/document-id")
+        applicationId = applDoc.findtext("doc-number")
+        applicationDate = applDoc.findtext("date")
+        applicationYear = applicationDate[:4]
+
+        data = [patentId, applicationYear, applicationDate, patentYear]
+        #print "\t".join(data)
+        outfh.write("\t".join(data)+"\n")
+
+outfh.close()
+print("Output was written to "+outfile)

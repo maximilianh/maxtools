@@ -1,0 +1,133 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import os
+import tempfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] model foreground background - run a GO analysis given a list of gene ids and a list of background ids (foreground ids are removed from background, if they are present there) (model is one of: hyper,wilcoxon") 
+
+parser.add_option("-g", "--gofile", dest="gofile", action="store", help="file with geneid->goids relationships, create with e.g. 'ensGetData hs-go.e46.hash hsapiens_gene_ensembl ensembl_gene_id go'", type="string", metavar="FNAME", default="/home/max/bio/functionExpansions/hs.go.e44.lst") 
+parser.add_option("-t", "--termdb", dest="termdb", action="store", help="termdb directory, default %default", default="/heap/go/termdb") 
+#parser.add_option("-c", "--count", dest="count", action="store", help="minimum count to print, default is 2", default=2, type="int") 
+#parser.add_option("-s", "--printSecond", dest="printSecond", action="store_true", help="do not print first column but rather second column", default=False) 
+#parser.add_option("", "--maxcount", dest="maxcount", action="store", help="maximum count to print, default is infinite", default=None, type="int") 
+#parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="reverse key-value relationship in table", default=False) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def runcmd(cmd):
+    print "running",cmd
+    ret = os.system(cmd)
+    if ret != 0:
+        stderr.write("error occured during exec'ing % s"%cmd)
+        exit(1)
+
+def readForeGround(fname):
+    """ parse file with key -> value pair on each line, key/value has 1:1 relationship"""
+    dict = {}
+    for l in open(fname, "r"):
+        fs = l.strip().split("\t")
+	if not len(fs)>1:
+            #stderr.write("info: file %s, illegal format for line: %s\n" % (fname,l))
+	    #continue
+            key=fs[0]
+            val=str(1)
+        else:
+            key = fs[0]
+            val = fs[1]
+        if key not in dict:
+            dict[key] = val
+        else:
+            stderr.write("info: file %s, hit key %s two times: %s -> %s\n" %(fname, key, key, val))
+    return dict
+
+def slurplist(fname):
+    dict = {}
+    for l in open(fname, "r"):
+        id = l.strip()
+        dict[id]=True
+    return dict
+    
+def slurpdictlist(fname, check):
+    dict = {}
+    for l in open(fname, "r"):
+        fs = l.strip().split("\t")
+        if check and fs[0] in dict:
+            stderr.write("double key: %s\n" % fs[0])
+            exit(1)
+        if len(fs)>1:
+                key = fs[0]
+                val = fs[1]
+                dict.setdefault(key, []).append(val)
+        if len(fs)==1:
+                key = fs[0]
+                val = [1]
+        #if len(fs)>2:
+        #    print fs
+        #    stderr.write("too many fields in input file\n") 
+        #    exit(1)
+    return dict
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+testType = args[0]
+forename = args[1]
+backname = args[2]
+foreScores = readForeGround(forename)
+backids = slurplist(backname)
+goIds = slurpdictlist(options.gofile, False)
+if testType not in ["wilcoxon", "hyper"]:
+    stderr.write("error: unknown testtype.\n");
+    exit(1)
+
+# remove foreground Ids from background
+for foreid in foreScores:
+    if foreid in backids:
+        del backids[foreid]
+
+# write ids with their goids into temp
+tempname = tempfile.mktemp()
+ofh = open(tempname, "w")
+foreNoGo = 0
+backNoGo = 0
+if len(foreScores)==0:
+    stderr.write("error: score file empty?\n")
+    exit(1)
+for foreid in foreScores:
+    if foreid not in goIds:
+        stderr.write("warning: no GO annotation found for foreground id %s\n" % foreid)
+        foreNoGo+=1
+        continue
+    for goId in goIds[foreid]:
+        #print foreScores[foreid]
+        ofh.write("\t".join([foreid, goId, foreScores[foreid]])+"\n")
+
+for backid in backids:
+    if backid not in goIds:
+        #stderr.write("warning: no GO annotation found for background id %s\n" % backid)
+        backNoGo+=1
+        continue
+    for goId in goIds[backid]:
+        ofh.write("\t".join([backid, goId, "0"])+"\n")
+ofh.close()
+
+stderr.write("Genes in background: %d\n" % len(backids))
+stderr.write("Genes in foreground: %d\n" % len(foreScores))
+stderr.write("Gene with GO annotation in background: %d \n" % len(goIds))
+stderr.write("Genes without GO annot in foreground %d \n" % foreNoGo)
+stderr.write("Genes without GO annot in background %d \n" % backNoGo)
+
+# run func
+print tempname
+cmd = "func_%s -i %s -t %s -o ." % (testType, tempname, options.termdb)
+runcmd(cmd)
+cmd = """sort groups.txt -k9 -g -t '	' | gawk '/root/ {print} {FS="\t"; OFS="\t"; if ($5>5 && $7>5 && $9<0.01) print }' > lstGoAnalysis.html """
+runcmd(cmd)
+cmd = """epiphany lstGoAnalysis.html&"""
+runcmd(cmd)

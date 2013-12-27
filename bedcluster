@@ -1,0 +1,334 @@
+#!/usr/bin/python
+
+from bed import *
+import sys
+import copy # for shallow copies
+from optparse import OptionParser
+
+# possible speedups:
+# - keep featurelists as dictionaries (FeatureWin.names)
+# - keep counts as dict name -> featuredict
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] args\nReturns regions of sequence that include at least x feature-names. bed-file has to be sorted!") 
+
+parser.add_option("-w", "--winsize", dest="winsize", help="size of clustering window [default: %default]", type="int", default="200", metavar="SIZE")
+
+parser.add_option("-n", "--name", dest="names", action="append", help="specify name to search for (can be used multiple times), separate number of minimal number of instances in window separated with ':', e.g. V$FOX_Q2:2", type="string", metavar="STRING") 
+
+parser.add_option("-m", "--mindist", dest="distcond", action="append", help="specify minimum distance between two names, format name1,name2=dist, e.g. V$FOX-V$PITX_Q2:50", type="string", metavar="NAME1,NAME2=DIST-DIST") 
+
+parser.add_option("-q", "--quiet", dest="quiet", action="store_true", help="supress debugging output",default="False") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="enable debugging messages",default="False") 
+
+parser.add_option("-c", "--addcover", dest="addcover", action="store_true", help="add a new feature that covers all matches features",default="False") 
+
+parser.add_option("-p", "--printdist", dest="printdist", action="store_true", help="add comment lines to bed that specify distances",default="False") 
+
+parser.add_option("-t", "--tripledist", dest="triplecond", action="append", help="triple distance condition, e.g. -t f1,f2,f3=10-20,30-40, NO REVERSE STRAND YET", type="string", metavar="" ) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+class FeatureWindow:
+    """ a windows over features of certain size that keeps track of the 
+     number of features of every name in trackNames that are currently contained in the window"""
+    def __init__(self, features, names, winsize):
+        self.features = features
+        self.winFeatures = [] # features currently in the window
+        self.winSize = winsize
+        self.counts = {}
+        self.names = names # these names are tracked
+        self.winStart = features[0].start
+        self.winEnd = self.winStart+self.winSize
+        self.lastPos = features[-1].end
+        self.seqID=features[0].chrom
+        self._fillWindow()
+
+    def __repr__(self):
+        d = []
+        d.append("======WINDOW:========")
+        d.append("start = "+str(self.winStart))
+        d.append("end = "+str(self.winEnd))
+        for k, v in self.counts.iteritems():
+            d.append("occurences of "+k+" = "+repr(v))
+        d.append("--NAMES that are tracked:--")
+        for n in self.names:
+            d.append(n)
+        d.append("--FEATURES:--")
+        for f in self.winFeatures:
+            d.append(repr(f))
+        d.append("=====================")
+        return "\n".join(d)
+    
+    def shiftRight(self):
+        """ shift window to the right by one feature and then delete/insert features"""
+        if self.features==[]:
+            raise StopIteration
+        nextF = self.features[0]
+        diff = nextF.start - self.winEnd + 1
+        self.winEnd+=diff
+        self.winStart+=diff
+        # remove on the left side and ajust counts
+        for i in reversed(range(0, len(self.winFeatures))):
+            f = self.winFeatures[i]
+            if f.start<self.winStart and f.name in self.names:
+                self.counts[f.name]-=1
+                del self.winFeatures[i]
+
+        # add on the right side and ajust counts
+        self._fillWindow()
+
+    def _fillWindow(self):
+        """ takes new features from self.features and put them into the window
+        until no more features are covered by the window """
+        while self.features!=[] and self.features[0].start<self.winEnd:
+            f = self.features.pop(0)
+            if f.start < self.winStart:
+                raise RuntimeError, "The bed file has to be sorted!"
+            if f.name in self.names:
+                self.winFeatures.append(f)
+                if not f.name in self.counts.keys():
+                    self.counts[f.name]=0
+                self.counts[f.name]+=1
+
+# --------- CLASS MATCH -------
+class Match:
+    def __init__(self, fts, type):
+        self.fts = fts
+        self.type = type
+
+#    ------- CLASS CONSTRAINTS -----------------
+
+class DistConstraint:
+    def __init__(self,name1, name2, mindist, maxdist):
+        self.n1 = name1
+        self.n2 = name2
+        self.mindist = mindist
+        self.maxdist = maxdist
+
+    # SLOW! O^2 instead of ON
+    def fulfilled(self, featWin):
+        #print "enter fulfill"
+        for f1 in featWin.winFeatures:
+            if f1.name==self.n1:
+                for f2 in featWin.winFeatures:
+                    if f2.name==self.n2:
+                        dist = abs(f1.start-f2.start)
+                        if dist<=self.maxdist and dist>=self.mindist:
+                            if f1.start < f2.start:
+                                return Features([f1, f2])
+                            else:
+                                return Features([f2, f1])
+                        else:
+                            return None
+
+    def __repr__(self):
+        return 'DistConstraint("%s", "%s", %u, %u)' % (self.n1,self.n2,self.mindist,self.maxdist)
+
+    def generateReverse(self):
+        newobj = DistConstraint(self.n2, self.n1, self.mindist, self.maxdist)
+        return newobj
+
+def absRange(x, min, max):
+    """ returns true if x is between min and max"""
+     #x = abs(x)
+    return (x>= min) and (x<=max)
+
+class TripleDistConstraint:
+    def __init__(self,names, dists):
+        self.names = names
+        self.mindists = []
+        self.maxdists = []
+        self.mindists.append(int(dists[0][0]))
+        self.maxdists.append(int(dists[0][1]))
+        self.mindists.append(int(dists[1][0]))
+        self.maxdists.append(int(dists[1][1]))
+
+    def fulfilled(self, featurewin):
+        # create dict on feature names
+        name2ftlst = {}
+        for f in featurewin.winFeatures:
+            name = f.name
+            if not name in featurewin.winFeatures:
+                name2ftlst[name]=[]
+            name2ftlst[name].append(f)
+        # search for names
+        min0 = self.mindists[0]
+        max0 = self.maxdists[0]
+        min1 = self.mindists[1]
+        max1 = self.maxdists[1]
+        for f1 in name2ftlst[self.names[0]]:
+            for f2 in name2ftlst[self.names[1]]:
+                if not absRange(f2.start-f1.start, min0, max0):
+                    continue
+                else:
+                    for f3 in name2ftlst[self.names[2]]:
+                        if not absRange(f3.start-f2.start, min1, max1):
+                            continue
+                    else:
+                        return Features([f1,f2,f3])
+        return None
+
+    def __repr__(self):
+        return 'TripleDistConstraint(names %s, mindists %s, maxdists %s)' % (self.names,self.mindists,self.maxdists)
+
+    def generateReverse(self):
+        """ reverse the constraints """
+        o = TripleDistConstraint()
+        o.names=reverse(self.names)
+        o.mindists=reverse(self.mindists)
+        o.maxdists=reverse(self.maxdists)
+        return o
+
+#    ******* CLASS CONSTRAINTS *****************
+
+def parseConstraints(options, names):
+    """ parses constraints from cmdline and returns them as a list of constraints objects. will add all names to the names-dict with min-occurence 1, if they don't exist in there yet. Will increase namecount in names-dict if they exist."""
+    list = []
+    # dist conditiions
+    if options.distcond!=None:
+        for d in options.distcond:
+            parts = d.strip().split(":")
+            factors = parts[0].split(",")
+            dists = parts[1].split("-")
+            if len(factors)==1:
+                sys.stderr.write("Could not parse two factor names separated by comma from this factor list: %s" % factors)
+                sys.exit(1)
+            if not factors[1] in names.keys():
+                names[factors[1]]=1
+            if not factors[0] in names.keys():
+                names[factors[0]]=1
+            constr = DistConstraint(factors[0], factors[1], int(dists[0]),int(dists[1]))
+            list.append(constr)
+
+    # triple dist conditiions
+    if options.triplecond!=None:
+        print "triple cond encountered"
+        for d in options.triplecond:
+            parts = d.strip().split(":")
+            factors = parts[0].split(",")
+            distsparts = parts[1].split(",")
+            dists = [p.split("-") for p in distsparts]
+            for n in factors:
+                if not n in names.keys():
+                    names[n]=1
+            constr = TripleDistConstraint(factors, dists)
+            list.append(constr)
+
+    #generate rev comp matchers 
+    revlist = [c.generateReverse() for c in list]
+    return (list,revlist)
+            
+def allConstraintsTrue(featurewin, names, constr):
+    """ checks if window fulfills all constraints and returns the matching features. 
+        returns None otherwise """
+    # check if enough features in window (to save time)
+    for name, minOcc in names.iteritems():
+        if featurewin.counts.get(name,0)<minOcc:
+            return None
+
+    # if no constraints, return features in window
+    if constr==None or constr==[]:
+        fts = []
+        for f in featurewin.winFeatures:
+            if f.name in featurewin.counts:
+                fts.append(f)
+        return fts
+        
+    for c in constr:
+        matchFts = c.fulfilled(featurewin)
+        if matchFts!=None:
+            # let's add features from window that are not in the match yet
+            for f in featurewin.winFeatures:
+                if not f in matchFts: 
+                    matchFts.append(f)
+            matchFts.sort()
+            return matchFts
+    return None 
+
+def printHit(fts):
+    """ prints a hit given a featureWindow , if fts not equal to lastfts"""
+    # prepare print
+    # x=[]
+    # recount features
+    # for f in fts:
+    #    count = fw.counts.get(name)
+    #    if count>0:
+    #        x.append(name+":"+str(fw.counts.get(name)))
+    # print window feature and single features
+    # if options.printdist==True:
+    #    f1 = fw.winFeatures[0]
+    #    f2 = fw.winFeatures[1]
+    #    dist = f1.start-f2.start
+    #    print "# Dist", f1.name, "-", f2.name, abs(dist)
+    for f in fts:
+        print f
+    if options.printdist==True:
+       f1 = fts[0]
+       f2 = fts[1]
+       dist = f1.start-f2.start
+       print "# Dist", f1.name, "-", f2.name, abs(dist)
+    if options.addcover==True:
+       desc = ""
+       for fi in range(len(fts[0:-1])): 
+            dist = fts[fi+1].start-fts[fi].start
+            desc += fts[fi].name+"(%d)"%fts[fi].score+"_"+str(dist)+"_"
+       desc += "%s(%d)" % (fts[-1].name,fts[fi-1].score)
+       print fts[0].chrom, fts[0].start, fts[-1].end, desc
+
+     
+# ==== MAIN ====
+if len(args)==0:
+    sys.stderr.write("\nPlease specify a bed-file. Use '-h' for help. \n")
+    sys.exit(1)
+
+#if options.distcond==None and options.names==None and options.triplecond==None:
+if options.distcond==None and options.names==None and options.triplecond==None:
+    sys.stderr.write("\nYou have to specify at least one condition. Use -h for help. \n")
+    sys.exit(1)
+
+names = {}
+if options.names!=None:
+    for name in options.names:
+        parts = name.split(":")
+        if len(parts)==2:
+            names[parts[0]]=int(parts[1])
+        else:
+            names[parts[0]]=1
+
+constr,revconstr = parseConstraints(options, names)
+
+if options.quiet!=True:
+    sys.stderr.write("Searching for the following occurences: %s \n" % str(names))
+    sys.stderr.write("In Search Window Size: %u\n" % options.winsize)
+    sys.stderr.write("Additional Conditions: %s \n" % str(constr))
+
+for filename in args:
+    sys.stderr.write("Scanning file %s\n" % filename)
+    lines = open(filename, "r").readlines()
+    fts = parseBedFile(lines)
+    fw = FeatureWindow(fts, options.names, options.winsize)
+
+    stop=False
+    lastmatch = None
+    while stop==False:
+        try:
+            match = allConstraintsTrue(fw, names, constr)
+            if match!=None and match!=lastmatch:
+                printHit(match)
+                lastmatch = copy.copy(match)
+
+            match = allConstraintsTrue(fw, names, revconstr)
+            if match!=None and match!=lastmatch:
+                printHit(match)
+                lastmatch = copy.copy(match)
+
+            fw.shiftRight()
+        except StopIteration:
+            stop=True
+
+
+
+
+

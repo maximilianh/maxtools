@@ -1,0 +1,76 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inputWordFile outputIndexFile - create an index for a word file, print words sorted by number of occurences to stdout") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infname = args[0]
+outf = args[1]
+
+stderr.write("Reading words and creating index...\n")
+f = open(infname, "r")
+
+wordIndex = {}
+flankData = []
+wordOccs =  {}
+
+motifs = wordParser.readMotifs(f)
+for m, desc in motifs:
+    wordIndex[m]={}
+
+i = 0
+for b in wordParser.readBlocks(f):
+    if "blockId" in b.__dict__:
+        blockId = b.blockId
+    else:
+        blockId = i
+    i+=1
+    for w in b.words:
+        #wordIndex[w][blockId]=len(b.words[w])
+        wordIndex[w][blockId]=",".join([x for (x,y) in b.words[w]])
+    data = [str(x) for x in (blockId, b.chrom, b.start, b.end, b.geneLeft, b.distLeft, b.geneRight, b.distRight, b.upstream)]
+    flankData.append(data)
+
+stderr.write("Writing index...\n")
+if outf=="stdout":
+    of=stdout
+else:
+    of = open(outf, "w")
+
+for flankLine in flankData:
+    of.write("bf\t%s\n" % ("\t".join(flankLine)))
+
+for word, occDict in wordIndex.iteritems():
+    of.write("%s\t" % word)
+    for word, occs in occDict.iteritems():
+        of.write("%s/%s;" % (word, occs))
+    of.write("\n")
+of.close()
+
+stderr.write("Words sorted by no of occurences:\n")
+
+nOccs = []
+for w,posList in wordIndex.iteritems():
+    nOccs.append((w,len(posList)))
+
+nOccs.sort(key=lambda (x,y): y)
+
+for word, nOcc in nOccs:
+    print word, nOcc
+
+

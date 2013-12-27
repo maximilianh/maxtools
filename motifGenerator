@@ -1,0 +1,87 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import util
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] - generate motifs of given length") 
+
+parser.add_option("-l", "--motifLen", dest="motifLen", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="5") 
+parser.add_option("-s", "--spacerSize", dest="nSpacers", action="store", help="len of middle spacer [default: %default, hexamers]", type="int", metavar="NUMBER", default="0") 
+parser.add_option("-a", "--addSymbols", dest="addSymbols", action="store_true", help="add IUPAC symbols RYMWSNK") 
+parser.add_option("-r", "--keepRevComp", dest="keepRevComp", action="store_true", help="keep reverse complements") 
+parser.add_option("-v", "--varyMotif", dest="varyMotif", action="store", help="do not generate motifs exhaustively, but only replace each position of start motif with the other possible letters") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def motifExists(motif, motifList):
+    rcm = "".join(util.revComp(motif))
+    #print
+    #print "motif",motif
+    #print "revmotif", rcm
+    #print "motiflist", motifList
+    for m in motifList:
+        #print "checking",m
+        if m==motif or m==rcm:
+            #print "alreday present", m, motif, rcm
+            return True
+    return False
+
+def addSpacers(motif, nSpacers):
+    spacer = "".join(['N'] * nSpacers)
+    mid = len(motif) / 2 
+    newmot = motif[:mid] + spacer + motif[mid:]
+    return newmot
+
+def generateMotifs(mLen, nSpacers, symbols, keepRevComp): 
+    noToNucl = {}
+    for i in range(0, len(symbols)):
+        noToNucl[i]=symbols[i]
+
+    motifList = []
+    for x in xrange(0, len(symbols)**mLen):
+        motif = []
+        remainder = x
+        for i in reversed(range(0, mLen)):
+                digit = remainder / len(symbols)**i
+                remainder = remainder % len(symbols)**i
+                nucl = noToNucl[digit]
+                motif.append(nucl)
+        motif = "".join(motif)
+        if motif[0]=="N" or motif[-1]=="N":
+            continue # ignore motifs with N at edges
+        motif = addSpacers(motif, nSpacers)
+        if (keepRevComp) or (not keepRevComp and not motifExists(motif, motifList)):
+            motifList.append(motif)
+    return motifList
+
+def varyMotif(motif, symbols):
+    for i in range(0, len(motif)):
+        for s in symbols:
+            yield motif[:i]+s+motif[i+1:]
+
+def allCombinations(l1, l2, l3):
+    for e1 in l1:
+        for e2 in l2:
+            for e3 in l3:
+                yield e1+e2+e3
+# ----------- MAIN --------------
+#if args==[]: 
+    #parser.print_help()
+    #exit(1)
+
+symbols="ACTG"
+if options.addSymbols:
+   symbols+="RYMSWKN" 
+
+if options.varyMotif:
+    leftMotifs = generateMotifs(options.motifLen, options.nSpacers, symbols, options.keepRevComp)
+    middleMotifs = set(varyMotif(options.varyMotif, symbols))
+    rightMotifs = generateMotifs(options.motifLen, options.nSpacers, symbols, options.keepRevComp)
+    motifs = set(allCombinations(leftMotifs, middleMotifs, rightMotifs))
+else:
+    motifs = generateMotifs(options.motifLen, options.nSpacers, symbols, options.keepRevComp)
+for m in motifs:
+    print m.upper()

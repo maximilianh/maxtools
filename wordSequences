@@ -1,0 +1,114 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import util, tabfile, wordParser # my own librarires
+import sets
+import os, glob
+
+set = sets.Set
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wordFile mafFile targetGenes - extract sequences given words and maf file and target genes, targetGenes can be 'all' to get all sequences") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-c", "--concat", dest="concat", action="store_true", help="concat sequences for given target gene and separate by NNNNN", default=False) 
+parser.add_option("-s", "--split", dest="split", action="store_true", help="split sequences into several files, adding suffixes to file name", default=None) 
+parser.add_option("-f", "--flankType", dest="flankType", action="store", type="int", help="get genes for a match: 0=only downstream gene, 1=closest gene, 2=both flanking genes, default %default", default=1) 
+parser.add_option("-d", "--maxDist", dest="maxDist", action="store", type="int", help="maximum distance of blocks from target gene, default %default", default=99999999999) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+outFh = None
+def outSeq(split, outFn, targetGene, org, chrom, start, seq):
+    global outFh
+    if not split:
+        if outFh==None:
+            outFh = open(outFn, "w")
+    else:
+        outFh=open(outFn+"."+org, "a")
+    seq = seq.replace("-","")
+    outFh.write(">%s|%s|%s_%s_%d\n%s\n" % (targetGene, targetGene, org, chrom, start, seq))
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+wordFn, mafFn, targetGeneFn, outFn = args
+concat = options.concat
+split = options.split
+maxDist = options.maxDist
+flankType = options.flankType
+
+# get genes, pool from all tissues
+if targetGeneFn!="all":
+    targetGenes = set(tabfile.slurplist(targetGeneFn))
+    stderr.write("Got %d target genes from file %s\n" % (len(targetGenes), targetGeneFn))
+else:
+    targetGenes = []
+    stderr.write("extracting from all genes in words file\n" )
+
+# get all blocks with their flanking genes
+# get coordinates from word file
+# index by chrom -> startPos -> gene-id
+stderr.write("Searching %s for blocks around target genes...\n" % wordFn)
+flankingGenes = {}
+wordFh = open(wordFn, "r")
+wordParser.readMotifs(wordFh)
+for b in wordParser.readBlocks(wordFh):
+    genes, intronic = b.getGenes(flankType=flankType, stripComment=True, maxDist=maxDist)
+    for g in genes:
+        if g in targetGenes or len(targetGenes)==0:
+            flankingGenes.setdefault(b.chrom, {})[int(b.start)]=g
+
+# iterate over lines of maf file, print in fa format if found in index 
+seqs = {}
+stderr.write("Searching %s for sequences with these positions...\n" % mafFn)
+printBlock=False
+for l in open(mafFn, "r"):
+    if l.startswith("#") or l.startswith("a"):
+        printBlock=False # whenever printBlock=True, all sequences of this block are printed 
+        blockTargetGene=None
+        continue
+    if l.startswith("s"):
+        fs = l.split()
+        s, orgChrom, start, length, strand, chromSize, seq = fs
+        org, chrom = orgChrom.split(".")
+        start = int(start)
+        targetGene = flankingGenes.get(chrom, {}).get(start, None)
+        if not printBlock:
+            blockTargetGene = targetGene
+        else:
+            targetGene = blockTargetGene
+        #print "tg, pb", targetGene, printBlock
+
+        if targetGene!=None or printBlock:
+            seqs.setdefault(targetGene, {}).setdefault(org, []).append((chrom, start, seq))
+            printBlock=True
+            #if not concat:
+                #print ">%s|%s|%s_%s_%d" % (targetGene, targetGene, org, chrom, start)
+                #lastTarget=targetGene
+                #print seq
+            #else:
+                
+# delete outFn.fa.org sequences
+if split:
+    files = glob.glob(outFn+"*")
+    for f in files:
+        os.delete(f)
+
+for targetGene, orgDict in seqs.iteritems():
+    for org, seqs in orgDict.iteritems():
+        if not concat:
+            for chrom, start, seq in seqs:
+                    outSeq(split, outFn, targetGene, org, chrom, start, seq)
+                    #print seq
+        else:
+            seqList = [seq for chrom, start, seq in seqs]
+            seqStr = "NNNNNNNNN".join(seqList)
+            outSeq(split, outFn, targetGene, org, "ConcatChroms", 0, seqStr)
+            #print ">%s|%s|%s" % (targetGene, targetGene, org)
+            #print seqStr.replace("-","")
+

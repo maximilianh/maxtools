@@ -1,0 +1,520 @@
+#!/usr/bin/perl
+use strict;
+use Bio::EnsEMBL::DBSQL::DBAdaptor;
+use Bio::EnsEMBL::Compara::DBSQL::DBAdaptor;
+use vars qw(%opt);
+$| = 1; # flush stdout
+
+sub max {
+    my $a = shift;
+    my $b = shift;
+
+    if ($a>$b) {
+        return $a; 
+    }
+    else {
+        return $b;
+    }
+}
+
+sub min {
+    my $a = shift;
+    my $b = shift;
+
+    if ($a<$b) {
+        return $a; 
+    }
+    else {
+        return $b;
+    }
+}
+
+
+sub feature2string {
+  my $f = shift;
+  my $stable_id = $f->stable_id();
+  my $seq_region = $f->slice->seq_region_name();
+  my $start = $f->start();
+  my $end   = $f->end();
+  my $strand = $f->strand();
+
+  return "$stable_id : $seq_region:$start-$end ($strand)";
+}
+
+sub feature2list {
+  my $f = shift;
+  my $name = shift;
+  my $stable_id = $f->stable_id();
+  my $seq_region = $f->slice->seq_region_name();
+  my $start = $f->start();
+  my $end   = $f->end();
+  my $strand = $f->strand();
+  my $score = 0;
+
+  return ($start, $end, $name, $score, $strand);
+}
+
+sub init()
+{
+   use Getopt::Std;
+   my $opt_string = 'v:b:hu:d:g';
+   getopts( "$opt_string", \%opt ) or usage();
+   usage() if $opt{h} or @ARGV==0;
+}
+
+# translates ensembl id from any species to HGNC-symbol on human using compara
+sub getHugoName() {
+    my $id = shift;
+    my $species = shift;
+
+    if ($species eq "Homo_sapiens") {
+        return $id;
+    }
+    
+    my $geneName="";
+
+    print STDERR "Searching gene id $id on human: ";
+    my $member_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Multi', 'compara', 'Member');
+    my $member = $member_adaptor->fetch_by_source_stable_id( 'ENSEMBLGENE',$id);
+    if (not $member) {
+        print STDERR "No homology information at all for this gene. Sticking with $id.\n";
+        return $id;
+    }
+    my $homology_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Multi', 'compara', 'Homology');
+    my $homologies = $homology_adaptor->fetch_by_Member($member);
+
+    my %already = ();
+    foreach my $homology (@{$homologies}) {
+      if ($homology->description =~ /ortholog/) {
+          foreach my $member_attribute (@{$homology->get_all_Member_Attribute}) {
+            my ($member, $attribute) = @{$member_attribute};
+            my $id = $member->stable_id;
+            my $taxon = $member->taxon;
+            my $species = $taxon->get_tagvalue('scientific name');
+            if ($species eq "Homo sapiens") {
+                my $gene = $member->gene();
+                $geneName = $gene->external_name();
+                if ($geneName eq "") {
+                    $geneName = $id;
+                }
+            }
+          }
+      }
+    }
+    if ($geneName eq "") {
+        print STDERR "No name, sticking with $id\n";
+        return $id
+    } else {
+        print STDERR "HUGO name=$geneName\n";
+        return $geneName;
+    }
+}
+
+# --- get only human gene symbols given a slice and a species -----
+sub get_Genes() {
+    my ($geneid, $species, $upLen, $downLen) = @_;
+
+    my ($slice, $strand) = get_flank_slice($geneid, $species, $upLen, $downLen);
+
+    my $chrom = $slice->seq_region_name() ;
+    my $start = $slice->start ;
+    my $end = $slice->end ;
+    print STDERR "getting all genes in region $species,$chrom:$start-$end \n";
+
+    my @genes = ();
+    foreach my $gene (@{$slice->get_all_Genes()}) {
+      my $geneName;
+      # on human there is already a HUGO name
+      if ($species =~ /omo/) {   
+          $geneName = $gene->external_name();
+          if ($geneName eq "") {
+              $geneName = $gene->stable_id();
+          }
+      }
+      else {
+          $geneName = &getHugoName($gene->stable_id(), $species);
+      }
+
+      #if (! $geneName =~ /^EN.*/ ) {
+          push @genes, $geneName;
+          #}
+    }
+    return @genes;
+}
+
+# --- get exons for given slice and write general gene info to vista file -----
+sub get_Exons() {
+    my $slice = shift;
+    my $species = lc shift;
+    my $baseSpecies = lc shift;
+    my $vistafile = shift;
+
+    if ($vistafile) {
+        open VISTA, ">> $vistafile" or die "can't write to $vistafile";
+    }
+
+    my $chrom = $slice->seq_region_name() ;
+    my $start = $slice->start() ;
+    my $end = $slice->end() ;
+    my $sliceSize=$end-$start;
+    print STDERR "getting exons in region $chrom:$start-$end \n";
+    my @exons = ();
+    foreach my $gene (@{$slice->get_all_Genes()}) {
+      my $exonNo =1;
+
+      # try to resolve gene name to something meaning-feul
+      #print STDERR "Species is: $species, baseSpecies: $baseSpecies\n";
+
+      my $geneName;
+      # on human there is already a HUGO name
+      if ($species =~ /homo/) {   
+          $geneName = $gene->external_name();
+          if ($geneName eq "") {
+              $geneName = $gene->stable_id();
+          }
+      }
+      elsif ($species =~ /$baseSpecies/) {
+          $geneName = &getHugoName($gene->stable_id(), $species);
+      }
+      else {
+          # for others, we don't care, take the stupid number
+          $geneName = $gene->stable_id();
+      }
+
+
+      my $minStart = 9999999999999;
+      my $maxEnd = 0;
+
+      foreach my $trans (@{$gene->get_all_Transcripts()}) {
+
+        my $minStart = min($minStart,$trans->start());
+        my $maxEnd = max($maxEnd, $trans->end());
+
+        my $illegalCoords = 0;
+        foreach my $exon (@{$trans->get_all_Exons()}) {
+          my $bedname = $geneName."_e$exonNo";
+          my @newexon = &feature2list($exon, $bedname);
+          #print STDERR " exon is @newexon\n";
+          my $newstart = $newexon[0];
+          my $newend = $newexon[1];
+
+          # filter out bad exons
+          if ($newstart < 0) {
+            print STDERR "start is $start, < 0, setting start to 0\n";
+            $newexon[0]=0;
+            $newexon[1]=0;
+            $illegalCoords = 1;
+
+          }
+          if ($newend > $end and $newstart > $start) {
+            print STDERR "end is $newend, > $end, (start > $start), setting end to $end\n";
+            $newexon[1]=$end;
+          }
+
+          my $alreadyIn = 0;
+          # check if contained by any other exon
+          for my $i (0 .. $#exons) {
+                my $ref = $exons[$i];
+                my ($start, $end, $name, $score, $strand) = @$ref;
+                if (($newstart >= $start) and ($newend <= $end)) {
+                    $alreadyIn = 1;
+                    last;
+                }
+                if (($newstart <= $start) and ($newend >= $end)) {
+                    # replace in list
+                    $exons[$i] = \@newexon;
+                    $alreadyIn = 1;
+                }
+          }
+
+          # do not add if already in out exon-list or start outside range
+          if (not $alreadyIn and not $illegalCoords) {
+              push @exons, [ @newexon ] ;
+              $exonNo++;
+          }
+
+          if ($trans->strand()==1) {
+              print VISTA ">$minStart $maxEnd $geneName";
+          }
+          else {
+              print VISTA "<$minStart $maxEnd $geneName";
+          }
+        }
+      }
+      close VISTA;
+}
+
+return @exons;
+}
+
+sub get_gene_slice {
+ # get slice for gene given species and geneid
+ my ($species, $geneid) = @_;
+
+ #get Slice adaptor object for a particular species
+ my $slice_adaptor = Bio::EnsEMBL::Registry->get_adaptor($species, "core", "Slice");
+
+ my $slice = $slice_adaptor->fetch_by_gene_stable_id($geneid);
+ my $coord_name = $slice->coord_system_name();
+
+ #get Gene adaptor object for a particular species
+ my $gene_adaptor = Bio::EnsEMBL::Registry->get_adaptor($species, "core", "Gene");
+ my $gene = $gene_adaptor->fetch_by_stable_id($geneid);
+
+  #try to retrieve upstream sequence
+ my $revcomp = "";
+ my $seq = "";
+ my @exons = ();
+
+ return ($slice, $gene)
+}
+
+sub get_flank_slice {
+# get slice around gene  given species, geneid and up/down length
+ my ($geneid, $species, $upseq_length, $downseq_length) = @_;
+ my ($slice, $gene) = &get_gene_slice($species, $geneid);
+
+ # get sequence of flank slice
+ my $gene_strand = $gene->strand();
+ my $seqname = $slice->seq_region_name();
+ my $start = $slice->start();
+ my $end = $slice->end();
+ my $upStart = 0;
+ my $upEnd = 0;
+ if($gene_strand eq "1") { # gene is on pos strand 
+   #printf STDERR "POSITIVE STRAND $gene_strand\n";
+   $upStart = &max ($start - $upseq_length, 0);
+   $upEnd = $end + $downseq_length;
+
+ }
+ else { # gene is on neg strand
+   #printf STDERR "NEGATIVE STRAND $gene_strand\n";
+   $upStart = &max ($start - $downseq_length);
+   $upEnd = $end + $upseq_length;
+   }
+ my $slice_adaptor = Bio::EnsEMBL::Registry->get_adaptor($species, "core", "Slice");
+ my $coord_name = $slice->coord_system_name();
+ my $upSlice = $slice_adaptor->fetch_by_region($coord_name, $seqname, $upStart, $upEnd);
+ return $upSlice, ($gene_strand eq "1");
+}
+
+sub get_Seq{
+#retrieve sequences of the specified gene and the flanking sequences on both sides with size n, write exons in those regions to bedfile
+
+ my ($geneid, $species, $baseSpecies, $upseq_length, $downseq_length, $bedfile, $vistafile) = @_;
+ print STDERR "getting seq and flanking around $geneid from $species\n";
+ my ($upSlice, $strand) = get_flank_slice($geneid, $species, $upseq_length, $downseq_length);
+ my $seq = $upSlice -> seq();
+ my $slice = $upSlice;
+ my @exons = &get_Exons($slice, $species, $baseSpecies, $vistafile);
+ my $revcomp="FALSE";
+ my $seqlen = length($seq);
+ if (! $strand) {
+     my $seq_obj = Bio::Seq->new(-seq => "$seq", -alphabet => 'dna' );
+     $seq = $seq_obj->revcom()->seq();
+     $revcomp = "TRUE";
+     # rev-compl exons
+     my @newexons = ();
+     for my $bedref (@exons) {
+         my ($start, $end, $name, $score, $strand) = @$bedref;
+         $start = $seqlen - ($start - 1);
+         $end = $seqlen - $end;
+         ($start, $end) = ($end, $start);
+         $strand = 0 - $strand;
+         push @newexons, [ $start, $end, $name, $score, $strand ];
+
+     }
+     @exons = @newexons;
+ }
+
+ my $chrom = $slice->seq_region_name;
+ my $start = $slice->start();
+ my $end = $slice->end();
+ $species =~ tr/A-Z/a-z/;
+ my $head = ">$species range=$chrom:$start-$end revComp=$revcomp gene=$geneid\n";
+
+ if ($bedfile) {
+     open BED, ">> $bedfile" or die "can't write to $bedfile";
+     for my $bedref (@exons) {
+         my $strand = $$bedref[4] ;
+         if ($strand eq "1") {
+             $strand = "+";
+         }
+         else {
+             $strand = "-";
+         }
+         $$bedref[4] = $strand;
+
+         my $line = join ("\t", @$bedref);
+         my $start = @$bedref[0];
+         my $end = @$bedref[1];
+         if ($start < 0) {
+             print STDERR "info: start < 0, dropping $line\n";
+             next;
+         }
+
+         print BED "$species\t".$line."\n";
+     }
+     close BED;
+ }
+
+ if ($vistafile) {
+     open VISTA, ">> $vistafile" or die "can't write to $vistafile";
+
+     for my $vref (@exons) {
+         my $strand = $$vref[3] ;
+         if ($strand == "1") {
+             $strand = ">";
+         }
+         else {
+             $strand = "<";
+         }
+         my $start = @$vref[0];
+         my $end = @$vref[1];
+         if ($start < 0) {
+             print STDERR "info: start < 0, dropping exon $start, $end, $strand\n";
+             next;
+         }
+
+         print VISTA "$strand$start $end exon";
+
+     }
+     close VISTA;
+ }
+ return $head.$seq."\n";
+}
+
+sub usage() {
+    print "orthoSeqs: downloads orthologous gene-sequences as fasta plus flanking from ensembl\n";
+    print "usage: orthoSeqs [options (really here!)] hugo-gene-symbol speciesSet basespecies\n";
+    print "options:\n";
+    print "   -u <int>  : download upstream sequence \n";
+    print "   -d <int>  : download downstream sequence \n";
+    print "   -b <file> : write exons to this bedfile \n";
+    print "   -v <file> : write genes to this vista-file \n";
+    print "   -v <file> : write genes to this vista-file \n";
+    print "   -g        : output only list of genes, no sequences\n";
+    print "   SPECIESSET is a comma seperated list of tags that identify a set of species\n";
+    print "   SPECIESSET example: homo,mus,norvegicus\n";
+    print "   SPECIESSET can be also be 'hmr' or 'fish'  \n";
+    print "   BASESPECIES is similar but only the MAIN species, e.g. homo or oryzias\n";
+    print "   Only the main species will have gene names translated to HUGO\n";
+    exit(1);
+}
+
+# --------------- MAIN ---------------
+&init();
+Bio::EnsEMBL::Registry->load_registry_from_db( -host => 'ensembldb.ensembl.org', -user => 'anonymous');
+
+my $up        = $opt{u};
+my $down      = $opt{d};
+my $bedfile   = $opt{b};
+my $vistafile = $opt{v};
+my $justGenes = $opt{g};
+printf STDERR "parameters: $up bp upstrea, $down bp downstream, $bedfile bedfile, $vistafile vistafile\n";
+
+if ($bedfile) {
+    print STDERR "Writing to $bedfile\n";
+    open BED,">$bedfile";
+    truncate BED, 0;
+    close BED;
+}
+
+if ($vistafile) {
+    print STDERR "Writing to $vistafile\n";
+    open VISTA,">$vistafile";
+    truncate VISTA, 0;
+    close VISTA;
+}
+
+my @fish = ("latipes", "takifugu", "tetraodon", "aculeatus");
+my @fishnoTet = ("latipes", "takifugu", "aculeatus");
+my @fishMedFugu = ("latipes", "takifugu");
+my @fishMedFuguTet = ("latipes", "takifugu", "tetraodon");
+my @fishMedGast = ("latipes", "aculeatus");
+my @hmr = ("homo", "mus", "rattus");
+my $symbol=@ARGV[0];
+my $specStr = $ARGV[1];
+my @species = -1;
+my $baseSpecies = $ARGV[2];
+print STDERR "base species: $baseSpecies\n";
+
+if ($specStr eq "fish") {
+    @species = @fish;
+} 
+elsif ($specStr eq "fish-medGast") {
+    @species = @fishMedGast;
+}
+elsif ($specStr eq "fish-noTet") {
+    @species = @fishnoTet;
+}
+elsif ($specStr eq "hmr") {
+    @species = @hmr;
+}
+elsif ($specStr eq "fish-medFugu") {
+    @species = @fishMedFugu;
+}
+elsif ($specStr eq "fish-medFuguTet") {
+    @species = @fishMedFuguTet;
+}
+else {
+    @species = split(/,/, $specStr);
+}
+print STDERR "species to download: @species\n";
+
+
+# get human gene for symbol
+my $gene_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Human', 'core', 'Gene');
+my @genes = @{$gene_adaptor->fetch_all_by_external_name($symbol)};
+if (scalar @genes > 1) {
+    print STDERR "error: gene symbol ist not unique on human.\n";
+    exit(1);
+}
+my $human_id = @genes[0]->stable_id;
+print STDERR "human gene id for $symbol is $human_id\n";
+
+# get compara members for human gene
+my $member_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Multi', 'compara', 'Member');
+my $member = $member_adaptor->fetch_by_source_stable_id( 'ENSEMBLGENE',$human_id);
+
+# print out some information about the Member
+#if ($member!=0) { 
+#    print "chr".$member->chr_name, ":", $member->chr_start, "-", $member->chr_end, "NAME: ", $member->display_label(), "\n";
+#}
+
+my $homology_adaptor = Bio::EnsEMBL::Registry->get_adaptor('Multi', 'compara', 'Homology');
+my $homologies = $homology_adaptor->fetch_by_Member($member);
+#my $homologies = $homology_adaptor->fetch_all_by_Member_method_link_type($member, "ortholog");
+
+my %already = ();
+foreach my $homology (@{$homologies}) {
+  #print STDERR $homology->description."\n";
+  print STDERR $homology->description," ", $homology->subtype,"\n";
+
+  #if ($homology->description =~ /ortholog/) {
+      foreach my $member_attribute (@{$homology->get_all_Member_Attribute}) {
+        my ($member, $attribute) = @{$member_attribute};
+        my $id = $member->stable_id;
+        my $taxon = $member->taxon;
+        my $species = $taxon->get_tagvalue('scientific name');
+        print STDERR " member: $species $id $taxon\n"; 
+        next;
+        foreach my $spec (@species) {
+            if ($species =~ /$spec/i) {
+                    $species =~ s/ /_/g;
+                    if (! exists $already{$id}) {
+                        $already{ $id } = 1;
+                        if ($justGenes) {
+                            my @genes = &get_Genes($id, $species, $up, $down); 
+                            print $species."\t".join("\t", @genes)."\n";
+
+                        }
+                        else {
+                            print &get_Seq($id, $species, $baseSpecies, $up, $down, $bedfile, $vistafile);
+                        }
+                    }
+            }
+        } 
+        #}
+  }
+}

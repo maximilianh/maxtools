@@ -1,0 +1,234 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import os
+import shutil
+import glob
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inputFastaFileOrDirectory inputDir outputDir: blast a file or all .fa files in a directory against all files below a certain directory. Autodetects cluster system(LSF/SGE). If input is a directory, will not run all-against-all but rather try to match input names to database names.") 
+
+parser.add_option("-b", "--blat", dest="blat", action="store_true", help="use blat instead of blast") 
+parser.add_option("-p", "--pslFormat", dest="pslFormat", action="store_true", help="store in psl format using blastToPsl") 
+parser.add_option("-r", "--rawFormat", dest="rawFormat", action="store_true", help="store in raw blast format") 
+parser.add_option("-a", "--addOptions", dest="addOptions", action="store", help="add these options when callling the blast/blat program (remember to quote spaces, you can use the @ instead of the - character)", default="") 
+parser.add_option("", "--forceCluster", dest="cluster", action="store", help="can be set to 'sge' or 'lsf'. Forces LSF cluster mode, which is usually autodetected from SGE_CELL variable or SGE cluster mode autodetect based on LSF_SERVERDIR variable. This should usually not be needed.", default="") 
+parser.add_option("-f", "--flatOutDir", dest="flatOutDir", action="store_true", help="do not recreate input directory structure but put output file directly into output directory") 
+parser.add_option("-t", "--test", dest="test", action="store_true", help="dry-run, just print commands that would be executed") 
+parser.add_option("-q", "--queue", dest="queue", action="store", help="on cluster: name of queue") 
+parser.add_option("", "--try", dest="trySub", action="store_true", help="on cluster: Submit only 5 jobs to try job submission system") 
+parser.add_option("", "--logPath", dest="logPath", action="store", help="for sge cluster: logfile directory (see qsub's manpage and the -e and -o options)") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+# copied from http://code.activestate.com/recipes/302594/ 
+def relpath(target, base=os.curdir):
+    """
+    Return a relative path to the target from either the current dir or an optional base dir.
+    Base can be a directory specified either as absolute or relative to current dir.
+    """
+
+    if not os.path.exists(target):
+        raise OSError, 'Target does not exist: '+target
+
+    if not os.path.isdir(base):
+        raise OSError, 'Base is not a directory or does not exist: '+base
+
+    base_list = (os.path.abspath(base)).split(os.sep)
+    target_list = (os.path.abspath(target)).split(os.sep)
+
+    # On the windows platform the target may be on a completely different drive from the base.
+    if os.name in ['nt','dos','os2'] and base_list[0] <> target_list[0]:
+        raise OSError, 'Target is on a different drive to base. Target: '+target_list[0].upper()+', base: '+base_list[0].upper()
+
+    # Starting from the filepath root, work out how much of the filepath is
+    # shared by base and target.
+    for i in range(min(len(base_list), len(target_list))):
+        if base_list[i] <> target_list[i]: break
+    else:
+        # If we broke out of the loop, i is pointing to the first differing path elements.
+        # If we didn't break out of the loop, i is pointing to identical path elements.
+        # Increment i so that in all cases it points to the first differing path elements.
+        i+=1
+
+    rel_list = [os.pardir] * (len(base_list)-i) + target_list[i:]
+    return os.path.join(*rel_list)
+
+def getTargetFiles(dir, blat=False):
+    if blat:
+        ext=".2bit" # UCSC's 2bit format extension
+    else:
+        ext=".nin" # this is the extension of one of the blast db files
+
+    fileData = os.walk(dir)
+    files = []
+    for dirpath, dirnames, filenames in fileData:
+        for file in filenames:
+            if file.endswith(ext):
+                files.append(os.path.join(dirpath, file))
+    return files
+
+def findTargetFiles(queryFile, dbFiles):
+    """ keep only dbFiles-entries that contain queryFile's basename somewhere in their paths """
+    queryBase = os.path.basename(queryFile)
+    queryGenome=queryBase.replace(".fa", "")
+    queryGenome=queryGenome.lower()
+
+    newDbFiles = []
+    for dbPath in dbFiles:
+        if queryGenome in dbPath:
+            newDbFiles.append(dbPath)
+
+    return newDbFiles
+
+def setBsubQsub(options):
+    bsub   = False
+    qsub   = False
+
+    if options.cluster.lower()=="lsf":
+        bsub=True
+    if options.cluster.lower()=="sge":
+        qsub=True
+
+    if os.environ.get('LSF_SERVERDIR', None):
+        bsub=True
+    if os.environ.get('SGE_CELL', None):
+        qsub=True
+
+    return bsub, qsub
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+query = args[0]
+baseDir = args[1]
+outDir = args[2]
+
+test       = options.test
+blat       = options.blat
+queue      = options.queue
+pslFormat  = options.pslFormat
+rawFormat  = options.rawFormat
+logPath    = options.logPath
+trySub     = options.trySub
+flatOutDir = options.flatOutDir
+addOptions = options.addOptions
+
+addOptions = addOptions.replace("@", "-")
+bsub, qsub = setBsubQsub(options)
+
+stderr.write("Searching for database files\n")
+dbFiles = getTargetFiles(baseDir, blat)
+
+sourceTargetDict = {}
+
+if os.path.isfile(query):
+    sourceTargetDict[query] = dbFiles
+elif os.path.isdir(query):
+    infiles = glob.glob(os.path.join(query, "*.fa"))
+    for infile in infiles:
+        targetFiles = findTargetFiles(infile, dbFiles)
+        if len(targetFiles)==0:
+            stderr.write("Could not find a target file for input file %s\n" % infile)
+        else:
+            sourceTargetDict[infile] = targetFiles
+else:
+    stderr.write("Input path does not exist\n")
+    exit(1)
+
+count = 0
+for src, targets in sourceTargetDict.iteritems():
+    count+=len(targets)
+
+stderr.write("Found %d input files and %d BLAST/BLAT database files \n" % (len(sourceTargetDict), len(dbFiles)))
+stderr.write("This results in %d alignment jobs\n" % count)
+
+subCount=0
+stop = False
+
+for query, targetFiles in sourceTargetDict.iteritems():
+
+    if len(targetFiles)==0:
+        stderr.write("error: No blast databases found for input file %s!\n" % query)
+        exit(1)
+
+    for dbFile in targetFiles:
+        if flatOutDir:
+            outfile = os.path.join(outDir, os.path.basename(dbFile))
+        else:
+            # write to same relative directory from outDir, create all necessary directories if not testmode
+            outfile = os.path.join(outDir, relpath(dbFile, base=baseDir))
+            if not test:
+                dirname = os.path.dirname(outfile)
+                if not os.path.isdir(dirname):
+                    os.makedirs(dirname)
+
+        outfile = outfile.replace(".nin","").replace(".2bit","").replace(".fa","")
+
+        if os.path.exists(outfile) and not (qsub or bsub):
+            stderr.write("moving %s out of the way, to /tmp\n" %outfile)
+            shutil.move(outfile, "/tmp/"+outfile)
+
+        dbFile = os.path.normpath(dbFile)
+        allOptions = addOptions
+
+        if not blat:
+            dbFile = dbFile.replace(".nin","")
+            if not rawFormat:
+                allOptions += " -m 8"
+            blastcmd = "blastall -p blastn %s -i %s -d %s" % (allOptions, query, dbFile)
+            if not pslFormat:
+                blastcmd += " -o %s" % (outfile+".blast")
+            else:
+                blastcmd += "| blastToPsl stdin %s" % (outfile+".psl")
+
+        else:
+            blastcmd = "`which blat` -noHead %s %s %s %s" % (dbFile, query, (outfile+".psl"), allOptions)
+
+        if bsub:
+            if queue:
+                queueStr = "-q %s "+queue
+            else:
+                queueStr = ""
+
+            blastcmd = "bsub "+queueStr +" '"+blastcmd+ "'"
+        elif qsub:
+            logFileStr = ""
+            if logPath:
+                logFullPath = os.path.join(logPath,"blastOnAll-$JOB_ID-$JOB_NAME.out")
+                logFileStr = "-o '"+logFullPath+ "' "
+
+            if queue:
+                queueStr = "-q %s " % queue
+            else:
+                queueStr = ""
+
+            blastcmd = 'qsub %s -cwd -V -j y %s -b y "' % (logFileStr, queueStr) +blastcmd+ '"' 
+
+        ret = 0
+
+        print "Running: "+blastcmd
+        if not test:
+            ret = os.system(blastcmd)
+        else:
+            print blastcmd
+
+        if trySub and (subCount>=3):
+            print "--try was set, stopped after %d submissions" % subCount
+            stop = True
+            break
+        subCount+=1
+
+        if ret != 0:
+            stderr.write("error occured, return code != 0\n")
+            exit(1)
+
+    if stop: # really break
+        break
+
+if test:
+    stderr.write("blastOnAll: Dry-run was activated, no command was run, remove the -t option from blastOnAll to actually run the commands displayed above\n")

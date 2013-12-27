@@ -1,0 +1,71 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import util
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - download zfin images given a file in the format zfinGeneId\tgeneSymbol\tZfin-EST-ID") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+f = open(filename, "r")
+
+# for thisse et al
+# http://zfin.org/cgi-bin/webdriver?MIval=aa-fxallfigures.apg&OID=ZDB-PUB-010810-1&fxallfig_probe_zdb_id=ZDB-EST-030925-2
+for l in f:
+    if l.startswith("#"):
+        continue
+    # ZDB-GENE-050522-133 zgc:109989  ZDB-EST-030829-51
+    geneId, symbol, pubId, estId = l.split("\t")
+    estId = estId.strip()
+    url = "http://zfin.org/cgi-bin/webdriver?MIval=aa-fxallfigures.apg&OID=%s&fxallfig_probe_zdb_id=%s" % (pubId, estId)
+    print "getting %s" % url
+    print "downloading img overview for %s, %s" % (symbol, estId)
+    # exmaple line:
+    #                     <a href="/cgi-bin/webdriver?MIval=aa-imageview.apg&OID=ZDB-IMAGE-051107-118&image_table=image">
+    #images = util.httpMatches(url, '[ ]*<a href="/cgi-bin/webdriver.MIval=aa-imageview.apg.OID=([^&]*).*')
+    stageImgs = {}
+    imgIds = []
+    for l in util.httpGet(url):
+        if l.find("aa-imageview.apg")!=-1:
+            imgId = l.split("=")[3].split("&")[0]
+            #print "imdId==>",imgId
+            imgIds.append(imgId)
+        if l.find("Stage Range")!=-1:
+            stage = l.split("'")[1]
+            stage = stage.split("'")[0]
+            try:
+                startHour = float(stage.split("(")[1].split("h")[0])
+            except:
+                startHour = float(stage.split("(")[1].split("d")[0])*24.0
+            #print "stage ==>",stage, startHour
+            print stage, startHour
+            for i in imgIds:
+                stageImgs.setdefault(startHour, []).append(i)
+            imgIds=[]
+    print "Images: ",str(stageImgs)
+        
+    for startHour, imgIds in stageImgs.iteritems():
+        if startHour >= 24.0:
+            for imgId in imgIds:
+                imgUrl = "http://zfin.org/imageLoadUp/%s.jpg" % imgId
+                fname = "%s_%s_%s_%s_%s.jpg" % (symbol, geneId, estId, imgId, startHour)
+                if not os.path.exists(fname):
+                    print "  downloading image %s to file %s" % (imgId, fname)
+                    try:
+                        util.httpDownload(imgUrl, fname)
+                    except:
+                        print "  download error for image %s" % imgId

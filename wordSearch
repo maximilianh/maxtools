@@ -1,0 +1,292 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import tabfile
+import html
+import cgi, os.path
+import cgitb
+import bed
+from regionView import RegionView
+
+CGI=True
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+#parser = OptionParser("usage: %prog [options] filename motif motif motif - search a word file for a combination of motifs, can be used as a cgi script if renamed to (something).cgi") 
+#parser.add_option("-o", "--html", dest="html", action="store", help="file to write html output to") 
+#parser.add_option("-a", "--annot", dest="annot", action="store", help="annotations for html output, a comma separated list of key=value pairs, e.g. human=/heap/ci2/ensHuman/ciona-human.best.e46.blast,hugo=/heap/ci2/ensHuman/ci-hugo.e46.hash") 
+#parser.add_option("-v", "--invert", dest="invert", action="store_true",  help="do not output matching blocks but output NON matching blocks") 
+#parser.add_option("", "--onlyAnnot", dest="onlyAnnot", action="store_true",  help="only process annotated genes, only output blocks around annotated genes") 
+#parser.add_option("-w", "--window", dest="window", action="store", type="int", help="all matches have to fall within a window of x bp within a conserved block, default %default", default=200) 
+#parser.add_option("-g", "--geneFile", dest="geneFile", action="store", help="use linenumber of this bed-file to get number of genes") 
+#parser.add_option("-t", "--targetRegions", dest="targetRegions", action="store", help="these are the regions of expression that we are interested in, comma-separated, e.g. 'ant. sens. ves.,dorsal epidermis'") 
+#parser.add_option("-e", "--exprDesc", dest="exprDesc", action="store", help="a file with <geneId>tab<anatomicalRegion>-descriptions, used for the expression counts") 
+#parser.add_option("-d", "--flankType", dest="flankType", action="store", type="int", help="get genes for a match: 0=only downstream gene, 1=closest gene, 2=both flanking genes, default %default", default=1) 
+#parser.add_option("", "--maxDist", dest="maxDist", action="store", type="int", help="only use genes that are located closer than a certain distance to the conserved block", default=3000000000) 
+#parser.add_option("", "--format", dest="format", action="store", help="output format: blockBed=one feature per block, singleBed=one feature per individual motif match, words = complete blocks in words-file, default %default", default="blockBed") 
+#(options, args) = parser.parse_args()
+
+# ==== SUBMODULE =====
+# ==== FUNCTIONs =====
+def debug(msg):
+    if not CGI:
+        stderr.write(msg)
+    return
+
+def parseAnnotations(string):
+    """ parse aniseed annotation, return as dict tissue->genes and a set of allGenes """
+    lines = string.split("\n")
+    tissueToGenes = {}
+    allGenes = set()
+    for l in lines:
+        l = l.strip()
+        if len(l)==0:
+            continue
+        if l.startswith("#"):
+            continue
+        # columns can be separated by tabs but also with spaces
+        if l.find("\t")!=-1:
+            fs = l.split("\t")
+            if len(fs)>2:
+                print "error: illegal format in foreground genes, more than one tab per line in line: %s" % l
+                return
+        else:
+            fs = l.split(" ")
+            newfs = []
+            newfs.append(fs[0])
+            newfs.append(" ".join(fs[1:]))
+            fs = newfs
+        if len(fs)==1:
+            fs.append("dummyAnnot")
+        gene, annot = fs
+
+        allGenes.add(gene)
+        tissueToGenes.setdefault(annot, set()).add(gene)
+
+    return tissueToGenes, allGenes
+
+def parseCgiParams():
+    def revComp(seq):
+        table = { "a":"t", "A":"T", "t" :"a", "T":"A", "c":"g", "C":"G", "g":"c", "G":"C", "N":"N", "n":"n", 
+            "Y":"R", "R" : "Y", "M" : "K", "K" : "M", "W":"W", "S":"S",
+            "H":"D", "B":"V", "V":"B", "D":"H" }
+        newseq = []
+        for nucl in reversed(seq):
+           newseq += table[nucl]
+        return "".join(newseq)
+
+    def getList(form, name):
+        list = form.getfirst(name)
+        if list != None:
+            list = list.split(",")
+            if len(list)==1:
+                list = list[0].split("\n")
+            list = [r.strip() for r in list if r.strip()!='']
+        else:
+            list = []
+        return list
+    
+    form      = cgi.FieldStorage()
+    motifs    = form.getlist("motif")
+    counts    = form.getlist("count")
+    winSize = form.getfirst("winSize")
+    winSize   = int(winSize)
+    #noCons    = form.getfirst("noCons")=="True"
+    onlyAnnot = form.getfirst("onlyAnnot")=="True"
+    wordFile  = form.getfirst("wordFile")
+
+    flankType = int(form.getfirst("flankType"))
+    maxDist = int(form.getfirst("maxDist"))
+
+    # check number of motifs
+    if len(motifs)==0 or len(counts)==0:
+        print ("You have to specify at least one motif and a count for it")
+        exit(0)
+    if len(motifs)!=len(counts):
+        print ("Illegal parameters: Script needs a motif count for each motif")
+        exit(0)
+    if len(motifs)>10:
+        print ("Illegal parameters: Cannot process more than 10 motifs")
+        exit(0)
+
+    #if noCons:
+        #wordFile = wordFile+".noCons"
+    # check if motifs are in database
+    valid_motifs = wordParser.readMotifs(open(wordFile, "r"))
+    valid_motifs = [a for (a,b) in valid_motifs]
+    rc_val_mot = [revComp(m) for m in valid_motifs]
+    for i in range(0, len(motifs)):
+        m = motifs[i]
+        m = m.upper()
+        if m not in valid_motifs:
+            if m in rc_val_mot:
+                motifs[i] = revComp(m)
+            else:
+                print ("%s: Sorry this motif is not yet in the database. <br> Please write to maximilianh@gmail.com to add completely new motifs or make sure you have chosen the correct database (pentamers, tetramers, penta/tetramers, favorites, etc)" % m)
+                print
+                exit(0)
+
+    # motifs MUST BE UPPER, counts MUST BE INT
+    motifs = [m.upper() for m in motifs]
+    counts = [int(c) for c in counts]
+    motifCounts = dict(zip(motifs, counts))
+
+    targetRegions  = getList(form, "targetRegions")
+    manualAnnot    = getList(form, "targetGenes")
+    manualBack = getList(form, "annotatedGenes")
+
+    geneFile = "annot/jgi1-genes.bed"
+    geneCount = len(open(geneFile, "r").readlines())
+
+    return winSize, "human=annot/jgi1-hs.e48.hash,hugo=annot/jgi1-hugo.e48.hash,ghostISH=annot/jgi1-ghostISH.hash,zfinISH=annot/jgi1-zfinIsh.hash,aniISHFabrice=annot/aniseed-etb-mtb.lst", wordFile, motifCounts, geneCount, manualAnnot, manualBack, flankType, maxDist, onlyAnnot, targetRegions
+
+def parseGeneAnnotation(fgAnnotList, bgAnnotList, targetRegions, ishFilename):
+    """ converts strings from webform to dict of foreground genes (tissue => list of genes) and list of background genes """
+    if len(fgAnnotList)!=0:
+        foregroundAnnots, dummy = parseAnnotations("\n".join(fgAnnotList))
+    else:
+        asForegroundAnnots, asAnnotatedGenes = parseAnnotations(open(ishFilename, "r").read())
+        foregroundAnnots = asForegroundAnnots
+
+    if len(bgAnnotList)==0:
+        dummy, asAnnotatedGenes = parseAnnotations(open(ishFilename, "r").read())
+        backgroundGenes = asAnnotatedGenes
+    else:
+        backgroundGenes = set(bgAnnotList)
+
+    # check if target regions all valid
+    allTargets = set()
+    for targetList in targetRegions:
+        for target in targetList.split("+"):
+            allTargets.add(target)
+        if target!="" and target!=None and target.lower()!="all" and target not in foregroundAnnots:
+            print "error: Could not find %s as tissue type in annotations\n" % target
+            exit(0)
+
+    # remove non-targets from foreground 
+    if len(targetRegions)!=0 and targetRegions[0].lower()!="all" and foregroundAnnots.keys()[0]!="":
+        delKeys=set()
+        for f in foregroundAnnots:
+            if f not in allTargets and f!="":
+                delKeys.add(f)
+        for d in delKeys:
+            del foregroundAnnots[d]
+    return foregroundAnnots, backgroundGenes
+
+# ----------- MAIN --------------
+# parse options
+cgitb.enable(); # replace python error handler with html one
+CGI=True # global variable, switch off debug messages
+print "Content-Type: text/html"     # HTML is following
+print                               # blank line, end of headers
+winSize, annotations, wordFile, words, geneCount, fgSpecs, bgSpecs, flankType, maxDist, onlyAnnot, targetRegions = parseCgiParams()
+
+baseName = os.path.basename(wordFile)
+if baseName.startswith("oryLat"):
+    browserUrl = "http://genome.ucsc.edu"
+    ucscDb = "oryLat2"
+    clade = "vertebrates"
+    organism = "Medaka"
+    annotations = "hugo=annot/oryLat-symbol.e59.tab"
+    track = "multiz5way"
+    ishUrl = "http://zfin.org/cgi-bin/webdriver?MIval=aa-xpatselect.apg&query_results=true&xpatsel_geneZdbId=$GENE"
+    ishFile = "annot/oryLat-zfin24hrs.e59.tab"
+    geneUrl = "http://www.ensembl.org/Oryzias_latipes/Gene/Summary?g=$GENE"
+elif baseName.startswith("dr4"): 
+    browserUrl = "http://genome.ucsc.edu"
+    ucscDb = "danRer4"
+    clade = "vertebrates"
+    organism = "Zebrafish"
+    annotations = "hugo=annot/ZDB2symbol.hash"
+    track = "multiz7way"
+    ishUrl = "http://zfin.org/cgi-bin/webdriver?MIval=aa-xpatselect.apg&query_results=true&xpatsel_geneZdbId=$GENE"
+    geneUrl = "http://zfin.org/cgi-bin/webdriver?MIval=aa-markerview.apg&OID=$GENE"
+    ishFile = "annot/zfin-24hrsExpr.hash"
+elif baseName.startswith("danRer5"): 
+    browserUrl = "http://genome.ucsc.edu"
+    ucscDb = "danRer5"
+    clade = "vertebrates"
+    organism = "Zebrafish"
+    annotations = "hugo=annot/dr-symbols.hash"
+    track = "multiz7way"
+    ishUrl = "http://zfin.org/cgi-bin/webdriver?MIval=aa-xpatselect.apg&query_results=true&xpatsel_geneZdbId=$GENE"
+    geneUrl = "http://zfin.org/cgi-bin/webdriver?MIval=aa-markerview.apg&OID=$GENE"
+    ishFile = "annot/zfin-24hrsExpr.hash"
+else:
+    browserUrl = "http://genome.smith.man.ac.uk"
+    ucscDb = "ci2"
+    clade = "deuterostome"
+    organism = "C. intestinalis"
+    track = "mafCioSav2"
+    ishUrl = "http://crfb.univ-mrs.fr/aniseed/insitu.php?id=$GENE"
+    geneUrl = "http://crfb.univ-mrs.fr/aniseed/molecule-gene.php?name=$GENE"
+    ishFile = "annot/aniseed-etb-mtb.lst"
+
+fgAnnots, bgGenes = parseGeneAnnotation(fgSpecs, bgSpecs, targetRegions, ishFile)
+
+debug("Reading words...\n")
+f = open(wordFile, "r")
+motifs = wordParser.readMotifs(f)
+
+count = 0
+nblocks = 0
+beds = bed.Features()
+motifBeds = bed.Features()
+geneScores = {} # dictionary gene -> total score around gene 
+
+debug("Searching for %s...\n" % str(words))
+
+invert = False
+
+for b in wordParser.readBlocks(f):
+    skipBlock=True
+    # update scores
+    flankGenes, intronic = b.getGenes(flankType, maxDist)
+    for g in flankGenes:
+        if not onlyAnnot or (onlyAnnot and (g in bgGenes or g in fgAnnots)) or len(bgGenes)==0:
+            skipBlock=False
+        geneScores.setdefault(g, 0)
+        geneScores[g]+=b.score
+    if skipBlock:
+        continue
+    # search for matches
+    nblocks+=1
+    matchFound=b.wordsFound(words, winSize)
+    if (invert and not matchFound) or (not invert and matchFound):
+        count +=1
+        feat = b.getCoverFeature()
+        feat.block = b
+        feat.name = ",".join(flankGenes)+"|"+feat.name
+        feat.flankGenes = flankGenes
+
+        # we want to keep them in any case
+        beds.append(feat)
+        for w in words:
+            for f in b.getBeds(w):
+                motifBeds.append(f)
+    
+# HTML OUTPUT for Cgi
+htmlWriter = RegionView(beds, annotations, stdout, geneScores, ucscDb, track, True, fgAnnots, ishUrl, geneUrl)
+parameters = { "Motifs" : words, \
+               "winSize" : winSize, \
+               "Target annotation (used for foreground)" : str(fgAnnots), \
+               "No of annotated genes (background)" : len(bgGenes) , \
+               "geneCount" : geneCount , \
+               "flankType (0/1/2 = only downstream/closest/both" : flankType , \
+               "maxDist" : maxDist, 
+               "wordFile" : wordFile,
+               "onlyAnnotatedGenes" : onlyAnnot
+               }
+#"In-situ target annotations (used for foreground)" : targetRegions, \
+# prepr cust track
+customTrack = 'track visibility=2 name="Consensus Matches" description="Consensus Matches"\n'
+customTrack += str(motifBeds)+"\n"
+customTrack +='track visibility=1 name="Putative regulatory modules" description="Putative regulatory modules"\n'
+customTrack += str(beds)+"\n"
+
+# prep annotations
+htmlWriter.writeHtml(fgAnnots, bgGenes, geneCount, parameters, customTrack, browserUrl, ucscDb, clade, organism)
+
+if count==0:
+    stdout.write("No feature found. Make sure that your motif is really part of the words file (reverse complement?)\n")

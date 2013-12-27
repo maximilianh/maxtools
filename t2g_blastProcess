@@ -1,0 +1,348 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import operator
+import pmcArticle, tabfile, maxbio
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""%prog:
+converts blast output files prepared by t2g_blastConvert and sorted by PMC-Id for import into mysql
+
+There are two possible usage modes: 'genomes' and 'genes'
+
+1) 'genomes' requires blast results from whole genomes and an inPmidCountFile in the format <taxonId>tab<pmidCount>
+
+usage: %prog [options] genomes inSortedBlastFiles inPmidCountFile bestGenomeModeMethod outBestGenomeFile outFeatures 
+
+- 'genome' mode will output best genomes and features on them
+- bestGenomeMode specifies the way how to determine them. 
+  Can be one of 'bestscore', 'scoresum', 'seqcount' or the name of a file to read the best genomes from 
+  in the format pmcId<tab>taxonId. (The best mode is 'seqcount'.)
+
+2) 'genes' requires blast results from genes, the outBestGenomeFile from the preceding 'genomes'-run and 
+an inPmidCountFile in the format <geneId>tab<pmidCount> 
+
+usage: %prog [options] genes inSortedBlastFiles inPmidCountFile inBestGenomeFile outBestGeneFile outFeatures
+
+Output format for outFeatures: genomeId, chrom, start, end, pmcId, seqId, score, group.
+Output format for outBestGenomeIds: pmid<tab>bestGenomeId|bestGeneId
+""") 
+#parser.add_option("-g", "--geneMode", dest="geneMode", action="store", help="process transcript matches, not genome matches: deactivates chaining, output best transcript, not best genome, output format for outFile is: (genomeId, chrom, start, end, score)") 
+parser.add_option("", "--maxDist", dest="maxDist", action="store", help="maximum distance for chaining, default %default", type="int", default=50000) 
+parser.add_option("-v", "--verbose", dest="verbose", action="store_true", help="give some info") 
+parser.add_option("", "--genomesTable", dest="genomesTable", action="store", help="for verbose mode: translate all genome ids to genome names, makes verbose output much more readible", default=None) 
+parser.add_option("", "--scoreTable", dest="scoringTable", action="store", help="filt to output the list of all potential best genomes to", default=None) 
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def outputChainedFeatures(fts, ofh):
+    for f in fts:
+        chrom, start, end, seqid, score, groups, groupId = f
+        #data = [str(bestGenome), str(chrom), str(start), str(end), str(pmcId), str(seqid), str(score), ",".join([str(g) for g in groups])]
+        data = [str(bestGenome), str(chrom), str(start), str(end), str(pmcId), str(seqid), str(score), str(groupId)]
+        if ofh!=None:
+            ofh.write("\t".join(data))
+            ofh.write("\n")
+
+class BlockReader:
+    """ returns only one block of the converted blast blocks at a time """
+    def __init__(self, fname):
+        self.fh = open(fname, "r")
+        self.block = []
+        self.lineCount=0
+        self.pmcIds=set()
+        self.lastPmcId = None
+
+    def readNext(self):
+        for l in self.fh:
+            self.lineCount+=1
+            tuple = l.strip().split("\t")
+            pmcId, genome, seqId, chrom, start, end, score = tuple
+            assert(self.lastPmcId==None or (int(pmcId) >= int(self.lastPmcId))) # infile for this script MUST BE sorted with sort -n !
+            
+            if pmcId==self.lastPmcId or self.lastPmcId==None:
+                # no change or first block: just add line
+                self.block.append(tuple)
+                self.lastPmcId=pmcId
+            else:
+                # change of pmcId: clear block and update pmcId
+                self.pmcIds.add(pmcId)
+                oldBlock=self.block
+                oldPmcId=self.lastPmcId
+
+                self.block=[tuple]
+                self.lastPmcId = pmcId
+                yield oldPmcId, oldBlock
+
+        # for last line
+        self.pmcIds.add(pmcId)
+        yield self.lastPmcId, self.block
+
+def readGenomeTable(genomeTableFile):
+    idToName = {}
+    f = open(genomeTableFile)
+    for l in f:
+        if l.startswith("#"):
+            continue
+        genome, desc, id = l.strip().split("\t")
+        id = int(id)
+        idToName[id] = genome
+    return idToName
+
+def idsToNames(genomes, idToGenome):
+    list = []
+    for g in genomes:
+        list.append(idToGenome.get(g, str(g)))
+    return list
+
+def reallocateSequences(features):
+     """ re-distribute features between equally matching genomic locations or genes to the ones with the most matches
+     Input is a list of (chrom, start, end, seqid, score, chainedSeqIds, groups) """
+    
+     GROUPIDX = 6
+     # index features by seqId
+     groupFeats = {}
+     seqIdFeats = {}
+
+     for feat in features:
+         (chrom, start, end, seqId, score, chainedSeqIds, groupId) = feat
+         groupFeats.setdefault(groupId, []).append(feat)
+         seqIdFeats.setdefault(seqId, []).append(feat)
+
+     # create score table: groupId => number of feautres
+     groupCounts = {}
+     for groupId, groupFeatsList in groupFeats.iteritems():
+        groupCounts[groupId] = len(groupFeatsList)
+
+     newFeats = []
+     # filter features: for each sequence
+     for seqId, seqFeats in seqIdFeats.iteritems():
+        # get the groupIds and their counts
+        groupIds = set([ft[GROUPIDX] for ft in seqFeats])
+        seqGroupCounts = []
+        for groupId in groupIds:
+            groupCount = groupCounts[groupId]
+            seqGroupCounts.append( (groupId, groupCount) )
+        # take the best ones
+        #print seqGroupCounts
+        bestGroups = maxbio.bestScoreElements(seqGroupCounts, 1)
+        bestGroups = set([x for (x,y) in bestGroups])
+        
+        if len(bestGroups)>1:
+            print "warning: several best matching groups for seqId %s, groupIds %s" % (seqId, str(bestGroups))
+        # only keep the features of the seqIds that are part of the best groups
+        for ft in seqFeats:
+            if ft[GROUPIDX] in bestGroups:
+                newFeats.append(ft)
+     return newFeats
+
+class blastHit:
+    def __init__(feat):
+        #input format: [chrom, start, end, seqid, score, seqIds, groupId] )
+        self.chrom, self.start, self.end, self.seqid, self.score, self.seqIds, self.groupId = feat
+
+class chainedHit(blastHit):
+    def __init__(feat):
+        #input format: [chrom, start, end, seqid, score, seqIds, groupId] )
+        self.chrom, self.start, self.end, self.seqid, self.score, self.seqIds, self.groupId = feat
+
+# ----------- MAIN --------------
+
+if len(args) not in [5,6]: 
+    parser.print_help()
+    exit(1)
+
+print "input format is pmcId, genomeId, seqId, chrom, start, end, score"
+print "output format for feautures is genomeId, chrom or transcript, start, end, pmcId, seqid, score, groupId (if not gene mode)"
+
+verbose = options.verbose
+maxDist = options.maxDist
+scoringTable = options.scoringTable
+
+scoringTableFh=None
+if scoringTable:
+    scoringTableFh=open(scoringTable, "w")
+
+genomesTableFile = options.genomesTable
+genomeNames = {}
+if genomesTableFile:
+    print "Reading genome table from", genomeTableFile
+    genomeNames = readGenomeTable(genomesTableFile)
+    if verbose:
+        for key, value in genomeNames.iteritems():
+            print "  ",key, value
+
+#genome mode setup
+#arguments: genomes inSortedBlastFiles inPmidCountFile bestGenomeMode outBestGenomeFile outFeatures OR 
+mode = args[0].lower()
+if mode=="genomes":
+    infile, targetWeightFile, bestTargetType, bestTargetFile, outFeatFile  = args[1:]
+    genomeMode=True
+
+    bestTargetPredictor = pmcArticle.BestTargetPredictor(targetWeightFile)
+
+    if bestTargetType=="bestscore":
+        bestGenomeFunction = bestTargetPredictor.bestGenome_bestHit
+    elif bestTargetType=="scoresum":
+        bestGenomeFunction = bestTargetPredictor.bestGenome_bestTotalSum
+    elif bestTargetType=="seqcount":
+        bestGenomeFunction = bestTargetPredictor.bestGenome_mostSequences
+    else:
+        bestTargetPredictor.readBestGenomeFile(bestTargetType)
+        bestGenomeFunction = bestTargetPredictor.bestGenome_fromFile
+
+
+# gene mode setup
+#arguments: genes geneBlastFiles inPmidCountFile bestGenomeFile outBestGeneFile 
+else:
+    infile, targetWeightFile, bestGenomeFile, bestTargetFile, outFeatFile  = args[1:]
+    genomeMode=False
+
+    bestTargetPredictor = pmcArticle.BestTargetPredictor()
+    #bestTargetPredictor.readBestGenomeFile(bestGenomeFile)
+    #bestGenomeFunction = bestTargetPredictor.bestGenome_fromFile
+    bestGenomes = tabfile.slurpdict(bestGenomeFile, asInt=True)
+
+    geneWeights = tabfile.slurpdict(targetWeightFile, asInt=True, headers=True)
+
+if outFeatFile!="none":
+    of = open(outFeatFile, "w")
+else:
+    of = None
+
+bestTargetFh = open(bestTargetFile, "w")
+f = open(infile)
+
+print "Parsing file...\n"
+
+blockReader = BlockReader(infile)
+filtCount=0
+undecided=0
+bestTargetCount=0
+noBestGenomeCount=0
+noGeneCount=0
+
+a = blockReader.readNext()
+
+for (pmcId, block) in blockReader.readNext():
+    rawBlastHits = pmcArticle.IndexedBlastHits(block)
+    if verbose:
+        print "pmcId", pmcId
+        print "*  all BLAST Hits"
+        print rawBlastHits.toString(genomeNames)
+
+    # filter out non-optimal alignments & univec
+    filtHits = rawBlastHits.filter()
+    if verbose:
+        print "*  filtered BLAST Hits: removed non-best matches and sequences that match univec"
+        print filtHits.toString(genomeNames)
+
+    if len(filtHits)==0:
+        print("%s: no sequences left after univec-filtering" % pmcId)
+        filtCount+=1
+    else:
+        if genomeMode:
+            # score and weight to find best genome 
+            genomeScores = bestGenomeFunction(pmcId, filtHits)
+            if scoringTableFh:
+                genomeScores.sort(key=operator.itemgetter(0), reverse=True)
+                allGenomes = [y for x,y in genomeScores]
+                bestGenome, bestWeightGenomes, allWeights = bestTargetPredictor.weightGenomes(allGenomes)
+
+                weights = {}
+                for weight, genome in allWeights:
+                    weights[genome]=weight
+
+                lines = []
+                for score, genome in genomeScores:
+                    data = [str(pmcId), str(genome), str(score), str(weights.get(genome, "0"))]
+                    lines.append(data)
+
+                lines.sort(key=operator.itemgetter(2,3), reverse=True)
+
+                i=0
+                for data in lines:
+                    i+=1
+                    data.append(str(i))
+
+                for data in lines:
+                    scoringTableFh.write("\t".join(data)+"\n")
+
+            bestScoreGenomes = pmcArticle.bestScoreElements(genomeScores)
+            bestGenome, bestWeightGenomes, genomeWeights = bestTargetPredictor.weightGenomes(bestScoreGenomes)
+            bestTargetFh.write("%s\t%s\n" % (pmcId, bestGenome))
+
+            bestTargetCount += 1
+            if len(bestWeightGenomes)!=1:
+                undecided+=1
+
+            if verbose:
+                print "*  best scoring genomes (after applying bestTargetType)", idsToNames(bestScoreGenomes, genomeNames)
+                print "*  best weighted genomes", idsToNames(bestWeightGenomes, genomeNames)
+                print "*  best genome (after weighting and bestTargetType):", genomeNames.get(bestGenome, bestGenome)
+
+            # chain features into separate genomic regions
+            chainFts = filtHits.chain(bestGenome, maxDist)
+            # re-distribute features onto best genomic regions
+            chainFts2 = reallocateSequences(chainFts)
+            outputChainedFeatures(chainFts2, of)
+
+        else:
+            # gene mode
+            if pmcId not in bestGenomes:
+                print "%s: strange case, pmcId not found in bestGenomes file" % pmcId
+                noBestGenomeCount+=1
+                continue
+
+            bestGenome = bestGenomes[pmcId] 
+
+            filtHitsGenomes = filtHits.byGenome()
+            if bestGenome not in filtHitsGenomes:
+                print "%s: no gene match on best genome" % pmcId
+                noGeneCount+=1
+                continue
+            bestGenomeHits = filtHitsGenomes[bestGenome]
+            bestGenes, undecGenes, seqIds = pmcArticle.bestGenes(bestGenomeHits, geneWeights)
+            #print scoreDetails
+            #print "best", bestGenes
+            #print "undec", undecGenes
+            #print scoreDetails
+            bestTargetCount+=1
+
+            geneScores = scoreDetails
+            if len(undecGenes) > 0:
+                undecided += 1
+
+            if verbose:
+                for undecSet in undecGenes:
+                    print("%s\t%s" % (pmcId, ",".join(undecSet)))
+                for pg in undecGenes:
+                    print("%s	%s" % (pmcId, pg))
+
+            # write out best predicted genes
+            for predGene in bestGenes:
+                bestTargetFh.write("%s\t%s\t%s\n" % (pmcId, predGene, seqIds[predGene]))
+
+            # remove features that are not located on best predicted genes from filtHits
+            bestGeneHits = pmcArticle.IndexedBlastHits()
+            for seqId, seqFts in filtHits.iteritems():
+                for ft in seqFts:
+                    taxId, chrom, start, end, score = ft
+                    gene = chrom.split("|")[1]
+                    if gene in bestGenes:
+                        bestGeneHits.setdefault(seqId, []).append(ft)
+            # chain & output
+            chainFts = bestGeneHits.chain(bestGenome, maxDist)
+            outputChainedFeatures(chainFts, of)
+
+print "blastProcess %s: Processed %d blast matches, blastMatches=%d" % (mode, blockReader.lineCount, blockReader.lineCount)
+print "blastProcess %s: Processed %d pmc ids, pmcIds=%d" % (mode, len(blockReader.pmcIds), len(blockReader.pmcIds))
+print "blastProcess %s: No bestGenome for %d PMC ids as all sequences matches univec, univecElimIds=%d" % (mode, filtCount, filtCount)
+if not genomeMode:
+    print "blastProcess %s: Could not find a bestGenome for %d pmcIds although there were gene matches, geneButNoBestGenome=%d" % (mode, noBestGenomeCount, noBestGenomeCount)
+    print "blastProcess %s: Could not find a gene match for %d pmcIds although there is a bestGenome, bestGenomeButNoGene=%d" % (mode, noGeneCount, noGeneCount)
+print "blastProcess %s: Got features and best genomes/gene for %d pmcIds, bestTargets=%d" % (mode, bestTargetCount, bestTargetCount)
+print "blastProcess %s: Of those, %d genome/gene mappings are not sure, target had to be randomly selected after weighting, undecidedTargets=%d" % (mode, undecided, undecided)
+

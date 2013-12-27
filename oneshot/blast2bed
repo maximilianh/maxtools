@@ -1,0 +1,16 @@
+#!/bin/bash
+# convert blast tabular output to bed file = "alignable positions"
+# param 1 = S or Q = print subject or query positions
+# param 2 = comment lines
+# example: cat test.bed | blast2bed S HiHo
+
+COMMENT=${2}
+
+if [ "$1" == "S" ]; then
+    COLS='$2,$9,$10,$1,$11'
+else
+    COLS='$1,$7,$8'
+fi
+
+gawk '{print '$COLS'}'| grep -v '#' | gawk '{if ($3 > $2) print $1,$2,$3,$4"__'$COMMENT'__"$5; else print $1,$3,$2,$4"__'$COMMENT'__"$5}' | tr -s ' '  | tr ' ' '	' | bedSort stdin stdout| grep -v ^Reading | grep -v ^Sorting | grep -v ^Writing
+#cut -f $COLS | grep -v '#' | gawk '{if ($3 > $2) print $0, "'$COMMENT'"; else print $1,$3,$2,$4,"'$COMMENT'"}' | tr -s ' '  | tr ' ' '	' | bedSort stdin stdout| grep -v ^Reading | grep -v ^Sorting | grep -v ^Writing

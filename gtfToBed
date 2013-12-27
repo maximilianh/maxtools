@@ -1,0 +1,2 @@
+#!/bin/bash
+cat $1 | gawk -F '[;\t"]' '{OFS="\t"; if ($3=="CDS") print $1,$4,$5,$10"_exon"$16, "0", $7}' 

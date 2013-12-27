@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from textwrap import *
+import re
+
+if len(argv)==1:
+	print "change the fasta name to something else"
+        print " SYNTAX: "
+        print " fastareformatname <regex-source> <regex-target>"
+	print " EXAMPLE:"
+	print "  cat D1.fa | fastareformatname '[a-zA-Z]* range=(.*)' \'\\1\'"
+	print "  ... will replace anycharacters_range=<string> by <string>"
+        exit() 
+
+lines = sys.stdin.readlines()
+size= 80
+pat1 = argv[1]
+pat2 = argv[2]
+
+seqnames=[]
+seqs=[]
+seqcount = -1
+#read in sequences and seqnames
+for line in lines:
+     # filter out newlines
+     line = line.strip()
+     if line=="":
+       continue
+      
+     if line.startswith(">"):
+       seqcount=seqcount+1
+       seqs.append("")
+       seqnames.append(line)
+       continue
+
+     #line has to be a sequence
+     seqs[seqcount]=seqs[seqcount]+line.replace(" ","").strip()
+
+del lines
+
+#now we have the seqs in memory
+
+for i in range(len(seqs)):
+  seqname = seqnames[i].strip(">")
+  newname = re.sub(pat1,pat2,seqname)
+  print ">"+newname
+  if len(seqs[i])>80:
+	  last = 0
+	  for l in range(80,len(seqs[i]),80):
+		  print (seqs[i][last:l])
+		  last = l
+          print seqs[i][last:len(seqs[i])]
+  else:
+	  print seqs[i]

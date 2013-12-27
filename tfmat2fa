@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+from math import log
+
+def readmat(lines):
+	### will read matrices from file
+	### example matrix: 
+	### ID TestMat
+	### P0 A C G T
+	### 01 1 2 0 2
+	### 02 1 2 3 0 
+    mat = []
+    for line in lines:
+      if line.startswith("#"):
+	    continue
+      if line.startswith("P0"):
+	    continue
+      if line.startswith("ID"):
+	      continue
+      if len(line.strip())==0:
+	      continue
+      if line.startswith("//"):
+	      break
+      counts = line.split()[1:]
+      counts = [int(x) for x in counts]
+      counts = {'a':counts[0],'c':counts[1],'g':counts[2],'t':counts[3]}
+      mat.append(counts)
+    return mat
+
+if len(argv)>2:
+  print " Will construct articial fasta sequences from a matrix."
+  print " You can run any program that accepts multiple alignments then."
+  print
+  print " SYNTAX: "
+  print " cat transfac.mat | tf2fa "
+  exit() 
+
+lines = sys.stdin.readlines()
+
+mat = readmat(lines)
+del lines
+
+# find number of sequences
+countsums = [sum(counts.values()) for counts in mat]	
+seqno =  max(countsums)
+seqlen = len(countsums)
+# generate seqs
+seqs = []
+for counts in mat:
+	seq = []
+	for n,c in counts.iteritems():
+		for i in range(c):
+			seq.append(n)	
+	seqs.append(seq)
+# printout
+for s in range(0,seqno):
+	print ">"+str(s)	
+	seq = ""
+	for i in range(0,seqlen):
+		if s>len(seqs[i])-1:
+			seq+="n"
+		else:
+			seq+=seqs[i][s]	
+	print seq

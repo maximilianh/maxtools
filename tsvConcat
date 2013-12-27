@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filenames - concat tab-sep files and remove the headers (marked by #) of all but the first file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-n", "--addNewline", dest="newline", action="store_true", help="add a newline after every end of file") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+newline = options.newline
+
+stderr.write("Reading files...\n")
+filenames = args
+
+count = 0
+for filename in filenames:
+    count+=1
+    
+    lines = open(filename, "r")
+    for line in lines:
+        if line.startswith("#") and count !=1:
+            continue
+        else:
+            if newline:
+                line=line+"\n"
+            stdout.write(line)
+

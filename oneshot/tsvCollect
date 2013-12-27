@@ -1,0 +1,61 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] files - collect rows from tabsep-files, prefix with the basename of the file") 
+parser.add_option("-p", "--prefix", dest="prefix", action="store", help="prefix filenames with something", default="") 
+parser.add_option("-m", "--mapFilename", dest="mapFilename", action="store", help="map filename with this hash to a tag, prefix will be the tag instead of the basename") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+prefix = options.prefix
+mapFilename = options.mapFilename
+files = args
+
+mapTags = None
+if mapFilename:
+    mapTags = tabfile.slurpdict(mapFilename)
+
+fno=0
+
+for fname in files:
+    fno+=1
+    #basename = os.path.splitext(os.path.basename(fname))[0]
+    basename = os.path.basename(fname)
+
+    tags = []
+    if mapTags:
+        for key, value in mapTags.iteritems():
+            if key in basename:
+                tags.append(value)
+        if len(tags)>1:
+            stderr.write("warning: file %s matches two tags: %s, using only first one\n" % (fname, str(tags)))
+        elif len(tags)==0:
+            stderr.write("warning: file %s matches no tags, skipping this file\n" % (fname))
+            continue
+
+        basename =tags[0]
+
+            
+    lines = open(fname).readlines()
+    #lno=0
+    for l in lines:
+        #lno+=1
+        #if lno==1:
+            #if fno==1:
+                #print "filename"+"\t"+l,
+                #continue
+            #else: 
+                #continue
+        #else:
+            print prefix+basename+"\t"+l,

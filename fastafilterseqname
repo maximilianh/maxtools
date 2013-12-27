@@ -1,0 +1,54 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+import re
+from optparse import OptionParser
+
+parser = OptionParser("usage: %prog [options] filename") 
+
+parser.add_option("-v", "--inverse", dest="inverse", action="store_true", help="inverse matching", default=False) 
+(options, args) = parser.parse_args()
+
+if len(args)>1:
+	print " print all sequences from a fasta file where seqname matches a given REGEX"
+        print " Use JimKent's faFilter is you need a faster thing."
+        print " SYNTAX: "
+        print "   fastafilterseqname <regex>"
+	print " EXAMPLE:"
+	print "   cat test.fa | fastafilterseqname H1002"
+        exit() 
+
+lines = sys.stdin
+
+seqnames=[]
+seqs=[]
+seqcount = -1
+size=80
+#read in sequences and seqnames
+for line in lines:
+     # filter out newlines
+     line = line.strip()
+     if line=="":
+       continue
+      
+     if line.startswith(">"):
+       seqcount=seqcount+1
+       seqs.append("")
+       seqnames.append(line.strip(">"))
+       continue
+
+     #line has to be a sequence
+     seqs[seqcount]=seqs[seqcount]+line.replace(" ","").strip()
+
+del lines
+
+#now we have the seqs in memory
+#print "\n".join(seqnames)
+inverse = options.inverse
+
+p = re.compile(argv[1])
+for i in range(len(seqs)):
+	if (not inverse and p.match(seqnames[i])) or (inverse and not p.match(seqnames[i])):
+		print ">"+seqnames[i]
+		print seqs[i]

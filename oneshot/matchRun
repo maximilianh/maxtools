@@ -1,0 +1,18 @@
+#!/bin/bash
+FA=$1
+DB=${2-~/usr/matrices/transfac.dat}
+CUT=${3-0.8}
+
+# generate profile
+cat > /tmp/head.tmp <<END
+minFN_10.1.prf
+prf to minimize false negatives
+ MIN_LENGTH 300
+ 0.0
+END
+cat $DB | gawk '/^AC/ {ac=$2} /^ID/ {print " 1.000 0.750 '$CUT' "ac, $2}' | cat /tmp/head.tmp - > /tmp/profile
+
+# scan
+match $DB $FA /tmp/match.out /tmp/profile
+
+cat /tmp/match.out

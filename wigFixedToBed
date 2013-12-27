@@ -1,0 +1,101 @@
+#!/usr/bin/python
+
+import sys
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wigfile : Convert wiggle files with fixedStep and stepsize=1 to a bed-file that covers all regions with data values between two limits. Output to stdout") 
+
+parser.add_option("-m", "--minimum", dest="minimum", action="store", help="data values have to be higher or equal than NUMBER", type="float", metavar="NUMBER", default="-9999") 
+
+parser.add_option("-x", "--maximum", dest="maximum", action="store", help="data values have to be lower or equal than NUMBER ", type="float", metavar="NUMBER", default="999999999") 
+
+parser.add_option("-l", "--minlen", dest="minlen", action="store", help="regions that are returned have to cover at least LEN basepairs", type="int", metavar="LEN", default="0") 
+
+parser.add_option("-w", "--winsize", dest="winsize", action="store", help="add this value to the end position of every feature generated (meant for VISTA like compacted wig-files where every position >= min will mean that all of [pos,pos+winsize] exceeds the threshold [default: %default]", type="int", metavar="NUMBER", default="0") 
+(options, args) = parser.parse_args()
+if len(args)==0 or (options.maximum==999999999 and options.minimum==-9999):
+    parser.print_help()
+    sys.exit(1)
+# -----------------
+
+winsize=options.winsize
+headerFound=False
+f = open(args[0], "r")
+minimum = options.minimum
+maximum = options.maximum
+minlen = options.minlen
+
+# print "# alignment coords, 0-based"
+for l in f:
+    if l.startswith("\n"):
+        continue
+    if l.startswith("#"):
+        continue
+    if l.startswith("track"):
+        continue
+    if l.startswith("fixedStep"):
+        end=0 # end of the LAST region that is over minimum
+        start=0 # start of the LAST region that is over minimum
+        pos=0
+
+        #treat last region first
+        if not end==start:
+            print chrom, start+1, end+1
+        headerFound=True
+
+        # parse header
+        parts=l.split()
+        for p in parts:
+            if "=" in p:
+                toks = p.split("=")
+                key = toks[0]
+                val = toks[1]
+                if key=="chrom":
+                    chrom=val
+                if key=="file":
+                    chrom=val
+                if key=="start":
+                    pos=int(val)-1 # wiggle is one-based! bed is 0-based
+                    start=pos
+                    end=pos
+                if key=="step":
+                    if val!="1":
+                        sys.stderr.write("error: step has to be equal 1!\n")
+                        sys.exit(1)
+                if key=="span":
+                    if val!="1":
+                        sys.stderr.write("error: span has to be equal 1.\n")
+                        sys.exit(1)
+        del parts
+        continue
+
+        if not headerFound:
+            sys.stderr.write("error: no wiggle header found.\n")
+            sys.exit(1)
+
+    # parse lines
+    #val = int(l)
+    val = float(l)
+    if val < minimum or val > maximum: # if we just stopped to be inside, printout last region
+        if not end==start:
+            if (end+winsize-start) >= minlen:
+                print "%s\t%d\t%d" % (chrom, start, end+winsize)
+        start = pos
+        end = pos
+    else:
+        if start==end:
+            start=pos
+            end=pos
+        end+=1
+    pos+=1
+
+
+#treat last region
+if not end==start:
+    print "%s\t%d\t%d" % (chrom, start, end+winsize)
+
+    
+
+
+

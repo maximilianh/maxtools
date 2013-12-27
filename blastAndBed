@@ -1,0 +1,29 @@
+#!/bin/bash
+
+ARGS=5
+if [ "$#" -gt $ARGS -o "$#" == "0" -o "$1" == "-h" ]; then
+   echo blastAndBed: run bl2seq TBLASTX on two fasta files and return alignable regions as bed file
+   echo options: 
+   echo   -d  : output in double-bed format
+   echo   -p  : output in psl format
+   echo   -a  : 2nd file is in formatdb-format. Use normal blast instead of bl2seq
+   echo usage:   blastAndBed fasta1 fasta2 seqname1 seqname2 '[options]'
+   echo example: blastAndBed f1.fa f2.fa chr1 ch4
+   exit
+fi
+
+if [ "$5" == "-p" -o "$6" == "-p" ]; then
+     echo 'TBLASTN 3.2.6 [Apr-09-2003]' > /tmp/blast.out
+     bl2seq -j $1 -i $2 -p tblastx  -e 0.01 -U T >> /tmp/blast.out
+
+else
+     bl2seq -j $1 -i $2 -p tblastx  -e 0.01 -U T -D 1 > /tmp/blast.out
+
+     if [ "$5" == "-d" -o "$6" == "-d" ]; then
+     cat /tmp/blast.out | gawk '/^#/ {next;} // {OFS="\t"; ORS="\t"; if ($9 < $10) print "'$3'", $9, $10; else print "'$3'", $10, $9; ORS="\n"; if ($7 < $8) print "'$4'", $11, $7, $8, $11; else print "'$4'", $11, $8, $7;}' 
+     else
+         cat /tmp/blast.out | gawk '/^#/ {next;} // {OFS="\t"; if ($9 < $10) print "'$3'", $9, $10, $11; else print "'$3'", $10, $9, $11;}' 
+         cat /tmp/blast.out | gawk '/^#/ {next;} // {OFS="\t"; if ($7 < $8) print "'$4'", $7, $8, $11; else print "'$4'", $8, $7, $11;}' 
+     fi
+fi
+

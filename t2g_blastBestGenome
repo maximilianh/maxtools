@@ -1,0 +1,55 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] METHOD filenames - given the blast m8 output, predict the best genome using one of two methods (bestMatch, matchSum)") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+scoreType = args[0]
+files  = args[1:]
+scoreType = scoreType.lower()
+
+if scoreType!="matchsum" and scoreType!="bestmatch":
+    stderr.write("method not recoginizes has to be matchsum or bestmatch\n")
+    exit(1)
+
+stderr.write("Reading blast files...\n")
+data = {} # dict pmid -> genome -> list of scores (float)
+for filename in files:
+    genome = os.path.basename(filename).split(".")[0]
+    f = open(filename, "r")
+    for l in f:
+        fs = l.split()
+        srcId, trgId, perc, length, dummy, dummy, dummy, length, trgStart, trgEnd, eVal, score = fs
+        pmid = srcId.split("|")[0]
+        data.setdefault(pmid, {}).setdefault(genome, []).append(float(score))
+
+for pmid, genomeScores in data.iteritems():
+    scores = []
+    genomes = set()
+    for genome, scoreList in genomeScores.iteritems():
+        if scoreType=="matchsum":
+            score = sum(scoreList)
+        else:
+            score = max(scoreList)
+        scores.append( (genome, score) )
+        genomes.add(genome)
+    scores.sort( key= lambda (x,y): y, reverse=True) # sort list by 2nd member of pair
+    bestGenome = scores[0][0]
+    #if len(scores)>1 and scores[0][1]==scores[1][1] and "hg18" in genomes: ## WEIRD HACK! increases Prec up to ~ 70 % !!
+        #bestGenome="hg18" 
+    print pmid+"\t"+bestGenome

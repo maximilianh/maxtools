@@ -1,0 +1,54 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] SpeciesName SpeciesName ... - sort species names, convert them to a different format and print to stdout") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-f", "--format", dest="format", action="store", help="format: if input is Homo_sapiens, then 1 => hs, 2 => hsap 3 => hsapiens 4 => HOMSA 5=> Homo_sapiens, 6=> Hsapiens, 7=> Hsap", default="2", type="int") 
+parser.add_option("-t", "--translateTable", dest="translateTable", action="store", help="use hash-table (format:from<tab>to) to translate names", default=None) 
+parser.add_option("-d", "--splitChar", dest="splitChar", action="store", help="character to split input name on", default="_") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+translateTableFname = options.translateTable
+
+transTable=None
+if translateTableFname:
+    transTable = tabfile.slurpdict(translateTableFname, comments=True)
+
+names = args
+names.sort()
+for name in names:
+    if transTable:
+        print transTable[name].lower()
+        continue
+    fs = name.split(options.splitChar)
+    format = options.format
+    if format==1:
+        print fs[0][0].lower()+fs[1][0].lower(),
+    elif format==2:
+        print (fs[0][0]+fs[1][0:3]).lower(),
+    elif format==3:
+        print (fs[0][0]+fs[1]).lower(),
+    elif format==4:
+        print (fs[0][0:3]+fs[1][0:2]).upper(),
+    elif format==5:
+        print name
+    elif format==6:
+        print (fs[0][0].upper()+fs[1]),
+    elif format==7:
+        print (fs[0][0].upper()+fs[1][:3]),
+
+
+print

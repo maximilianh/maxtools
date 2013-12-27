@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+import re
+
+class feature:
+        def __str__(self):
+                return str(self.start)+str(self.stop)+self.strand
+        def __repr__(self):
+                return str(self.start)+str(self.stop)+self.strand
+        """
+        def __init__(self,seq,start,stop,strand,names,line):
+                self.seq = seq 
+                self.start = start
+                self.stop = stop
+                self.strand = strand
+                self.names = names
+                self.line = line
+        def __repr__(self):
+                return self.seq, self.start+self.stop+self.strand
+        """
+        pass
+
+
+        
+def readBed(lines):
+        """ read features from bedfile """
+        """ save as dict: seqname -> line """
+        features = {}
+        trackline = ""
+        for line in lines:
+          if line.strip()=="":
+                  continue
+          if line.startswith("#"):
+                  continue
+          if line.startswith("track"):
+                  trackline = line
+                  continue
+          if line.startswith("browser"):
+                  continue
+          seq = line.split()[3]
+          seqs = seq.split(',')
+          for seq in seqs:
+              if features.get(seq)==None:
+                      features[seq]=[]
+              features[seq].append(line)
+        return features, trackline
+
+if len(argv)>1 and argv[1]=="-h":
+  print
+  print " Splits a bedfile into small parts, every part has the same name-field"
+  print " Example: bedfile with features with name=flx1, ptx3, otx will be split and"
+  print "          three files will be created flx1.bed, ptx3.bed and otx.bed"
+  print 
+  print " SYNTAX: "
+  print " cat test.bed | bedexplode "
+  exit() 
+
+# read lines from file, filter out all that do not contain name1,name2
+lines = sys.stdin.readlines()
+allfts, trackline = readBed(lines)
+del lines
+
+for seqname, lines in allfts.iteritems():
+        f = open(seqname+".bed","w")
+        f.write(trackline)
+        for line in lines:
+                f.write(line)
+        f.close()

@@ -1,0 +1,26 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+
+if len(argv)==1:
+	print " "
+	print " Will print out files from file1 only if exactly the same"
+	print " line can be found in file2."
+        print 
+        print " EXAMPLE: "
+        print " cat test.txt | common test2.txt"
+        exit() 
+
+
+# read lines from stdin
+lines = sys.stdin.readlines()
+
+f = open(argv[1], 'r')
+lines2 = f.readlines()
+
+for line in lines:
+	for line2 in lines2:
+		if line==line2:
+			print line,

@@ -1,0 +1,10 @@
+#!/bin/bash
+# syntax: $0 <dbname> <trackname>
+# example: retrUcscTrackAsBed hg18 refGene
+
+if [ $1 == "rn4" ]; then
+    wget -q ftp://hgdownload.cse.ucsc.edu/goldenPath/$1/database/$2.txt.gz -O - | gunzip | gawk '{OFS="\t"; print $2, $4, $5, $1, $8, $3}' | bedSort stdin stdout; 
+else 
+    wget -q ftp://hgdownload.cse.ucsc.edu/goldenPath/$1/database/$2.txt.gz -O - | gunzip | gawk '{OFS="\t"; print $3, $5, $6, $2, $9, $4}' | bedSort stdin stdout;
+fi
+ 

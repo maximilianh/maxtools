@@ -1,0 +1,92 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import sets
+import regionView
+import tabfile, operator
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wordFile outWordFile - print only certain blocks of a word file") 
+
+parser.add_option("-c", "--count", dest="minCount", action="store", help="drop all lines where motifs have less than x occurences", type="int", metavar="NUMBER", default=None) 
+parser.add_option("-g", "--bgGeneFile", dest="bgGeneFile", action="store", help="remove all blocks that are not linked to one of the genes in GENEFILE", type="string", metavar="GENEFILE", default=None) 
+parser.add_option("-f", "--filterWords", dest="filterWords", action="store", help="only print lines with one of the given motifs, comma-separated list on command line", type="string", metavar="COMMASEPLIST", default=None) 
+#parser.add_option("", "--annotatedGenes", dest="annotatedGenes", action="store", help="Instead of aniseed file: use this file as a list of annotated genes", type="string", metavar="COMMASEPLIST", default="") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infname = args[0]
+outf = args[1]
+bgGenesFile = options.bgGeneFile
+if bgGenesFile:
+    bgGenes = set(tabfile.slurplist(bgGenesFile))
+else: 
+    bgGenes=None
+
+minCount = options.minCount
+filterWords = options.filterWords
+#winSize = options.winSize
+
+#notKeywords    = options.notKeyword.split(",")
+#print "targets", targetGenes
+#print "annotated", annotatedGenes
+flankType=2
+maxDist=999999999999999
+
+if outf=="stdout":
+    of = stdout
+else:
+    of = open(outf, "w")
+
+stderr.write("Reading words...\n")
+f = open(infname, "r")
+
+validMotifs = wordParser.readMotifs(f)
+of.write("##words1\n")
+for m, desc in validMotifs:
+    if len(filterWords)!=0 and m in filterWords:
+        of.write("m\t%s\t%s\n" % (m, desc))
+of.write("\n") 
+
+for b in wordParser.readBlocks(f):
+    # check if block is around annotated genes
+    if bgGenes:
+        flankGenes, intronic = b.getGenes(flankType, maxDist)
+        bgGeneFound=False
+        for g in flankGenes:
+            if g in bgGenes:
+                bgGeneFound=True
+        if not bgGeneFound:
+            continue
+
+    delWords = set()
+    # check motif counts: mark motifs for deletion
+    if minCount:
+        for w, occs in b.words.iteritems():
+            if len(occs) < minCount:
+                delWords.add(w)
+
+    # 
+    if filterWords:
+        for w, occs in b.words.iteritems():
+            if not w in filterWords:
+                delWords.add(w)
+    
+    # delete words
+        for w in delWords:
+            del b.words[w]
+
+    # don't print if no words left
+        if len(b.words)==0:
+            continue
+
+    of.write(str(b))
+    of.write("\n\n") 
+

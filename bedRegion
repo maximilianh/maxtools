@@ -1,0 +1,50 @@
+#!/usr/bin/gawk -f
+
+BEGIN { 
+	if (ARGC>2) {
+	  print;
+	  print "Will display the minimum start and maximum end position of a bed file"
+	  print "in UCSC-stile format (chr4:minstartpos-maxendpos)"
+	  print ""
+	  print "SYNTAX:"
+	  print " bedMaxRegion" 
+	  print "EXAMPLE:"
+	  print " cat bla.bed | bedMax"
+         exit 1
+
+        }
+	 FS=" ";
+	 min=10000000000;
+	 max=0;
+        chrom = "noChrom";
+}
+	
+/track type=wiggle_0/ { wiggle=1;
+    next;}
+/track/ { wiggle=0; 
+            next;}
+/browser/ {next;}
+/^#.*/ {next;}
+/^$/ {next;}
+
+
+//	{ if (wiggle!=1) {
+	  if ($2 < min) {
+	   min = $2
+   	  }
+	if ($3 > max) {
+		max = $3 
+	}
+	chrom = $1
+    }
+}
+
+END { 
+    if (chrom!="noChrom") 
+	print chrom ":" min "-" max; 
+    else {
+        print "no chrom found, might be a wiggle track or empty";
+        exit (1);
+    }
+
+}

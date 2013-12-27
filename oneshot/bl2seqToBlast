@@ -1,0 +1,6 @@
+#!/bin/bash
+# add header and rewrite query lines of bl2seq to look like blastall output
+
+echo TBLASTN 3.2.6 [Apr-11-2222] > $2
+cat $1 | sed -e 's/>/Database:/' | sed -r -e 's/Length = ([0-9]+)$/1 sequences; \1 total letters/' | grep -v revComp > $2
+

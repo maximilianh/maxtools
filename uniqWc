@@ -1,0 +1,74 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import operator, logging, os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filenames - count number of unique lines in input files") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-p", "--proportion", dest="proportion", action="store_true", help="display the proportion of items") 
+parser.add_option("-f", "--addFilename", dest="filename", action="store_true", help="add filename to lines") 
+parser.add_option("-c", "--column", dest="column", action="store", type="int", help="use only one column in tab-separated files") 
+parser.add_option("-e", "--headers", dest="ignoreHeaders", action="store_true", help="ignore the first line of each file") 
+parser.add_option("-s", "--noSort", dest="noSort", action="store_true", help="do not sort by count") 
+parser.add_option("-p", "--prefix", dest="prefix", action="store_true", help="prefix the count field to lines instead of appending it") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+
+addFilename = options.filename
+column = options.column
+ignoreHeaders = options.ignoreHeaders
+noSort = options.noSort
+
+#stderr.write("Reading files...\n")
+filenames = args
+
+if filenames==[]: 
+    filenames = ["stdin"]
+
+occs = {}
+for filename in filenames:
+    if filename=="stdin":
+        fh = stdin
+    else:
+        fh = open(filename)
+
+    if ignoreHeaders:
+        fh.readline()
+
+    for line in fh:
+        line = line.strip()
+        if column:
+            line = line.split("\t")[column]
+        if addFilename:
+            line=os.path.basename(filename)+"\t"+line
+        occs.setdefault(line, 0)
+        occs[line]+=1
+keyCountList = list(occs.iteritems())
+
+# sort by key
+if not noSort:
+    keyCountList.sort(key=operator.itemgetter(1), reverse=True)
+
+sumCount = sum([count for (key, count) in keyCountList])
+
+for line, count in keyCountList:
+    if options.prefix:
+        data = [str(count), str(float(count)/sumCount), line]
+    else:
+        data = [line, str(count), str(float(count)/sumCount)]
+    print "\t".join(data)
+
+stderr.write("Sum of counts: %d\n" % sumCount)

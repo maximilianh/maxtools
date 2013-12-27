@@ -1,0 +1,46 @@
+#!/usr/bin/awk -f
+
+
+BEGIN { FS = " "; 
+        OFS = "\t"; 
+
+        if (ARGV[1]=="-h")  {
+            print "match2bed: convert transfac match ouput to bed-format." 
+            print "optional arguments: name of chrom and offset on it. " 
+            print "example: cat testmatch.out | match2bed chr1 4000";
+            exit(1);
+            }
+
+        offset  = ARGV[2];
+        seq = ARGV[1];
+        ARGC -= 2;
+    }
+
+/Inspecting/ { if (seq == "") 
+                  seq = $4 }
+
+
+/\|/  { 
+    name = $1;
+    start = $3-1;
+    strand = substr($4,2,1);
+    score = $8*1000;
+    seqstr = $10;
+    len = length(seqstr);
+    if (strand=="+") {
+        start += 1;
+        }
+
+    for (i=1; i<=length(seqstr); i++) {
+        if (substr(seqstr,i,1) ~ /[ACTG]/)
+            break;
+        }
+    i -= 1;
+    thickstart = start+i;
+    thickend = thickstart + 5;
+    
+    print seq, offset+start, offset+start+len, name, score, strand, offset+thickstart, offset+thickend
+    
+    
+    
+    }

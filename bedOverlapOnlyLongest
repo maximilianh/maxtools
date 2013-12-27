@@ -1,0 +1,115 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging
+import bed
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename outfilename - remove single-block and 100%-block-coverage features and keep only the longest feature if they some are overlapping. Additional options for getting rid of blocks with 0-len-spacers and features with only few blocks") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-m", "--minBlock", dest="minBlock", action="store", type="int", help="only let pass longest features with a minimum number of blocks", default=0)
+parser.add_option("-j", "--joinBlocks", dest="joinBlocks", action="store_true", help="join two blocks if there is no space between them")
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+
+def coverageBed(feat):
+    """ how many bp are covered by blocks ? """
+    allSize = 0
+    feat.blockSizes=feat.blockSizes.strip(",")
+    for size in feat.blockSizes.split(","):
+        size = int(size)
+        allSize+=size
+    return allSize
+    
+class BedClump:
+    """ a list of overlapping features """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.chrom = ""
+        self.minStart = 9999999999999
+        self.maxEnd   = 0
+        self.beds = []
+    
+    def add(self, feat):
+        logging.debug("add feature: %s" % str(feat))
+        self.beds.append(feat)
+        self.minStart = min(feat.start, self.minStart)
+        self.maxEnd   = max(feat.end, self.maxEnd)
+        self.chrom = feat.chrom
+
+    def overlaps(self, feat):
+        logging.debug("Testing overlap of stack %d-%d against feature from %d-%d" % (self.minStart, self.maxEnd, feat.start, feat.end))
+        return feat.chrom==self.chrom and bed.coordOverlap(self.minStart, self.maxEnd, feat.start, feat.end)
+
+    def getLongest(self):
+        self.beds.sort(key = lambda x: x.end - x.start, reverse=True)
+        longest = self.beds[0]
+        logging.debug("sorted features: %s" % str(self.beds))
+        logging.debug("longest is: %s" % repr(longest))
+        return longest
+
+    def writeLongestToFile(self, outFile, minBlockCount):
+        if len(self.beds) != 0:
+            longestFeat = self.getLongest()
+            blockCount = len(longestFeat.blockStarts.strip(",").split(","))
+            if minBlockCount >= 0 and blockCount < minBlockCount:
+                logging.debug("filtering out feature %s as it has %d blocks, less than %d blocks" % (str(longestFeat), blockCount, minBlockCount))
+                return 1
+            logging.debug("outputting feature %s" % repr(longestFeat))
+            outFile.write(longestFeat.toString()+"\n")
+            return 0
+        return 0
+
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+bedFilename = args[0]
+outFilename = args[1]
+minBlockCount = options.minBlock
+joinBlocks = options.joinBlocks
+
+outFile = open(outFilename, "w")
+
+beds = bed.parseBedFilename(bedFilename)
+#beds.sort() XX modified 27 Apr 2011
+
+noSpacerCount=0
+outputCount=0
+minBlockFiltCount=0
+
+clump = BedClump()
+for b in beds:
+    if joinBlocks:
+        b.joinBlocks()
+
+    logging.debug("")
+    logging.debug("bed: %s", repr(b))
+
+    if minBlockCount >= 1 and coverageBed(b)==(b.end-b.start):
+        logging.debug("no type1 spacer, skip %s"% repr(b))
+        noSpacerCount+=1
+        continue
+
+    if not clump.overlaps(b):
+        logging.debug("no overlap, cleaning stack")
+        outputCount+=1
+        minBlockFiltCount += clump.writeLongestToFile(outFile, minBlockCount)
+        clump.reset()
+    clump.add(b)
+
+minBlockFiltCount += clump.writeLongestToFile(outFile, minBlockCount)
+logging.info("noType1Spacer: skipped %d features, blockMinFilter: skipped %d features" % (noSpacerCount, minBlockFiltCount))

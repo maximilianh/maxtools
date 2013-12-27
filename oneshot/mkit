@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# from tdrezer's bin directory
+cd ~/kent/src/hg/lib
+make > ~/mk.out 2>&1
+for myarg in $@
+do
+    if [ $? -ne 0 ]; then
+        break;
+    fi
+    case "${myarg}" in
+        j | -j | js | -js)
+              cd ../js
+              ;;
+        u | -u | ui | -ui | hui | -hui)
+              cd ../hgTrackUi
+              ;;
+        t | -t | tr | -tr)
+              cd ../hgTracks
+              ;;
+        fu | -fu | fui | -fui)
+              cd ../hgFileUi
+              ;;
+        f | -f | fs | -fs)
+              cd ../hgFileSearch
+              ;;
+        api | -api)
+              cd ../hgApi
+              ;;
+        css | -css | style | -style )
+              cd ../htdocs/style
+              ;;
+        m | -m | md | mdb)
+              cd ../makeDb/mdbUpdate
+              ;;
+        *)
+              cd ../${myarg}
+              ;;
+    esac
+    make >> ~/mk.out 2>&1
+done
+cat ~/mk.out
+#grep -i -e "error" ~/mk.out
+exit $?

@@ -1,0 +1,48 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] hashFile - convert hash to presence/absence table (e.g. for R-heatmaps), keys are arranged into rows (one row per key) and values into columns (one column per value)") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-f", "--fields", dest="fields", action="store", help="only output the comma-separated fields, in this order", default=None, metavar="FIELDLIST") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+file = args[0]
+
+keys=set()
+dicts = []
+fields = options.fields
+dict = tabfile.slurpdictset(file)
+
+if fields!=None:
+    allValues = fields.split(",")
+else:
+    allValues = set()
+    for set in dict.values():
+        allValues.update(set)
+
+# headers
+print "key\t"+"\t".join(allValues)
+
+# data
+for key,values  in dict.iteritems():
+    data = [key]
+    for v in allValues:
+        if v in values:
+            data.append("1")
+        else:
+            data.append("0")
+    print "\t".join(data)
+

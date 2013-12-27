@@ -1,0 +1,168 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import os
+import os.path
+import time
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename mysqltable - load tab sep file into mysql") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-i", "--indexFields", dest="indexFields", action="store", help="when creating table: create indices for these fields", default=None) 
+parser.add_option("-p", "--primaryKey", dest="primaryKey", action="store", help="when creating table: create primary key with this name", default=None) 
+parser.add_option("-c", "--createTable", dest="createTable", action="store_true", help="create the table by parsing the first row as names of fields and creating varchar(255) fields for each one") 
+parser.add_option("-d", "--dropTable", dest="dropTable", action="store_true", help="drop table before doing anything else") 
+parser.add_option("-r", "--removeHeader", dest="ignoreHeader", action="store_true", help="ignore the first line of the data") 
+(options, args) = parser.parse_args()
+createTable = options.createTable
+ignoreHeader = options.ignoreHeader
+primaryKey = options.primaryKey
+indexFields = options.indexFields
+dropTable = options.dropTable
+
+
+# ==== FUNCTIONs =====
+def execCmd(cmd):
+    ret = os.system(cmd)
+    if ret!=0:
+	stderr.write("error execing cmd: %s" % cmd)
+	exit(1)
+
+def execSql(sql):
+    stderr.write("%s\n" % sql)
+    cmd = 'mysql --show-warnings -e "%s"' % sql
+    execCmd(cmd)
+    
+def fieldTypes(filename): 
+    """ determine type of fields in comma separated file, either varchar(1), varchar(255) or int or float. 
+    Uses headers to refer to fields. returns a list of tuples (fieldname, type) """
+    # get headers
+    fh = open(filename)
+    headers = fh.readline().strip().split("\t")
+    headers = [h.replace("-","_") for h in headers]
+
+    # parse lines into columns
+    columns = [ [] for i in range(0, len(headers)) ]
+    for line in fh:
+        lineFields = line.strip().split("\t")
+        if len(lineFields)!=len(headers):
+            print "warning: in line %s: number of fields does not correspond to number of headers" % line
+            continue
+        for i in range(0, len(lineFields)):
+            field = lineFields[i]
+            columns[i].append(field)
+
+    # iterate over columns and try to convert to int, float, string, whereever possible
+    for column in columns:
+        for varI in range(0, len(column)):
+            strVal = column[varI]
+            try:
+                val = int(strVal)
+            except ValueError:
+                try:
+                    val = float(strVal)
+                except ValueError:
+                    val = strVal
+            column[varI] = val
+
+    # for each column, check if all values are either int or float, prefer float, use string for anything else
+    intType = type(1)
+    floatType = type(0.1)
+    strType = type("yes")
+
+    colTypes = []
+    for colIdx in range(0, len(columns)):
+        column = columns[colIdx]
+        types = set([type(val) for val in column])
+        if len(types)==1:
+            mainType = types.pop()
+        elif len(types)==2:
+            if intType in types and floatType in types:
+                mainType = floatType
+            else:
+                mainType=strType
+        else:
+            mainType=strType
+
+        if mainType==intType:
+            typeStr = "int"
+        elif mainType==floatType:
+            typeStr = "float"
+        else:
+            typeStr = "varchar"
+
+        # distinguish between char(1) varchar(255) and varchar(10000)
+        if typeStr=="varchar":
+            lenghts = [len(str(val)) for val in column]
+            maxLen = max(lenghts)
+            if maxLen==1:
+                typeStr="char(1)"
+            elif maxLen < 255:
+                typeStr="varchar(255)"
+            else:
+                typeStr="varchar(10000)"
+                if maxLen>10000:
+                    stderr.write("warning: found fields in column %s with data longer than 10kb\n" % headers[colIdx])
+
+        # distinguish between int and bool
+        if typeStr=="int":
+            values = set(column)
+            if values == set([0,1]):
+                typeStr="bool"
+
+        colTypes.append( (headers[colIdx], typeStr) )
+
+    return colTypes
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+fname, table = args
+inpath = os.path.abspath(fname)
+addsql=""
+if ignoreHeader or createTable:
+    addsql="IGNORE 1 LINES"
+
+if dropTable:
+    stderr.write("Dropping table %s in 3 seconds...press ctrl+c if you want to stop now...\n" % table)
+    time.sleep(3)
+    sql = "drop table %s;" % table
+    execSql(sql)
+
+if createTable:
+    stderr.write("Determining field types...")
+    fieldTypes = fieldTypes(fname)
+    sql = "CREATE TABLE %s (" % table
+    fields = ["%s %s not null " % (field, type) for (field, type) in fieldTypes]
+    sql += ",".join(fields)
+
+    if indexFields:
+        sql += ","
+        indexFields = indexFields.strip().split()
+        indices = ["INDEX(%s)" % (i) for i in indexFields]
+        sql += ",".join(indices)
+    if primaryKey:
+        sql += ", primary key (%s)" % primaryKey
+
+    sql += ");"
+    execSql(sql)
+
+if not dropTable:
+    stderr.write("Deleting old contents of %s in 3 seconds...press ctrl+c if you want to stop now...\n" % table)
+    time.sleep(3)
+    execSql('SELECT COUNT(*) FROM %s;' % table)
+    execSql('DELETE FROM %s;' % table)
+
+
+execSql('LOAD DATA INFILE \'%s\' INTO TABLE %s %s;' % (inpath, table,addsql))
+
+stderr.write("----- Number of rows that have been added:\n")
+execSql('SELECT COUNT(*) FROM %s;' % table)
+stderr.write("----- First four rows of the new table:\n")
+execSql('SELECT * FROM %s LIMIT 4;' % table)
+
+

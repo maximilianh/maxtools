@@ -1,0 +1,77 @@
+#!/bin/bash
+if test $# -eq 0 
+  then  
+	  echo ucsc: open ucsc browser with given custom-track-file 
+          echo       '(uses putfile,bedRegion)'
+	  echo SYNTAX:
+	  echo   ucsc '<filename> [org] [hgsid] [site] [range]'
+	  echo  
+	  echo  server can be on of ucsc,duke,kate,kent,max
+	  echo  server defaults to ucsc
+          echo  range can be something like chr1:1-2000
+          echo  range defaults to the maximum region covered by the bed file
+	  echo
+	  echo EXAMPLE:
+	  echo   ucsc test.bed 
+	  echo   ucsc test.bed human
+	   
+	  exit 1
+fi	  
+
+ORG=$2
+HGSID=$3
+SITE=$4
+REGION=$5
+
+if test -z "$SITE" 
+then
+	SITE=ucsc
+fi
+
+case $SITE in 
+ucsc)
+	URL=http://genome.ucsc.edu
+	;;
+duke)
+	URL=http://genome-mirror.duhs.duke.edu
+	;;
+kate)
+	URL=http://hgwdev-kate.cse.ucsc.edu
+	;;
+kent)
+	URL=http://hgwdev-kent.cse.ucsc.edu
+	;;
+max)
+	URL=http://genome.ciona.cnrs-gif.fr
+	;;
+
+esac
+# MODIFY THESE VARIABLES TO YOUR NEEDS!
+
+BROWSER=firefox
+
+###
+
+if test -z "$ORG" 
+then
+    ORG="hg18"
+fi
+
+if [ "$REGION" == "" ]; then
+    REGION=`bedRegion $1` 
+    if [ "$?" == "1" ]; then
+        echo Region=$REGION
+        echo error: Could not determine the position to display, please call the
+        echo script like this: ucsc test.bed hg17 ucsc chr1:1-1000
+        exit 1
+    fi
+fi
+
+FILENAME=`basename $1`
+echo Uploading file $1 
+#ncftpput -u $USER -p $PASS $SERVER $UPLOADPATH $1 > /dev/null
+#file=`putfile $1`
+#echo Opening UCSC Browser for file $1 
+echo http://$SERVER$DOWNLOADPATH$FILENAME
+"$BROWSER" "$URL/cgi-bin/hgTracks?db=$ORG&hgsid=$HGSID&position=$REGION&hgt.customText=$file" &
+echo "$URL/cgi-bin/hgTracks?db=$ORG&$hgsid=$HGSID&position=$REGION&hgt.customText=$file" &

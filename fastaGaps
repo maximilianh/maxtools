@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from textwrap import *
+
+def output(name, start, end):
+    if liftUp:
+       print "%d\t%s\t%d\t%s\t%d" % (start,name,end-start,name,0)
+    else:
+       print "%s\t%d\t%d" % (name,start, end)
+
+
+if len(argv) > 1 and argv[1]=="-h":
+        print "search fasta files for N/n and ouput locations as bed (def) or liftUp-spec"
+        print "OPTIONS:"
+        print " -l : ouput for Jim Kent's LiftUp program, can be used to"
+        print "      transform ungapped to gapped coords and vice versa"
+        print " SYNTAX: "
+        print " cat test.fa | fastaGapToBed"
+        exit() 
+
+if argv.count("-l")==1:
+    liftUp=1
+else :
+    liftUp=0
+
+lines = sys.stdin.readlines()
+
+seqnames=[]
+seqs=[]
+seqcount = -1
+#read in sequences and seqnames
+for line in lines:
+     # filter out newlines
+     line = line.strip()
+     if line=="":
+       continue
+      
+     if line.startswith(">"):
+       seqcount=seqcount+1
+       seqs.append("")
+       seqnames.append(line)
+       continue
+
+     #line has to be a sequence
+     seqs[seqcount]=seqs[seqcount]+line.replace(" ","").strip()
+
+del lines
+
+#now we have the seqs in memory
+
+# search gaps and output
+for i in range(len(seqs)):
+    seq = seqs[i]
+    seqname = seqnames[i].split(" ")[0][1:]
+    start = -1
+    for j in xrange(len(seq)):
+       char = seq[j]
+       if char=='N' or char=='n' or char == 'x' or char == 'X':
+           if start==-1:
+               start = j
+       else:
+           if start!=-1:
+               output(seqname,start, j)
+           start=-1
+    if start!=-1:
+       output(seqname,start, len(seq))

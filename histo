@@ -1,0 +1,22 @@
+#!/bin/bash
+if [[ $1 == "" ]]; then
+        echo $0 maxValue tickDistance label outfilePng '[doNotRunGqview]'
+        exit 1
+    fi
+
+cat - > /tmp/histo.dat
+
+mydir=`dirname $0`
+limit=$1
+dist=$2
+label="$3"
+outfile=$4
+notShow=$5
+linecount=`wc -l /tmp/histo.dat`
+
+Rscript $mydir/histo.R /tmp/histo.dat $limit $dist "$label"_"$linecount" $outfile 
+#gqview /tmp/histogram.png
+
+if [[ $notShow != "" ]]; then
+    gqview $outfile
+    fi

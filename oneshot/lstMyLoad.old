@@ -1,0 +1,44 @@
+#!/bin/bash
+if [ "$1" == "-h" -o "$1" == "" ]; then 
+    echo `basename $0`: load tab-sep file into mysql table
+    echo usage: `basename $0` '<file> <table>'
+echo example: `basename $0` test.lst mydb.newTestTable
+#echo parameters:
+#echo    -w : window size, default 100
+exit 1;
+
+fi
+
+# set default options
+#win=100
+#shift
+
+# parse cmdline
+while getopts ":w" Option
+do
+  echo parsing option $Option
+  case $Option in
+    w ) win=$OPTARG ;;
+  esac
+done
+
+# parameter with default handling
+#if [ $baseseq != 0 ]; then
+#    echo BASE SPECIFIED!!!
+#    base=$baseseq
+#else
+#    base=`cat $fafile | head -n1 | cut -d'>' -f2 | cut -d' ' -f1`
+#fi
+
+# trapping ctrl+c
+#mkdir temp
+#trap "rm -rf temp.vista; exit" SIGHUP SIGINT SIGTERM
+inPath=`pwd`/$1
+table=$2
+
+mysql --show-warnings -e "select count(*) from $2;"; 
+mysql --show-warnings -e "delete from $2;"
+mysql --show-warnings -e "load data infile '$inPath' into table $2;"; 
+mysql --show-warnings -e "select count(*) from $2;"; 
+mysql --show-warnings -e "select * from $2 limit 4;"; 
+

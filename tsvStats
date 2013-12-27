@@ -1,0 +1,51 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import numpy
+import copy
+import tabfile
+
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] groupFields scoreField filename - read in table, group data by groupFields, calculate the sum, mean, standard error, min and max of scoreField in each group and output") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fields", dest="fields", action="store", help="the fields that are used to group the data, comme separated") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+groupFields = args[0].split(",")
+scoreField = args[1]
+file = args[2]
+
+stderr.write("Reading file...\n")
+comments, headers, data = tabfile.parseTsv(file, asListOfDicts=True)
+groupedData = {}
+for l in data:
+    groupValues = [ l[f] for f in groupFields ]
+    index = "|".join(groupValues)
+    value = float(l[scoreField])
+    groupedData.setdefault(index, []).append(value)
+
+
+# table headers
+headers = copy.copy(groupFields)
+headers.extend(["n", "mean","stdDev", "min", "max"])
+print "\t".join(headers)
+
+# table data
+for index, values in groupedData.iteritems():
+    n = len(values)
+    se = numpy.std(values)
+    mean = numpy.mean(values)
+    minVal = min(values)
+    maxVal = max(values)
+    print index.replace("|","\t")+"\t"+"\t".join([str(n), str(mean),str(se), str(minVal), str(maxVal)])

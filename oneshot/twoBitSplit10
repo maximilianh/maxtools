@@ -1,0 +1,11 @@
+#!/bin/bash
+rm -rf /tmp/$1
+mkdir /tmp/$1
+twoBitToFa $1 stdout | faSplit about stdin 500000000 /tmp/$1/
+for i in /tmp/$1/*.fa; do 
+    target=`basename $1 .2bit`_`basename $i .fa`.2bit
+    echo $target
+    faToTwoBit $i $target; 
+done
+echo don't forget to uncomment the following line
+echo rm -rf /tmp/$1

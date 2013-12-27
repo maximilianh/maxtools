@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==1:
+  print "converts transfac patch predictions to UCSC bed format."
+  print " syntax: "
+  print " patch2bed"
+  print
+  print "options:"
+  print "length=xxx   the minimum length of the patterns"
+  print "mismatch=x   the number of allowed mismatches"
+  print
+  exit() 
+
+
+options = argv[1]
+
+# parse options into dict
+options = options.split(",")
+option = {}
+for o in options:
+  (key, value) = o.split("=")
+  option[key]=value
+ 
+# read file strip off lines that are not interesting for us
+lines = sys.stdin.readlines()
+lines = [ l for l in lines if l.startswith("<A HREF") or l.startswith("       ")]
+
+# print bed track header
+name = "Patch_"+option["length"]+"/"+option["mismatch"]  
+desc = 'Patch length='+option['length']+', mismatch='+option['mismatch']  
+print 'track name="'+name+'" description="'+desc+'" visibility="dense" useScore=1 url="http://www.biobase.de/cgi-bin/biobase/transfac/9.3/bin/start.cgi?ac=$$"'
+
+
+name =""
+#for line in lines:
+#  print line
+#exit()
+
+def afterLt(str):
+  return str.split(">")[1]
+
+firstLine=True
+#convert lines
+for line in lines:
+   if line.startswith("<A HREF"):
+     if not firstLine:
+        print "noseq", pos-1, pos+length-1, name, "%.2f" % score, strand     
+     firstLine=False
+     fields = line.split()
+     pos = int(fields[3])
+     strand = fields[4].strip("()")
+     mism = fields[5]
+     score = float(fields[6])
+     score = score * 10 # scale to 0-1000
+     acc = fields[1].split("=")[2].strip('"')
+     rest = fields[9:-1]
+     tfnames = [ l for l in rest if l.startswith("target") ]
+     tfnames = map(afterLt, tfnames)
+     tfnames = ",".join(tfnames)
+     name = acc+"="+tfnames
+     length = len(fields[-1])
+   if line.startswith("                "):
+	tfname = afterLt(line)     
+	tfname= tfname.split("<")[0].strip(" ").replace(" ","_")
+	name = name+","+tfname

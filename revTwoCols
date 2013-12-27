@@ -1,0 +1,6 @@
+#!/bin/bash
+if [ "$1" == "-h" ]; then 
+    echo revTwoCols: reads lines from stdin, splits on tab, reverses 1st and 2nd column
+    exit 1
+fi
+gawk '{OFS="\t";print $2, $1}'

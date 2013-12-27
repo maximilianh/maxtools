@@ -1,0 +1,41 @@
+#!/usr/bin/gawk -f
+
+BEGIN { 
+    db = "";
+    db = ARGV[1];
+    if (db=="") {
+        print "no database name specified for bed2fasta!" > "/dev/stderr";
+        exit(1);
+    }
+
+    c = 0;
+    ARGV[1]="-"
+
+    }
+
+/^track/ { next }
+/^#/ {next}
+
+// { 
+    split($0, fields)
+    seq = fields[1];
+    begin = fields[2];
+    end = fields[3];
+    if (length(fields)>3) {
+        name=fields[4];
+        score=fields[5];
+        strand=substr(fields[6],1,1);
+        }
+    if (strand=="") {
+        strand="+";
+    }
+    print "Getting sequence " seq ":" begin "-" end "/" strand > "/dev/stderr";
+    system("getFasta " db " " seq" " begin " " end" "strand" "name);
+    c+=1;
+}
+
+
+END { print "Got " c " sequences, check results." > "/dev/stderr" ; }
+
+
+

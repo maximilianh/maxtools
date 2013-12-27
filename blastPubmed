@@ -1,0 +1,1000 @@
+#!/usr/bin/env python
+
+# download pdfs from publishers using pubmed, extract nucleotides, optionally blat onto genomes
+# released into the public domain, Maximilian Haeussler, maximilianh@gmail.com
+
+# CHANGES:
+# id to test: 9808786
+# Wed Apr 16 16:22:31 CEST 2008: handle pubmedcentral outlinks, 2583107 works now
+# Wed Apr 16 16:42:03 CEST 2008: follow links to suppl data, handles BMC 17439641
+# Thu Apr 17 20:26:23 CEST 2008: was choking on nature oncogene+http404 error messages (10022128)
+# Fri Apr 18 18:28:08 CEST 2008: stupid problem with endlines fixed (if input from file)
+# Fri Apr 18 18:29:16 CEST 2008: selecting only "publisher" outlinks from pubmed now if multiple (18271954)
+# Fri Apr 18 18:28:08 CEST 2008: recognizes pdfs that do not have extension ".pdf" by mime type (17032682)
+# Tue Apr 22 20:58:27 CEST 2008: fix &lt and &gt in pubmed outlinks 10022610
+# Thu May  1 10:57:37 CEST 2008: don't download files that are not application/pdf mime type
+# Thu May  1 10:56:41 CEST 2008: remove \n and \t from urls 15124226
+# Thu May  1 10:57:17 CEST 2008: added timeout for all sockets (not checked, problem occurs randomly)
+# Fri May  9 14:02:00 CEST 2008: make http downloader timeout, not compat. with windows anymore
+#                                due to fork() system calls
+# Fri May  9 14:08:46 CEST 2008: interrupt with ctrl+c now possible again
+
+from sys import *
+from optparse import OptionParser
+import urllib2, cookielib, urllib, re, time, sgmllib, os, \
+glob, urlparse, Cookie, socket, tempfile, time, subprocess, fcntl
+
+
+BLATSCORECUTOFF=25 # ignore hit with fewer matches than this
+SOCKET_TIMEOUT = 20
+CONFDIR="~/.paperBlast"
+HTTPTIMEOUT=120
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] pmidTextFile - download pdf for pmids from textfile, extract text and blast it onto selected genomes. If no file specified, will ask user interactively.") 
+
+parser.add_option("", "--pdfPath", dest="pdfPath", action="store", help="location of pdfCache-directory, a copy of all downloaded pdfs is stored there and copied from there instead of downloaded [default: %default]", type="string", metavar="DIR", default=CONFDIR+"/pdfCache") 
+parser.add_option("", "--textPath", dest="textPath", action="store", help="directory where text files are stored [default: %default]", type="string", metavar="DIR", default=CONFDIR+"/textCache") 
+parser.add_option("", "--noOutlinkCache", dest="noOutlinkCache", action="store", help="location of noOutlink-pmidCache-file, used to mark pmids where outlink could not be found in pubmed, to avoid trying to search for pdf twice [default: %default]", type="string", metavar="PATH", default="~/.paperBlast/noOutlinkCache") 
+parser.add_option("", "--noPdfCache", dest="noPdfCache", action="store", help="location of noPdf-pmidCache-file, used to mark pmids where pdf could not be found to avoid trying to search for pdf twice [default: %default]", type="string", metavar="PATH", default="~/.paperBlast/noPdfCache") 
+parser.add_option("", "--noBlat", dest="noBlat", help="do not try to BLAT sequences onto selected genomes", action="store_true") 
+parser.add_option("", "--noTrack", dest="noTrack", help="do not create direct links to custom track", action="store_true") 
+parser.add_option("-f", "--fasta", dest="fasta", help="save sequences that are found into fasta-file", action="store") 
+parser.add_option("", "--gui", dest="gui", help="use graphical interface", action="store_true") 
+parser.add_option("-i", "--pmid", dest="pmid", help="process only one PubmedId", action="store") 
+parser.add_option("", "--force", dest="force", help="always download everything and try to convert everything from scratch, ignore pdf-cache and config files", action="store_true") 
+parser.add_option("-e", "--errors", dest="errors", help="stop the script if an exception occurs, by default the program will try as hard as possible to continue downloading", action="store_true") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== HELPER/CONVENIENCE FUNCTIONs =====
+
+
+def log(msg):
+    stderr.write(msg+"\n")
+
+
+def listToInt(list, posList):
+    for i in posList:
+        list[i] = int(list[i])
+    return list
+
+def prepDir(dir):
+    """ if it does not exist, create it. expand unix spec chars """
+    dir = os.path.expanduser(dir)
+    if not os.path.isdir(dir):
+        #path=shell.SHGetFolderPath(0, shellcon.CSIDL_PERSONAL, None, 0)
+        log("creating %s" % dir)
+        os.makedirs(dir) 
+    return dir
+
+def readLines(filename):
+    """ return lines as set, if exists """
+    if filename!=None and os.path.isfile(filename):
+        if filename!="stdin":
+            lines = open(filename, "r").readlines()
+        else:
+            lines = stdin.readlines()
+        lines = [l.strip() for l in lines]
+        return set(lines)
+    else:
+        return set()
+
+class pslFeatures(list):
+    def __init__(self, lines, stripHtml=False):
+        if stripHtml:
+            newlines = []
+            for l in lines:
+                if len(l)<=5:
+                    continue
+                if l.find(">")==-1 and l.find("<")==-1:
+                    newlines.append(l)
+            lines = newlines
+        
+        for l in lines:
+            if l.startswith("match") or l.startswith("----") or l.find("match")!=-1:
+                continue
+            p = Psl(l)
+            self.append(p)
+
+    def __repr__(self):
+        lines = []
+        for psl in self:
+            lines.append(str(psl))
+        return "\n".join(lines)
+
+class Psl:
+    def __init__(self, line):
+        fs = line.split()
+        fs = listToInt(fs, [0,1,2,3,4,5,6,7,10,11,12,14,15,16,17])
+        
+        self.matches, self.misMatches, self.repMatches, self.nCount, self.qNumInsert, \
+            self.qBaseInsert, self.tNumInsert, self.tBaseInsert, self.strand, self.qName, self.qSize, \
+            self.qStart, self.qEnd, self.tName, self.tSize, self.tStart, self.tEnd, self.blockCount, \
+            self.blockSizes, self.qStarts, self.tStarts = fs
+
+    def __repr__(self):
+        list = [self.matches, self.misMatches, self.repMatches, self.nCount, self.qNumInsert, \
+                self.qBaseInsert, self.tNumInsert, self.tBaseInsert, self.strand, self.qName, self.qSize, \
+                self.qStart, self.qEnd, self.tName, self.tSize, self.tStart, self.tEnd, self.blockCount, \
+                self.blockSizes, self.qStarts, self.tStarts]
+        list = [str(el) for el in list]
+        return "\t".join(list)
+
+def bakeQuickCookie(name, value, path, domain):
+     """
+     taken from http://mail.python.org/pipermail/python-list/2004-July/272223.html
+     Kludge to work around no easy way to create Cookie with defaults.
+     (Defaults taken from Usenet post by `ClientCookie` author.) 
+     """
+     return cookielib.Cookie(0, name, value, None, 0,
+                                domain, True, domain.startswith("."),
+                                path, True,
+                                True,  # true if must only be sent via https
+                                time.time()+(3600*24*365),  # expires
+                                0, "", "", {})
+
+class HTTPSpecialErrorHandler(urllib2.HTTPDefaultErrorHandler):
+    """ for urrlib2 error catching """
+    def http_error_403(self, req, fp, code, msg, headers):
+        log("HTTP ERROR 403: MaryAnnLiebert-anti-crawler technique")
+
+
+# ==== CLASSES ========
+
+class TimoutHttpDownload:
+    """ thread that can time out """
+    pass
+
+class PubmedParser:
+    """ parser for the xml output of pubmed """
+    def stripTag(self, line):
+        #line = line.strip().replace("<%s>"%tag,"").replace("</%s>"%tag, "")
+        remHtml = re.compile("<(.|\n)*?>")
+        line = re.sub(remHtml, "", line)
+        line = line.strip()
+        return line
+
+    def getOutlinks(self, pmid):
+        log("%s: Getting outlink from pubmed" % (pmid))
+        url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi?dbfrom=pubmed&id=%s&retmode=llinks&cmd=llinks" % pmid
+        try:
+            req = urllib2.Request(url)
+        except:
+            return None
+        req.add_header('User-Agent', 'User-Agent: Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en-US; rv:1.8.1.13) Gecko/20080311 Firefox/2.0.0.13')
+        html = urllib2.urlopen(req)
+        outlinks = {}
+        provider = False
+        fullText = False
+
+        for line in html:
+            if line.find("<ObjUrl>") != -1:
+                url=""
+                fullText=False
+                origPublisher=False
+            if line.find("Attribute") != -1:
+                attribute=self.stripTag(line)
+                if attribute=="full-text online" or attribute=="full-text PDF":
+                    fullText=True
+            if line.find("<NameAbbr>") != -1 and fullText and origPublisher:
+                db = self.stripTag(line)
+                outlinks[db]=url
+            if line.find("publishers/providers")!=-1:
+                origPublisher=True
+            if line.find("<Provider>") != -1:
+                provider=True
+            if line.find("</Provider>") != -1:
+                provider=False
+            if line.find("<DbFrom>") != -1:
+                db = self.stripTag(line)
+            if line.find("<Url>") != -1 and not provider:
+                url = line
+                url = self.stripTag(url).replace("&amp;", "&") # XX strange!
+                url = self.stripTag(url).replace("&lt;", "<")
+                url = self.stripTag(url).replace("&gt;", ">")
+        log("%s: Found outlinks %s" % (pmid, str(outlinks)))
+        return outlinks
+
+    def getAbstract(self,pmid):
+        """ retrieve abstracts for pmid via http"""
+        url = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&email=haeussle@iaf.cnrs-gif.fr&retmode=xml&id=%s' % pmid
+        req = urllib2.Request(url)
+        html = urllib2.urlopen(req)
+        
+        journal, title, year= "","",""
+        abstract=""
+        lastNames = []
+        firstNames = []
+        inDate = False
+        authors=""
+        doi=""
+
+        for line in html:
+            if line.find("<Title>")!=-1:
+                journal = self.stripTag(line)
+            if line.find("<ArticleTitle>")!=-1:
+                title = self.stripTag(line)
+            if line.find("<LastName>")!=-1:
+                lastNames.append(self.stripTag(line))
+            if line.find("<FirstName>")!=-1 or line.find("ForeName")!=-1:
+                firstNames.append(self.stripTag(self.stripTag(line)))
+            if line.find("ArticleDate")!=-1 or line.find("PubDate")!=-1:
+                inDate=True
+            if line.find("<Year>")!=-1 and inDate:
+                year=self.stripTag(line)
+                inDate=False
+            if line.find('ArticleId IdType="doi"')!=-1:
+                doi=self.stripTag(line)
+            if line.find("<AbstractText>")!=-1:
+                abstract=self.stripTag(line)
+            authors = [last+" "+first for first, last in zip(firstNames, lastNames)]
+            authors = "; ".join(authors)
+        return (year, journal, authors, abstract, doi)
+
+class HtmlParser(sgmllib.SGMLParser):
+    def __init__(self, docUrl="", verbose=0):
+        "Initialise an object, passing 'verbose' to the superclass."
+        sgmllib.SGMLParser.__init__(self, verbose)
+        self.hyperlinks = []
+        self.element=None
+        self.metaInfo = {}
+        self.title = ""
+        self.baseUrl = "/".join(docUrl.split("/")[:-1])+"/"
+        self.foundAccess=False
+
+    def titleContains(self, text):
+        return self.title.find(text)!=-1
+
+    def getLinksWith(self, textList, type="desc"):
+        """ type can be either desc or url, will search link descriptions or their urls for text and return list of urls"""
+        """ urls will be lowercased for comparison and normalized, descriptions will be changed (see below)"""
+        links = []
+        for text in textList:
+            for desc, url in self.hyperlinks:
+                # correct url
+                url = url.strip().replace("\t","")
+                url = url.strip().replace("\n","")
+                if not url.startswith("http:"): # adding base url to url 
+                    url = urlparse.urljoin(self.baseUrl,url)
+                url = url.replace("&amp;", "&")
+
+                if type=="desc" and desc.find(text)!=-1:
+                    links.append(url) # XX weird hack! where is the real problem?
+                if type=="url" and url.lower().find(text.lower())!=-1:
+                    links.append(url)
+                if type!="url" and type!="desc":
+                    stderr.write("call error!")
+                    exit(1)
+        return links
+
+    def parseLines(self, data):
+        self.feed(data)
+        self.close()
+
+    def start_a(self, attributes):
+        "Process a hyperlink and its 'attributes'."
+        for name, value in attributes:
+            if name == "href":
+                self.element="a"
+                self.hyperlinks.append(["", value])
+    def end_a(self):
+        self.element=None
+
+    def start_title(self, attributes):
+        self.element="title"
+    def end_title(self):
+        self.element=None
+
+    def start_meta(self, attributes):
+        name = None
+        httpEquivRefresh=False
+        for key, value in attributes:
+                if key=="name":
+                        name=value.strip()
+                if key=="content":
+                            if not httpEquivRefresh:
+                                self.metaInfo[name]=value.strip()
+                            else:
+                                val= value.strip()
+                                val = "=".join(val.split("=")[1:]) # split off part before =
+                                url = urlparse.urljoin(self.baseUrl, val)
+                                self.metaInfo["httpRefresh"]=url
+                                log("htmlParser: found content %s for httpRefresh attribute" % url)
+                if key=="http-equiv" and value=="refresh":
+                        httpEquivRefresh=True
+                        log("htmlParser: found attribute http-equipv and value refresh in meta-tag")
+
+    def handle_data(self, data):
+        #print "_",data.strip(), "_"
+        lowerData = data.lower()
+        if lowerData.find("access") or lowerData.find("purchase"):
+            self.foundAccess=True
+        if self.element=="a":
+            #print self.hyperlinks
+            self.hyperlinks[-1][0] += data.strip()
+        if self.element=="title":
+            self.title = data.strip()
+
+
+class Browser:
+    """ simulated browser to download pdfs given their pubmedId, using sgmlParser and PubmedParser """
+    def __init__(self, authMode=None, user=None, passw=None, pdfPath=None, noOutlinkCache=None, noPdfCache=None):
+        self.pdfPath=pdfPath
+
+        # read caches into memory
+        self.noOutlinkCache=noOutlinkCache
+        self.noPdfCache=noPdfCache
+        self.noPdfIds=readLines(noPdfCache)
+        self.noOutlinkIds=readLines(noOutlinkCache)
+
+        #debug = True
+        #http_handler = urllib2.HTTPHandler(debuglevel=debug)
+        #https_handler = urllib2.HTTPSHandler(debuglevel=debug)
+        #handlers = [http_handler, https_handler, cookie_handler]
+        #self.opener = urllib2.build_opener(handlers)
+        self.cookie_jar = cookielib.LWPCookieJar()
+        cookie_handler = urllib2.HTTPCookieProcessor(self.cookie_jar)
+        error_handler = HTTPSpecialErrorHandler()
+        self.opener = urllib2.build_opener(cookie_handler, error_handler)
+        urllib2.install_opener(self.opener)
+
+        if authMode=="inist":
+            self.loginInist(user, passw)
+
+    def loginInist(self, user, passw):
+        log("Login into inist")
+        url="http://gate1.inist.fr/login"
+        data = {"user" : user, "pass" : passw}
+        self.httpRequest(url, data)
+
+    def httpRequestTimeout(self,url, data=None):
+        """ a forking http request which can time out """
+
+        #log("Getting %s" % url)
+        # temp files for cookies and http request result
+        #fh1, cookiefile = tempfile.mkstemp()
+        #resultFh, httpFile = tempfile.mkstemp()
+        #stdoutFh, stdoutFile = tempfile.mkstemp()
+        #self.cookie_jar.save(os.path.expanduser(cookiefile))
+        # launch subprocess
+        #args = argv[0]+" "+url+" "+cookiefile+" "+httpFile
+        #print "args", args
+        #print "stdoutFile", stdoutFile
+        #proc = subprocess.Popen(args, shell=True, stdout=stdoutFh)
+        # and wait...
+
+        # create pipes to communicate headers and http data to subprocess
+        infoR, infoW = os.pipe()
+        dataR, dataW = os.pipe()
+
+        pid= os.fork()
+
+        retpid = 0
+        retcode = 0
+
+        if pid:
+            # we are the parent
+            os.close(infoW)
+            os.close(dataW)
+            fcntl.fcntl(infoR, fcntl.F_SETFL, os.O_NONBLOCK)  # make read() unblocking!
+            infoR = os.fdopen(infoR)
+            dataR = os.fdopen(dataR)
+            # wait until child has sent characters on info pipe
+            for i in range(1,HTTPTIMEOUT):
+                time.sleep(1)
+                #print "waiting for child, waiting on pipe"
+                try:
+                    infoLines = infoR.read()
+                except:
+                    #print "no data yet"
+                    pass
+                else:
+                    break
+
+            time.sleep(10) # make sure that all data is really in 2nd pipe
+            retpid, retcode = os.waitpid (pid, os.WNOHANG) # check if child has ended
+            #retcode = proc.poll()
+
+            if retpid == 0:
+                log("error: process %s has still not ended, killing it" % str(pid))
+                os.system("kill -7 "+str(pid))
+                return None, None
+            elif retcode != 0:
+                log("process %s returned with error code != 0" % str(pid))
+                return None, None
+            else:
+                #stdoutLines = open(stdoutFile, "r").readlines()
+                exec(infoLines) # this will create a variable info in local context
+                return dataR.read(), info
+        else:
+            # we are the child
+            os.close(infoR) # close reading ends of pipes
+            os.close(dataR)
+
+            infoW    = os.fdopen(infoW, "w")
+            dataW    = os.fdopen(dataW, "w")
+
+            respData, info = self.httpRequest(url, data)
+            if respData==None:
+                #print "child process: error in http"
+                exit(1)
+            #print "child pushing into pipes"
+            infoW.write("info="+str(info))
+            infoW.flush()
+            dataW.write(respData)
+            dataW.flush()
+            #print "child exited"
+            exit(0)
+
+    def readCookies(self,cookieFile):
+        self.cookie_jar.load(cookieFile)
+
+    def httpRequest(self,url, data=None):
+        """ http get/post request (get if data==None)"""
+        """ returns tuple: httpData as String , infoData with keys "url" and "Content-type" as dict"""
+        if data!=None:
+            data = urllib.urlencode(data)
+        request = urllib2.Request(url, data)
+        request.add_header('User-Agent', 'User-Agent: Mozilla/5.0 (Macintosh; U; Intel Mac OS X; en-US; rv:1.8.1.13) Gecko/20080311 Firefox/2.0.0.13')
+        #print self.cookies
+        #c1 = bakeQuickCookie(name="I2KBRCK", value="1", path="/", domain="www.liebertonline.com")
+        #c2 = bakeQuickCookie(name="MAIDFILTER", value="ok", path="/", domain="www.liebertonline.com")
+        #c3 = bakeQuickCookie(name="MAID", value="2433240", path="/", domain="www.liebertonline.com")
+        #self.cookies.set_cookie(c1)
+        #self.cookies.set_cookie(c2)
+        #self.cookies.set_cookie(c3)
+        #print dir(self.cookies)
+        #request.add_header('Accept-Encoding', 'gzip,deflate')
+        #request.add_header('Accept-Language', 'en-us,en;q=0.5')
+        #request.add_header('Accept-Charset', 'ISO-8859-1,utf-8;q=0.7,*;q=0.7')
+        #request.add_header('Keep-Alive', '300')
+        #request.add_header('Connection', 'keep-alive')
+        #request.add_header('Accept', 'text/xml,application/xml,test/html,application/pdf,text/plain')
+        try:
+            resp = self.opener.open(request)
+        except urllib2.HTTPError:
+            return None
+        
+        # return some additional info about http result
+        info = {}
+        info["url"] = resp.geturl()
+        info["Content-type"] = resp.info()["Content-type"].strip().split(";")[0]
+            
+        return resp.read(), info
+
+    def getOutlinks(self, pmid, force):
+        """ first try to find outlink or alternatively DOI as referenced from pubmed"""
+        if pmid in self.noOutlinkIds and not force:
+            log("%s: No outlink according to %s" % (pmid, self.noOutlinkCache))
+            return []
+        pubmed  = PubmedParser()
+        outlinks = pubmed.getOutlinks(pmid)
+        if outlinks==None:
+            log("%s: error occured while downloading from NCBI (??). Skipping but not marking as undownloadable." % pmid)
+            return None
+
+        if len(outlinks)==0:
+            log("%s: looks as if article doesn't have outlink, trying DOI" % (pmid))
+            doi = pubmed.getAbstract(pmid)[4]
+            if doi=="":
+                log("%s: DOI is empty, giving up" % (pmid))
+                self.markUndownloadable(pmid, "noOutlink")
+                return []
+            else:
+                log("%s: Trying outlink via DOI" % (pmid))
+                url = "http://dx.doi.org/"+doi
+                return []
+        else:
+            #log("%s: Got %d outlinks: %s" % (pmid, len(outlinks), str(outlinks)))
+            links = outlinks.values()
+        return links
+
+    def searchFileLinks(self, pmid, parser):
+        """ uses the parser object to find links to pdf/xls/doc files and adds them to links """
+        plinks = []
+        slinks = {}
+
+        if "citation_pdf_url" in parser.metaInfo:
+                log("%s: Found citation_pdf_url meta information" % pmid)
+                pdfurl= parser.metaInfo["citation_pdf_url"]
+                plinks.append(pdfurl)
+        
+        for url in parser.getLinksWith([".pdf", ".doc", ".xls"], "url"):
+            if url.lower().endswith(".pdf"):
+                plinks.append(url)
+            if url.lower().endswith(".doc") or url.lower().endswith(".xls"):
+                ext = url[-4:] 
+                slinks[url]=ext
+
+        if len(plinks)==0:
+            links = parser.getLinksWith(["PDF", "pdf"], "desc")
+            log("%s: Found %d links with description PDF/pdf" % (pmid, len(links)))
+            plinks.extend(links)
+        
+        return plinks, slinks
+
+    def crawl(self, pmid, url, pdfLinks, suppLinks, depth):
+        """ crawl pdf/doc/xls files and "Supplemental"-like links from url with maximum depth 3 """
+        req, info = self.httpRequestTimeout(url)
+        if depth==0:
+            log("%s: Maximum depth reached, stop crawling" % (pmid))
+            return pdfLinks, suppLinks
+
+        #log("%s: Crawling %s" % (pmid, req.geturl()))
+        #log("%s: Crawling %s" % (pmid, url))
+        if req==None:
+            log("%s: HTTP error while retrieving outlink target %s" % (pmid, url))
+            return pdfLinks, suppLinks
+
+        log("%s: Crawling %s" % (pmid, info["url"]))
+        if info["Content-type"]=="application/pdf":
+            log("%s: Crawling: SuppData-URL %s although not recognizable as such, is a pdf file" % pmid)
+            suppLinks[info["url"]]= ".pdf"
+            return pdfLinks, suppLinks
+        if req==None:
+            log("%s: HTTP error while retrieving file %s" % (pmid, url))
+            return pdfLinks, suppLinks
+        parser = HtmlParser(info["url"])
+        parser.parseLines(req)
+
+        # handle special cases:
+
+        # Elsevier chooser:
+        if parser.titleContains("Elsevier Article Locator"):
+            log("%s: Getting across the Elsevier chooser" % pmid)
+            scDirectLinks = parser.getLinksWith(["sciencedirect.com"], type="url")
+            #scDirectLinks = [l.replace("&amp;", "&") for l in scDirectLinks]
+            if len(scDirectLinks)==0:
+                log("%s: Could not find ScienceDirect link after Elsevier Chooser, giving up." % pmid)
+                return pdfLinks, suppLinks
+            self.crawl(pmid, scDirectLinks[0], pdfLinks, suppLinks, depth)
+            return pdfLinks, suppLinks
+
+        if parser.titleContains("Blackwell Synergy"):
+            log("%s: Getting around blackwell synergy javascripts" % pmid)
+            url = req.geturl()
+            url = url.replace("/abs/", "/pdf/")
+            pdfLinks.append(url)
+            return pdfLinks, suppLinks
+
+        links=parser.getLinksWith(["Additional files", "Supplemental", "Supplementary"])
+        if len(links)!=0:
+            log("%s: Found %d links to pages with supplemental data" % (pmid, len(links)))
+            for l in links:
+                plinks, slinks = self.crawl(pmid, l, pdfLinks, suppLinks, depth-1)
+                pdfLinks.extend(plinks)
+                suppLinks.update(slinks)
+
+        plinks, slinks = self.searchFileLinks(pmid, parser)
+
+        pdfLinks.extend(plinks)
+        suppLinks.update(slinks)
+
+        return pdfLinks, suppLinks
+
+    def getFulltextFileUrls(self, pmid, force):
+        """ get links from pubmed and recursively search them for pdf/doc/xls links """
+        pdfurl=None
+        outlinks = self.getOutlinks(pmid, force)
+        pdfLinks  = []
+        suppLinks = {}
+
+        if outlinks==None or len(outlinks)==0:
+            return pdfLinks, suppLinks
+
+        log("%s: Crawling publisher's website" % pmid)
+        while len(pdfLinks)==0 and len(outlinks)!=0:
+            outlink = outlinks.pop()
+            pdfLinks, suppLinks = self.crawl(pmid, outlink, pdfLinks, suppLinks, 3)
+            if len(outlinks)==0:
+                break
+
+        pmid = pmid.strip()
+        #print pdfLinks, suppLinks
+        if len(pdfLinks)==0:
+            log("%s: no pdfs found" % pmid)
+
+        if len(pdfLinks)==0:
+            self.markUndownloadable(pmid, "noPdf")
+        return pdfLinks, suppLinks
+
+    def pdfAlreadyInCache(self, pmid):
+        """ check if pdf-file for pmid is already in pdf cache directory"""
+        fpath = os.path.join(self.pdfPath, pmid+".pdf")
+        return os.path.isfile(fpath)
+
+    def markUndownloadable(self, pmid, type):
+        """ add pmid to notDownloadableFile aka pmid Cache and memory cache """
+        if type=="noPdf":
+            file = self.noPdfCache
+            self.noPdfIds.add(pmid)
+        else:
+            file = self.noOutlinkCache
+            self.noOutlinkIds.add(pmid)
+        log("Adding Pmid %s to %s"  % (pmid, file))
+        f = open(file, "a")
+        f.write(pmid+"\n")
+        f.close()
+
+    def downloadFiles(self, pmid, urls, supp=False, noHtml=True):
+        """ download files given a list of urls, follow http redirects, opt: cancel if result is html file, opt: interprete urls as dictionary (supplmenetary files sometimes don't have a correct extension) """
+        files = []
+        i=1
+        for url in urls:
+             if supp:
+                 ext = urls[url]
+                 suppInfix=".S"+str(i)
+             else:
+                 suppInfix=""
+                 ext = ".pdf"
+             fpath = os.path.join(self.pdfPath, pmid+suppInfix+ext)
+             log("%s: Downloading %s" % (pmid, url))
+             datah, info = self.httpRequestTimeout(url)
+             if datah==None:
+                 log("%s: HTTP ERROR while requesting %s" % (pmid, url))
+                 continue
+             #log("%s: Content-type from HTTP headers: %s" % (pmid,datah.info()["Content-type"]))
+             log("%s: Content-type from HTTP headers: %s" % (pmid,info["Content-type"]))
+             if noHtml and info["Content-type"]=="text/html":
+                 log("%s: received html file instead of pdf -> searching for redirects" % pmid)
+                 p = HtmlParser(url)
+                 p.parseLines(datah)
+                 if "httpRefresh" in p.metaInfo:
+                     url = p.metaInfo["httpRefresh"]
+                     log("%s: following http redirect to %s" % (pmid, url))
+                     datah, info = self.httpRequestTimeout(url)
+                 else:
+                     if p.foundAccess:
+                         log("%s: error - no redirects found, webpage contains the word ACCESS or PURCHASE, we probably don't have access to this paper" % pmid)
+                         continue
+                     else:
+                         log("%s: error no redirects found, giving up" % pmid)
+                         continue
+
+             if datah!=None:
+                 f = open(fpath, "wb")
+                 f.write(datah)
+                 f.close()
+                 i+=1
+                 files.append(fpath)
+             else:
+                 log("%s: error HTTP error while downloading %s" % (pmid, url))
+        return files
+
+    def downloadPdf(self, pmid, force):
+         def findFiles(dir, pmid):
+            suppFile = pmid+".S*.*"
+            fileGlob = os.path.join(dir, suppFile)
+            suppFiles = glob.glob(fileGlob)
+            pdfFile = os.path.join(dir, pmid+".pdf")
+            return [pdfFile], suppFiles
+            
+         log("%s: Start" % pmid)
+
+         if self.pdfAlreadyInCache(pmid) and not force:
+             log ("%s: Pdf already in cache, nothing to download" % pmid)
+             return findFiles(self.pdfPath, pmid)
+         if pmid in self.noPdfIds and not force:
+             log ("Pmid %s is marked as not being downloadable by %s" % (pmid, self.noPdfCache))
+             return [], []
+
+         pdfUrls, suppUrls = self.getFulltextFileUrls(pmid, force)
+
+         pdfFiles, suppFiles = [], []
+         if len(pdfUrls)!=0:
+             pmid=pmid.strip()
+             log("%s: Found %d links to pdf files. Downloading only the first one: %s" % (pmid, len(pdfUrls), pdfUrls[0]))
+             url = pdfUrls[0]
+             pdfFiles.extend(self.downloadFiles(pmid, [url], False, True))
+
+             log("%s: Found %d links to supplemental files" % (pmid, len(suppUrls)))
+             #print "suppUrls", suppUrls
+             suppFiles.extend(self.downloadFiles(pmid, suppUrls, True, False))
+
+         return pdfFiles, suppFiles
+    
+# ========== IMPORTANT FUNCTIONS =============================
+def extractSequences(pmid, files, pdfPath, textPath, force):
+    def runCmd(pmid, cmd):
+        log("%s: running %s" % (pmid, cmd))
+        ret = os.system(cmd)
+        if ret!=0:
+            log("error: could not run command %s" % (cmd))
+        return ret
+
+    textfiles = []
+    for f in files:
+        txtfile = os.path.splitext(os.path.basename(f))[0]+".txt"
+        txtfile = os.path.join(textPath, txtfile)
+
+        if f.endswith(".pdf"):
+            if os.path.isfile(txtfile) and not force:
+                log("%s: not running pdftotext, file %s is already present" % (pmid, txtfile))
+            else:
+                ret = runCmd(pmid, "pdftotext -raw -nopgbrk %s %s" % (f, txtfile))
+                if ret!=0:
+                    log("%s: error: pdftotext-extraction did not work, error %d. Problem with protected pdf files? -> Ignoring this PMID" % (pmid, ret))
+                    return ""
+            textfiles.append(txtfile)
+        if f.endswith(".doc"):
+            log("WARNING: cannot convert word files yet")
+        if f.endswith(".doc"):
+            log("WARNING: cannot convert excel files yet")
+
+    seqs = []
+
+    for textfile in textfiles:
+        log("%s: Parsing %s" % (pmid, textfile))
+        thisSeqs = textToFasta(textfile, concat=True)
+        if len(thisSeqs)==0:
+            log("%s: error: no sequences found, %s" % (pmid, thisSeqs))
+        else:
+            seqs.append(thisSeqs)
+
+    return seqs
+
+def textToFasta(filename, concat=False, number=False):
+    """ parse infiles and iterate over words, line by line. Generate fasta string and return it """
+    MINDNA = 0.4
+    MINWORDLEN = 10
+    MINDNALEN  = 9
+
+    nucl = re.compile("[ACTG]")
+    nonNucl = re.compile("[^ACTG]")
+    #nucl = re.compile("[ACTGactg]")
+    #nonNucl = re.compile("[^ACTGactg]")
+
+    seqname = os.path.splitext(os.path.basename(filename))[0]
+    seqno = 0
+    seqs = []  # concat modification
+    lno = 0
+    for line in open(filename, "r"):
+        #log("line"+line)
+        lno +=1
+        words = line.split()
+        for word in words:
+            if len(word) > MINWORDLEN:
+                dnaContent = float(len(nucl.findall(word))) / len(word)
+                if dnaContent > MINDNA :
+                    seq = nonNucl.sub("", word)
+                    faid = seqname
+                    if len(seq) > MINDNALEN and seq not in seqs:
+                        if number:
+                            seqno+=1
+                            faid = seqname + "." + str(seqno)
+                        seqid = ">%s line=%d dnaContent=%.2f" % (faid,lno,dnaContent)
+                        seqs.append((seqid, seq))  # concat modification
+    if len(seqs)==0:
+        str= ""
+    else:
+        if concat:
+            onlySeqs = [ seq for (id, seq) in seqs ]
+            str = ">%s CONCAT\n%s\n" % (seqname,"".join(onlySeqs))
+        else:
+            lines = []
+            for seqid, seq in seqs:
+                lines.append(seqid)
+                lines.append(seq)
+            str = "\n".join(lines)
+
+    return str
+
+def parsePsl(data, stripHtml=False):
+    def toInt(list, posList):
+        for i in posList:
+            list[i] = int(list[i])
+        return list
+
+
+def blatSequences(pmid, browser, seqstr, genomes):
+    """ send seqstr to webinterface of UCSC's blat servers, genomes is a list of db-identifiers to blat on """
+    """ return a dictionary db=>pslFeatures"""
+
+    url  = 'http://genome.ucsc.edu/cgi-bin/hgBlat'
+
+    type = 'DNA'
+    sort = "score"
+    userSeq = seqstr
+    output = 'psl'
+
+    formData = { 'Submit' : 'submit', 'type' : type, 'sort' : sort, 'output' : output, 'userSeq' : userSeq }
+    allHits = {}
+
+    for db in genomes: 
+        log("%s: Blatting onto %s" % (pmid, db))
+        formData['db']=db
+        data, info = browser.httpRequest(url, formData)
+        hits = pslFeatures(data.split("\n"), stripHtml=True)
+        allHits[db] = hits
+
+    return allHits
+        
+def tolerantPaperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force, errors):
+    """ calls paperBlast, catches all exceptions and logs them """
+    if errors:
+        paperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force)
+    else:
+        try:
+            paperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force)
+        except KeyboardInterrupt:
+            raise 
+        except SystemExit, errNo: # aargh! sys.exit() is actually throwing an exception
+            exit(errNo)
+        except Exception, errMsg:
+            log("%s: catched exception: %s" % (pmid, errMsg))
+
+def paperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force):
+    """ main function: download, extract, blat """
+    pmid = pmid.strip()
+    numberRegex = re.compile("[0-9]+")
+    if not numberRegex.match(pmid):
+        log("%s: Illegal Pubmed ID" % pmid)
+        return 
+    pdfFiles, suppFiles = browser.downloadPdf(pmid, force)
+    if len(pdfFiles)!=0:
+        faseqs = extractSequences(pmid, pdfFiles, pdfPath, textPath, force)
+        seqstr = "\n".join(faseqs)
+        if seqstr=="":
+            log("%s: No sequences found in all files, not blatting" % (pmid))
+        else:
+            log("%s: Sequences: %s" % (pmid, seqstr))
+            if fasta:
+                fh=open(fasta, "a")
+                fh.write(seqstr+"\n")
+                fh.close()
+
+            if not noBlat:
+                matches = blatSequences(pmid, browser, seqstr, genomes)
+                genomeScores = []
+                for db, psls in matches.iteritems():
+                    scores = [p.matches for p in psls if p.matches>=BLATSCORECUTOFF]
+                    score = sum(scores)
+                    genomeScores.append((db, score))
+                genomeScores.sort(key=lambda (x,y): y, reverse=True)
+                bestDb, bestDbScore = genomeScores[0]
+                if bestDbScore==0:
+                    log("%s: No hit, best score is 0." % pmid)
+                else:
+                    bestDb, bestDbScore = genomeScores[0]
+                    log("%s: Best scoring genome is %s with score %d (others: %s)" % \
+                            (pmid, bestDb, bestDbScore, str(genomeScores)))
+                    if not noTrack:
+                        hgsid = ucscUpload(browser, bestDb, str(matches[bestDb]), name="blastPubmed", description="blastPubmed BLAT results", visibility="2", )
+                        if hgsid==None:
+                            log("%s: Could not upload data to UCSC" % pmid)
+                            return
+                        else:
+                            for psl in matches[bestDb]:
+                                chrom, start, end = psl.tName, psl.tStart, psl.tEnd
+                                print ucscTrackUrl(hgsid, chrom, start, end)
+
+
+class Tkgui:
+    def getPmid(self):
+        frame = Tk() ## this is the default window
+        vlab = Label(frame, width = 20,
+                text = 'Enter a Pubmed ID: ')
+        vlab.grid( row=0, column =0)
+
+        self.entry= Entry(frame, width = 30)
+        self.entry.grid(row = 0, column = 1)
+        self.button = Button(frame, text="   OK   ", command=frame.quit)
+        self.button.grid(row=1, column=1)
+        self.cancel = Button(frame, text="   Cancel   ", command=frame.quit)
+        self.cancel.grid(row=1, column=0)
+        mainloop()
+
+        #frame.pack()
+        #root.mainloop()
+        #return tkSimpleDialog.askstring("Input PMID", "Enter a Pubmed-ID:", parent=None)
+        if self.entry.get()=="":
+            return None
+        else:
+            return self.entry.get()
+
+
+def ucscHgsid(db, server="http://genome.ucsc.edu"):
+    """ get a new hgsid from ucsc """
+    log("Requesting a new hgsid from UCSC")
+    data = urllib2.urlopen(server+"/cgi-bin/hgCustom?db=%s" % db)
+    for line in data:
+        if line.startswith('<INPUT TYPE=HIDDEN NAME="hgsid" VALUE="'):
+            line = line.strip()
+            line = line.replace('<INPUT TYPE=HIDDEN NAME="hgsid" VALUE="', '')
+            line = line.replace('"><TABLE BORDER=0>', '')
+            log("New hgsid %s" % line)
+            return line
+    stderr.write("error in UCSC web parser, write to maximilianh@gmail.com to get this fixed")
+    exit(1)
+
+def ucscUpload(browser, db, data, hgsid=None, server="http://genome.ucsc.edu", name="User track", description="User track", visibility="1"):
+    """ adds data as a user track, creates and returns session id if hgsid is None, returns None on error """
+    log("Uploading %d lines to UCSC" % (data.count("\n")+1))
+
+    if not data.startswith("track"):
+        data = 'track name="%s" description="%s" visibility=%s\n' % (name, description, visibility) + data
+
+    if hgsid==None:
+        hgsid = ucscHgsid(db, server)
+    
+    vars = {}
+    vars["hgsid"]=hgsid
+    vars["clade"]="deuterostome"
+    vars["org"]="C. intestinalis"
+    vars["db"]=db
+    vars["hgct_customText"]=data
+    vars["Submit"]="Submit"
+    html = urllib2.urlopen(server+"/cgi-bin/hgCustom", urllib.urlencode(vars))
+    for l in html:
+        if l.find("Manage Custom Tracks")!=-1:
+            return hgsid
+    return None
+ 
+def ucscTrackUrl(hgsid, chrom, start, end, server="http://genome.ucsc.edu"):
+    return server+"/cgi-bin/hgTracks?hgsid=%s&position=%s:%s-%s" % (hgsid, chrom, start, end)
+
+
+# ----------- MAIN --------------
+# timeout in seconds
+socket.setdefaulttimeout(SOCKET_TIMEOUT)
+
+pdfPath = prepDir(options.pdfPath)
+textPath = prepDir(options.textPath)
+noPdfCache = os.path.expanduser(options.noPdfCache)
+noOutlinkCache = os.path.expanduser(options.noOutlinkCache)
+
+noBlat = options.noBlat
+noTrack = options.noTrack
+fasta = options.fasta
+gui = options.gui
+pmid = options.pmid
+force = options.force
+errors = options.errors
+
+genomes = ["dm3", "ci2", "ce4", "hg18", "mm9", "rn4"]
+
+
+browser = Browser("XXXXinist", "VIEUPR2197", "QMXCF3OI", pdfPath, noOutlinkCache, noPdfCache)
+
+if len(args)==0:
+    if pmid:
+        tolerantPaperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force, errors)
+    else:
+        try:
+            from Tkinter import *
+            import tkSimpleDialog
+        except ImportError:
+            gui=False
+        
+        if not gui:
+            print "Enter a PMID and press Return:", 
+            pmid = raw_input()
+            print 
+        else:
+            gui = Tkgui()
+            pmid = gui.getPmid()
+
+        if pmid!=None:
+            tolerantPaperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force, errors)
+else:
+    # alternative syntax to download just one file: 
+    # recursive call: arguments are url, cookieFile, resultsFile
+    if args[0].startswith("http:"):
+        url, cookieFile, resultFile = args
+        browser.readCookies(cookieFile)
+        data = browser.httpRequest(url)
+        if data==None:
+            exit(1)
+        fh = open(resultFile, "wb")
+        fh.write(data.read())
+        exit(0)
+    else:
+        pmidFile = args[0]
+        if pmidFile=="stdin":
+            pmidFh=stdin
+        else:
+            pmidFh=open(pmidFile, "r")
+        for pmid in pmidFh:
+            tolerantPaperBlast(pmid, browser, pdfPath, textPath, noBlat, fasta, noTrack, force, errors)

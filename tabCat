@@ -1,0 +1,59 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, maxbio, operator, gzip
+from os.path import *
+import os
+import glob
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename filename ... - concat tab-sep files, keep headers only for first file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+dirNames = args
+filenames = []
+for dirName in dirNames:
+    if isfile(dirName):
+        filenames.append(dirName)
+    else:
+        filenames.extend(glob.glob(join(dirName, "*")))
+
+fileNo = 0
+for filename in filenames:
+    logging.debug("Reading file %s" % filename)
+    if filename == "stdin":
+        ifh = stdin
+    elif filename.endswith(".gz"):
+        ifh = gzip.open(filename)
+    else:
+        ifh = open(filename)
+
+    lno = 0
+    for line in ifh:
+        if line.startswith("##") or len(line)<=1:
+            continue
+        else:
+            if fileNo==0 and lno==0:
+                print line,
+            elif lno==0:
+                pass
+            else:
+                print line,
+            lno+=1
+    fileNo+=1

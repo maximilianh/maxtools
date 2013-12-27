@@ -1,0 +1,69 @@
+#!/usr/bin/perl 
+
+if ($#ARGV<0) {
+print<<END;
+
+DESCRIPTION: run transfac patch with the given parameters and return result
+             as html file to stdout.
+SYNTAX:
+             patch-run <options>
+OPTIONS:
+
+   group=id:  The type of sequences. Id is one of:
+                               all
+			       consensi
+			       sites in fungi genes
+			       sites for fungi factors
+			       sites in insect genes
+			       sites for insect factors
+                               sites in human genes
+			       sites for human factors
+			       sites in mouse genes
+			       sites for mouse factors
+			       sites in nematode genes
+			       sites for nematode factors
+			       sites in plant genes
+			       sites for plant factors
+			       sites in vertebrate genes
+			       sites for vertebrate factors (default)
+			       sites in virus genes
+			       sites for virus factors 
+            See the transfac documentation for more info on this.
+    user:   Your Transfac username to login, required option
+    password:  Your Transfac passowrd to login, required option
+    length:   The minimum length of the sites when matching, required option
+    mismatch: The maximum allowed mismatch, required option
+
+END
+
+exit();
+}
+$BIOBASE_PASS="39W44n";
+$BIOBASE_USER="joly\@cnrs_depsn";
+
+@options=split(",",$ARGV[0]);
+
+for $i (@options) {
+  ($key, $val) = split("=",$i);  
+  $option{$key}=$val;
+}
+$user="";
+$user=$option{'user'};
+if ($user eq "") {
+	$user=$BIOBASE_USER;
+}
+$password="";
+$password=$option{'password'};
+if ($password eq "") {
+	$password=$BIOBASE_PASS;
+}
+#$file=$ARGV[0];
+$length=$option{'length'};
+$mismatch=$option{'mismatch'};
+$group=$option{'group'};
+
+if ($group eq "") {
+  $group='sites for vertebrate factors';
+}
+
+system qq{curl -u }.$user.":".$password.qq{ http://www.biobase.de/cgi-bin/biobase/transfac/9.3/patch/bin/patch.cgi -F "Status=First" -F "searchName=Default" -F "seqStat=DEL" -F "sequenceName=ScriptSeq" -F "theSequence=<-" -F group=}.'"'.$group.'" '.qq{-F "minLen=$length" -F "mismatch=$mismatch" -F "penalty=100" -F "boundary=87.5" -F "site_opt=OUR" -F "usr_seq=default.seq" -F "file=" };

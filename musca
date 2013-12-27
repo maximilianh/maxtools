@@ -1,0 +1,353 @@
+#!/usr/bin/python
+
+import PWM
+import bed
+import re
+from Fasta import *
+from SeqWindow import *
+from MultiAlign2Block import *
+from sys import *
+from optparse import OptionParser
+import WindowIterator
+import itertools
+from os import environ
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] sequence-files\nScans multiple alignments for conserved transcription factor binding matrices.") 
+
+parser.add_option("-i", "--id", dest="matrices", action="append", help="specify matrix id (example: V$FOXI_Q2, meaning vertebrate, Forkheadbox I, Quality 2. You can specify regular expressions, so .*FOX.* is also fine.). Take care to escape $-signs from the shell and makefiles. Separate the cutoff with '/' (Example: V$FOXI_Q2/0.9). Default value for cutoff is 0.75. You can specify this option multiple times. If you don't specify it at all, sequences will be scanned for all matrices in the file (this is SLOW at the moment).", type="string", metavar="'ID'") 
+
+parser.add_option("", "--idfile", dest="idfile", action="store", help="same as i, but here you can specify a file with one ID per line", type="string", metavar="'FILENAME'") 
+
+parser.add_option("-e", "--exclude", dest="delmatrices", action="append", help="after all -i options have been processed, remove these matrices from the list of matrices. You can also use regular expressions here (e.g. .*P$.*) and you also use this option multiple times.", type="string", metavar="'ID'") 
+
+parser.add_option("-o", "--org", dest="org", action="store", help="the sequence where the matrix HAS to be conserved [defaults %default]", type="string", metavar="'STRING'", default="") 
+
+parser.add_option("-c", "--conservation", dest="minseqs", action="store", help="the minimum number of sequences where the PWMs have to be conserved [default: all seqs in fasta/maf]", type="int", metavar="NUMBER") 
+
+parser.add_option("-t", "--tffile", dest="matrixfile", action="store", help="the name of the file matrix.dat from Transfac/Jaspar/Genomatix, the default value is taken from the environment variable TFMATPATH [default: %default]", type="string", metavar="PATH", default=environ["TFMATPATH"]) 
+
+parser.add_option("-f", "--format", dest="format", action="store", help="specify the type of format of your file: either fa or maf are accepted. If you specify fasta, put ONE multiple alignment into ONE fasta file. seqs should to look like UCSC-seqs ('range=ch4:1-10', etc) if you want genome coordinates in you bed-file.") 
+
+parser.add_option("-l", "--list", dest="list", action="store_true", help="list all pwms that are included in the matrix.dat-file and are removed or included by other options. Will cancel all other options. Use this to see what you are actually scanning for.") 
+
+#parser.add_option("-n", "--name", dest="trackname", action="store_true", help="add a track line with 'multiscan_cutoffXX_conservedX'.",default="False") 
+
+parser.add_option("", "--core", dest="coreminimum", action="store", help="minimum core similarity [default: %default]", default="0.9", type="float", metavar="NUMBER") 
+
+parser.add_option("", "--minsites", dest="minsites", action="store", help="remove matrices that have been built from less than x sites [default: %default]", default="6", type="int", metavar="NUMBER") 
+
+parser.add_option("-s", "--snp", dest="snpfile", action="store", help="report only those matrix hits that have a core nucleotide (five most conserved of the matrix) at a position specified by a file (UCSC bed-format). Use this option if you have already done mutational experiments with your cis-regulatory region and identified positions that stop/change expression when mutated", type="string", metavar="BEDFILE") 
+
+parser.add_option("-x", "--excludefile", dest="excludefile", action="store", help="a list of matrix-ids, one per line, that is excluded from the search. You can put matrices here that you're either not interested in or whose quality is too low.", metavar="TXTFILE") 
+
+parser.add_option("-d", "--scoredefault", dest="defaultscore", action="store", help="the minimum matrix cutoff, if there is none specified (e.g. with -i), [default: %default]", metavar="FLOAT", default="0.75", type="float") 
+
+parser.add_option("-g", "--nogenomecoords", dest="genomeCoords", action="store_false", help="do not try to parse UCSC-style genome coords from sequences, simply return the position of matches on the sequences [default: will return genome coods]", metavar="", default="True") 
+
+parser.add_option("", "--minIC", dest="minIC", action="store", help="remove matrices that have an Information contentn of less than MINIC [default: %default]", metavar="MINIC", default="6.8", type="float") 
+
+#parser.add_option("-1", "--singleseq", dest="singleseq", action="store_true", help="add this if you only want to scan a single sequence. switches off conservation, fasta-double-id warnings [default: %default]", default="False") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def overlap(f, features):
+    """ returns only those features from FEATURES that overlap f """
+    overlap = []
+    start = f.start
+    end = f.end
+    for f2 in features: 
+        if (( f2.start <= start and f2.end >= start) or \
+            (f2.start <= end and f2.end >= end)):
+            overlap.append(f2)
+    return overlap
+
+def annotateMatches(aligns, regpwms):
+    for block in aligns:
+            for seq in block.values():
+                matches = {}
+                for pwm in regpwms:
+                    winsize = len(pwm)
+                    wi = WindowIterator.subseq_generator(seq, winsize)
+                    for subseq in wi:
+                        match = pwm.match(subseq, coreminimum, pwm.cutoff)
+                        if match!=None:
+                            matid = match.name
+                            if matches.get(matid)==None:
+                                matches[matid]=[]
+                            matches[matid].append(match)
+                seq.matches = matches
+
+class BlockPWMScanner:
+    """ scans blocks for a PWM and print those that match and fulfill the thresholds and
+    are located on the specified organism. """
+
+    def __init__(self, pwm, corethreshold, threshold, minmatch, org, snppos):
+        self.pwm = pwm
+        self.threshold = threshold
+        self.corethreshold = corethreshold
+        self.minmatch=minmatch
+        self.org = org
+        self.snppos = snppos
+
+    def scan(self, block,strand):
+        match = 0
+        org_score=0.0
+        score = 0.0
+        for ss in block:
+            if ss.getUngapLength<len(pwm):
+                print "internal error: subsequence shorter than matrix."
+                break
+            seq = ss.getUngapNucl()
+            if strand=="-":
+                seq = revcomp(seq)
+            core, matscore = self.pwm.score(seq, self.corethreshold)
+            if matscore >= self.threshold:
+                match += 1
+            if ss.seq.getID()==self.org:
+                org_score=matscore
+        if match >= self.minmatch:
+            # check if there is any overlap between pwm-conserved and snp-positions
+            # return is there isn't
+            if len(snppos)!=0:
+                start = block.getBlockPos(self.org)
+                conservedPos = [x+start for x in self.pwm.mostConserved]
+                conservedPos = set(conservedPos)
+                overlap = conservedPos.intersection(self.snppos)
+                if len(overlap)==0:
+                    return
+            print block.getBedLine(self.org)+" "+self.pwm.id+" %3d" % (org_score*1000)+" "+strand
+
+# ---------MAIN---------------------------
+matrixfile = options.matrixfile
+matrixids = options.matrices
+minseqs = options.minseqs
+#if options.singleseq==True:
+    #minseqs=1
+    #baseorg=None
+baseorg = options.org
+coreminimum = options.coreminimum
+snpfile = options.snpfile
+excludefile = options.excludefile
+minsites = options.minsites
+matrixcutoff = options.defaultscore
+minIC = options.minIC
+delMatList = options.delmatrices
+
+if args==[] and not options.list:
+    sys.stderr.write("\nNo sequence files specified. Use -h for help. \n")
+    parser.print_help()
+    exit(1)
+
+if not options.list:
+    # init sequence format flags
+    if options.format==None:
+        sys.stderr.write("error: I Don't know the format of your file.\n")
+        sys.stderr.write("Use option -f and specify if fa or maf format.\n")
+        exit(1)
+    if options.format.upper()=="FA" or options.format.upper()=="FASTA":
+        maf=False
+    elif options.format.upper()=="MAF":
+        maf=True
+    else:
+        sys.stderr.write("Use option -f and specify if 'fa' or 'maf' format.\n")
+        exit(1)
+    # read seqs
+    blocks = []
+    for file in args:
+        if maf:
+           blocks.extend(readMaf(file))
+        else:
+           blocks.append(readFasta(file))
+    if minseqs==None:
+        minseqs=len(blocks[0])
+	if maf:
+	    baseorg = mafBaseOrg(args[0])
+	else:
+	    baseorg = open(file, "r").readline().strip().strip(">").split(" ")[0]
+        sys.stderr.write("Nothing specified, using %d as depth and %s as baseorg\n" % (minseqs, baseorg))
+
+#if matrixids==[]:
+    #sys.stderr.write("error: only maf or fasta/fa allowed for -f\n")
+    #exit(1)
+
+sys.stderr.write("Parsing matrix file...\n")
+pwms = PWM.readMatrices(matrixfile)
+if len(pwms)==0:
+    sys.stderr.write("Could not parse matrix.dat-file from "+matrixfile+"\n")
+    exit(1)
+
+# remove pwms that are excluded via a exclusion file
+if excludefile!=None:
+    i = 0
+    lines = open(excludefile, "r").readlines()
+    for l in lines:
+        id = l.strip()
+        if id in pwms.keys():
+            del pwms[id]
+            i += 1
+    sys.stderr.write(" Removed %u matrices due to an exclusion file.\n" % i)
+
+# remove pwms that match a pattern from the exlusion options
+if delMatList!=None:
+    count = 0
+    delList = []
+    for delRegEx in delMatList:
+        regex = re.compile(delRegEx)
+        for id in pwms.keys():
+            if regex.match(id):
+                delList.append(id) 
+                count +=1
+    for id in delList:
+            del pwms[id]
+    sys.stderr.write(" Removed %u matrices because of exclusion patterns.\n" % count)
+
+# remove pwms that are assembled from less than MINSITE (def: 6) sites, if they have int-counts
+if minsites!=0:
+    count = 0
+    delmats = []
+    for id, pwm in pwms.iteritems(): 
+        if pwm.float:
+            continue
+        row1val = pwm.weights[0].values()
+        s = sum(row1val)
+        if s < minsites:
+            count += 1
+            #print "ignore %s" % id
+            delmats.append(id)
+    for m in delmats:
+        del pwms[m]
+    sys.stderr.write(" Removed %u matrices because they did not contain more than %u sites .\n" % (count, minsites))
+
+# set all pwms to default cutoff
+for id in pwms.keys():
+    pwms[id].cutoff= matrixcutoff 
+
+# parse ids from id-file into matrixids
+if options.idfile!=None:
+    sys.stderr.write(" Reading matrix include id file...\n")
+    f = open(options.idfile, "r")
+    for l in f:
+        if matrixids==None:
+            matrixids=[]
+        matrixids.append(l.strip())
+    
+# parse include pwms from cmdline 
+keepids = []
+if matrixids != None:
+    for p in matrixids:
+        parts = p.split("/")
+        id = parts[0]
+        # parse out cutoff
+        if len(parts)>1:
+            cutoff = float(p.split("/")[1])
+        else:
+            cutoff = matrixcutoff 
+        # find all matching pwms and set their cutoffs
+        regexid = re.compile(id.replace("$","\$"))
+        for realid in pwms.keys():
+            if regexid.match(realid):
+                pwms[realid].cutoff=cutoff
+                keepids.append(realid) # to prevent it from being deleted
+    matrixids.extend(keepids)
+    del keepids
+    # delete all other pwms
+    dellist = []
+    count = 0
+    for id,pwm in pwms.iteritems():
+        if not id in matrixids:
+            dellist.append(id)
+    for id in dellist:
+        del pwms[id]
+        count += 1
+    sys.stderr.write(" Removed %u matrices since they were not in the includefile/-i options\n" %count)
+
+# regularize pwms
+sys.stderr.write("Regularizing matrices...\n")
+for pwmid,pwm in pwms.iteritems():
+    #try:
+    #    pwm = pwms[pwmid]
+    #except KeyError:
+    #    sys.stderr.write("Matrix ID "+pwmid+" not found in transfac file!")
+    #    exit(1)
+    pwm.prepareScoring()
+
+# remove pwms that have an IC that is too low
+countIC = 0
+delmats = []
+if minIC!=0:
+    for id, pwm in pwms.iteritems(): 
+        if pwm.getRealIC() < minIC:
+            countIC += 1
+            delmats.append(id)
+for m in delmats:
+    del pwms[m]
+sys.stderr.write(" Removed %u matrices because they had an IC lower than %u.\n" % (countIC, minIC))
+
+#print out list of pwms now if option set and exit
+if options.list:
+    print pwms
+    exit(0)
+
+if pwms.values()==[]:
+    sys.stderr.write("No matrices left, all were excluded!\n");
+    sys.stderr.write("Make sure to lower your exclusion citeria.");
+    exit(1)
+
+#trackname = options.trackname
+#if trackname!=False:
+    #trackname="multiscan_conserved=%u_cutoff=%.2f" % (minseqs, matrixcutoff)
+
+# read mutations/snps
+snppos = []
+if snpfile!=None:
+    lines = open(snpfile,"r").readlines()
+    features = bed.parseBedFile(lines)
+    for f in features:
+        snppos.append(f.start)
+        if not f.start==f.end-1:
+            sys.stderr.write("\nEvery feature in snpfile should only cover one basepair.\n"+\
+                    "The following line does not seem to follow this rule:\n"+\
+                    repr(f))
+            exit(1)
+snppos = set(snppos)
+
+
+# scan all seqs for all pwms
+sys.stderr.write("Scanning with %u matrices...\n" % len(pwms.keys()))
+sys.stderr.write("Matches have to be conserved on %u sequences in alignment\n" % minseqs)
+annotateMatches(blocks, pwms.values())
+
+#if options.singleseq==True:
+    #sys.stderr.write("Printing all matches from all sequences:\n")
+    ## dump out all matches from all sequences
+    #for block in blocks:
+        ##sys.stderr.write(block.getBlockPos(options.org))
+        #for seq in block.values():
+            #for matches in seq.matches.values():
+                #for match in matches:
+                    #print match.getBedLine(options.genomeCoords)
+#else:
+sys.stderr.write("Searching for overlapping matches...\n")
+    #print 'track name="%s" description="%s" useScore=1 visibility=pack url="http://www.biobase.de/cgi-bin/biobase/transfac/9.4/bin/getTFProf.cgi?$$"'% (trackname,trackname)
+    # keep only those matches from the main seq that overlap at least minseqs matches on other sequences
+for block in blocks:
+    baseseq = block[baseorg]
+    otherseqs = [seq for seqid,seq in block.iteritems() if seqid!=baseorg]
+
+    for matches in baseseq.matches.values():
+        for match in matches:
+            #print match
+            matid = match.name
+            matchcount = 1
+            for seq in otherseqs:
+                othermatches = seq.matches.get(matid, [])
+                overlaps = overlap(match, othermatches)
+                if overlaps!=[]:
+                    matchcount +=1
+            # check that match fullfills minseq and snppos constraints
+            if matchcount >= minseqs and (len(snppos)==0 or len(match.conservedPos().intersection(snppos))!=0):
+                print match.getBedLine(options.genomeCoords)
+
+
+    

@@ -1,0 +1,274 @@
+#!/usr/bin/env python2.7
+
+# Max Haussler, Mar 2008, maximilianh@gmail.com
+
+from sys import *
+from optparse import OptionParser
+import tempfile
+import os
+import urllib2
+import urllib
+import re
+import time
+import codecs
+import logging
+import tabfile, articleDownload
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""
+
+usage: %prog command [options] mode file/pubmed-query - Given a query, print pmids, abstracts or outlink URL
+%prog query Query1 query2 query3...:           download pmids for each query (query). 
+%prog queryCounts QUERYFILE: download pmid counts per query (queryCounts). 
+                             QUERYFILE is a file with one query per line: 
+                             If -d and -s is set, also download total number of articles
+%prog pmidAbstracts PMIDFILE: download abstracts 
+%prog pmidNucs      PMIDFILE: translate PMID to gi nucleotide numbers
+%prog linkout       PMIDFILE: translate PMID to linkout URL
+
+""")
+
+parser.add_option("-d", "--minMaxYear", dest="minMaxYear", action="store", help="limit results to certain years, format is min,max") 
+parser.add_option("-a", "--addString", dest="addStringQuery", action="store", help="add this string to input requests from file, e.g. AND enhancer AND promoter", default="") 
+parser.add_option("", "--dbName", dest="dbName", action="store", help="name of the NCBI database to search when retrieving ids, default %s, can be changed to e.g. pmc, does not work for abstract retrieval!", default="pubmed") 
+parser.add_option("", "--retStart", dest="retStart", action="store", help="modify the retStart parameter, default %s, to download more then 100k results", default=0, type="int") 
+parser.add_option("-s", "--stepYears", dest="stepYears", action="store", help="when using -d, report results for each X years separately", default=None, type="int") 
+parser.add_option("", "--remove", dest="remove", action="store", help="make sure that none of the PMIDs from this file are output (for query)", default=None) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def stripTag(line, tag):
+    #line = line.strip().replace("<%s>"%tag,"").replace("</%s>"%tag, "")
+    remHtml = re.compile("<(.|\n)*?>")
+    line = re.sub(remHtml, "", line)
+    return line
+
+def getPmIds(query, dbName,onlyCounts=False, minYear=None, maxYear=None, retStart=0):
+    """ retrieve pmids for query, returns a tuple (no of results, list of ids) optionally returns only number of results """
+    if onlyCounts:
+        retmax=0
+    else:
+        retmax=9999999
+
+    if minYear!=None and maxYear!=None:
+        addString = "&mindate=%s&maxdate=%s" % (str(minYear), str(maxYear))
+    else:
+        addString = ""
+
+    query = urllib.quote(query)
+    url = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=%s&tool=retrPubmed&email=maximilianh@gmail.com&term=%s&retstart=%d&retmax=%d%s' % (dbName, query, retStart, retmax, addString)
+    req = urllib2.Request(url)
+    req.add_header('User-Agent', 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.8) Gecko/20050524 Fedora/1.5 Firefox/1.5')
+    html = urllib2.urlopen(req)
+    stderr.write("Getting "+url+"\n")
+    
+    pmids = []
+    count = None
+    for line in html:
+        if line.find("<Id>")!=-1:
+            pmid = line.strip().replace("<Id>","").replace("</Id>", "")
+            pmids.append(pmid)
+        if line.find("<Count>")!=-1:
+            if count==None: # only use the first "count" line
+                #count = int(line.strip().replace("<Count>","").replace("</Count>", ""))
+                fs = re.split("<.{0,1}Count>", line)
+                count = int(fs[1])
+                if count == "-1":
+                    return 0, []
+    return count, pmids
+
+def getAbstract(pmid):
+    """ retrieve abstracts for pmid"""
+
+    url = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&email=haeussle@iaf.cnrs-gif.fr&retmode=xml&id=%s' % pmid
+    req = urllib2.Request(url)
+    try:
+        html = urllib2.urlopen(req)
+    except HTTPError:
+        return None
+    
+    journal, title, year= "","",""
+    abstract=""
+    lastNames = []
+    firstNames = []
+    inDate = False
+    authors=""
+    doi=""
+
+    for line in html:
+        line = line.strip()
+        if line.find("<Title>")!=-1:
+            journal = stripTag(line, "Title")
+        if line.find("<ArticleTitle>")!=-1:
+            title = stripTag(line, "ArticleTitle")
+        if line.find("<LastName>")!=-1:
+            lastNames.append(stripTag(line, "LastName"))
+        if line.find("<FirstName>")!=-1 or line.find("ForeName")!=-1:
+            firstNames.append(stripTag(stripTag(line, "FirstName"), "ForeName"))
+        if line.find("ArticleDate")!=-1 or line.find("PubDate")!=-1:
+            inDate=True
+        if line.find("<Year>")!=-1 and inDate:
+            year=stripTag(line, "Year")
+            inDate=False
+        if line.find('ArticleId IdType="doi"')!=-1:
+            doi=stripTag(line, "ArticleId")
+        if line.find("<AbstractText>")!=-1:
+            abstract=stripTag(line, "AbstractText")
+        authors = [last+" "+first for first, last in zip(firstNames, lastNames)]
+        authors = "; ".join(authors)
+    return (year, journal, authors, title, abstract, doi)
+        
+def getNucGis(pmid):
+    """ retrieve GIs for pmid (links)"""
+
+    #url = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi?db=nuccore&email=haeussle@iaf.cnrs-gif.fr&Id=%s&dbfrom=pubmed' % pmid
+    url = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi?db=nuccore&dbfrom=pubmed&dbto=nuccore&id=%s&email=haeussle@iaf.cnrs-gif.fr' % pmid
+    req = urllib2.Request(url)
+    html = urllib2.urlopen(req)
+
+    # example record:
+    #<LinkSet>
+    #    <DbFrom>pubmed</DbFrom>
+    #    <IdList>
+    #        <Id>15617693</Id>
+    #    </IdList>
+    #    <LinkSetDb>
+    #        <DbTo>nuccore</DbTo>
+    #        <LinkName>pubmed_nuccore</LinkName>
+    #        <Link>
+    #            <Id>74096012</Id>
+    #        </Link>
+    #        <Link>
+    #            <Id>53801352</Id>
+    #        </Link>
+    #    </LinkSetDb>
+    #    <LinkSetDb>
+    #        <DbTo>nuccore</DbTo>
+    #        <LinkName>pubmed_nuccore_refseq</LinkName>
+    #        <Info>Empty result</Info>
+    #    </LinkSetDb>
+    #</LinkSet>
+
+    start=False
+    gis = set()
+    for line in html:
+        if line.find("LinkName")!=-1:
+            start=True
+        if line.find("<Id>")!=-1 and start:
+            id = stripTag(line, "Id")
+            id = id.strip()
+            gis.add(id)
+
+    return gis
+
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+stdout = codecs.open("/dev/stdout", "w", 'utf-8')
+
+mode=args[0]
+mode = mode.lower()
+infile = args[1]
+addStringQuery = " "+options.addStringQuery
+dbName = options.dbName
+retStart = options.retStart
+stepYears = options.stepYears
+removeFname = options.remove
+
+if options.minMaxYear:
+    minYear, maxYear = options.minMaxYear.split(",")
+else:
+    minYear, maxYear = None, None
+
+# get queries from file, annotate them with number of matches in pubmed
+if mode=="querycounts":
+    geneIds = tabfile.slurplist(infile)
+    for id in geneIds:
+        if minYear!=None:
+            if stepYears:
+                years = []
+                for year in range(int(minYear), int(maxYear), stepYears):
+                    years.append((year+1, year+stepYears))
+                logging.info("Year ranges: %s" % years)
+            else:
+                years = [ (minYear, maxYear) ]
+                
+            for year1, year2 in years:
+                #query = '("%s/01/01"[Date - Create] : "%s/01/01"[Date - Create]) AND %s %s' % (year1, year2, id, addStringQuery)
+                count, list = getPmIds(query, dbName, True, None, None)
+                data = [str(year1), "total", str(count)]
+                print "\t".join(data)
+                time.sleep(2)
+
+        else:
+            data = []
+            stderr.write("query: %s\n" % id)
+            query = '"%s"[TW]' % id+" "+addStringQuery
+            count, list = getPmIds(query, dbName, True, None, None)
+            data.extend([id,str(count)])
+            #print query
+            print "\t".join(data)
+            stdout.flush()
+            time.sleep(2)
+
+# get pmids from file, annotate them with abstracts
+elif mode=="pmidabstracts":
+    pmids = tabfile.slurplist(infile)
+    for id in pmids:
+        stderr.write("Got %s\n" % id)
+        abstractData = getAbstract(id+addStringQuery)
+        if abstractData==None:
+            print id,"HTTPError"
+        #print abstractData
+        print id+"\t"+"\t".join(abstractData)
+        time.sleep(2)
+
+# run just the query from the command line
+elif mode=="query":
+    #removePmids = set([x.strip() for x in open(removeFname).readlines()])
+    removePmids = set(tabfile.slurplist(removeFname))
+    for query in args[1:]:
+        count, pmids = getPmIds(query+addStringQuery, dbName, False, minYear, maxYear, retStart)
+            
+        if len(pmids)==0:
+            stderr.write("No results for %s.\n" % query)
+        else:
+            stderr.write("Query matches %s records. Got %s IDs. \n" % (str(count), str(len(pmids))))
+            if int(count)!=len(pmids):
+                stderr.write("Warning: not all data was retrieved. You need to set the retstart parameter and run this script again\n")
+            pmids = set(pmids).difference(removePmids)
+            for id in pmids:
+                print id
+        time.sleep(2)
+
+# parse file with pmids, translate to nucleotide gis
+elif mode=="pmidnucs" or mode=="linkout":
+    stderr.write("Reading input file...\n")
+    if infile=="stdin":
+        ifh = stdin
+    else:
+        ifh = open(infile)
+    lines = ifh.read().splitlines()
+    i=0
+    stderr.write("Iterating over pmids...\n")
+    for line in lines:
+        pmid = line.strip().split("\t")[0]
+        if i % 100 == 0:
+            stderr.write("Finished %d ids\n" % i)
+        i+=1
+        #stderr.write("Got %s\n" % pmid)
+        if mode=="pmidnucs":
+            ids = getNucGis(pmid)
+        elif mode=="linkout":
+            ids = [articleDownload.getPubmedOutlinks(pmid, preferPmc=False)]
+
+        for id in ids:
+            stdout.write("%s\t%s\n" % (line, id))
+        time.sleep(2)
+
+    
+

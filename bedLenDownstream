@@ -1,0 +1,115 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import bed
+import tabfile
+import re 
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] bedLenDownstream geneAnnotationHashFile classesFile geneFileBed - plot average region length by downstream gene classes, classesFile has format name<tab>regex, annotatedRegionsBed is a file in the format output by bedFindNeigbors --onlyDownstream -q, geneFileBed is only for needed genomic average") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--distribution", dest="distribution", action="store", help="output the complete distribution for one class in the format gene/totalsize/tissues") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+regionFile, geneAnnotationFile, classesFile, geneFile = args
+distribution = options.distribution
+
+# annotate beds
+#beds = bedAnnotateDownstream(regionFile, geneFile)
+beds = bed.parseBedFilename(regionFile)
+all_genome_genes = bed.parseBedFilename(geneFile)
+
+# sum len of beds per gene
+geneLens = {}
+for b in beds:
+    gene = b.name.strip("|")
+    geneLens.setdefault(gene, 0)
+    geneLens[gene]+=(b.end-b.start)
+
+geneAnnots  = tabfile.slurpdictlist(geneAnnotationFile)
+classes = tabfile.slurpdict(classesFile, comments=True)
+#print classes
+
+# read and compile classes -> dict
+classRes = {}
+for name, reStr in classes.iteritems():
+    regex = re.compile(reStr)
+    classRes[name] = regex
+ 
+# get genes for all classes and put into dict
+class2Genes = {}
+for gene, annots in geneAnnots.iteritems():
+    ##print "gene", gene
+    foundClasses = []
+    for annot in annots:
+        #print "annot", annot
+        for className, regex in classRes.iteritems():
+            if regex.match(annot):
+                #print "matches", className
+                foundClasses.append(className)
+    if foundClasses == []:
+        #print "no matches, using other"
+        foundClasses=["other"]
+    for foundClass in foundClasses:
+        class2Genes.setdefault(foundClass, set())
+        class2Genes[foundClass].add(gene)
+
+#for c,g in class2Genes.iteritems():
+    #print c,g
+
+# calc averages and output some basic data
+stderr.write("Got lenghts for %d genes, got annotations for %d genes\n" % (len(geneLens), len(geneAnnots)))
+
+#print geneLens.keys()
+#print geneAnnots.keys()
+diff = set(geneAnnots.keys()).difference(geneLens.keys())
+stderr.write("%d annotated genes could not be found in lengths-bedfile\n" % (len(diff)))
+diff = set(geneAnnots.keys()).difference(set([b.name for b in all_genome_genes]))
+stderr.write("%d annotated genes could not be found in genome (!): %s\n" % (len(diff), str(diff)))
+
+bed_total = sum(geneLens.values())
+bed_avg = bed_total / float(len(geneLens))
+stderr.write("Bedfile: Total Length %d, total genes %d, avg is %f\n" % (bed_total, len(geneLens), bed_avg))
+
+annot_total = 0
+geneCount = 0
+for gene in geneAnnots:
+    geneLen = geneLens.get(gene,0)
+    annot_total += geneLen 
+    geneCount+=1
+annot_avg=annot_total / float(geneCount)
+stderr.write("Annotation file: Total Length %d, total annotated genes %d, avg is %f\n" % (annot_total, geneCount, annot_avg))
+
+# add "all" class
+class2Genes["genome"]=[b.name for b in all_genome_genes]
+
+# sum counts for all genes for all classes
+if not distribution:
+    for className, genes in class2Genes.iteritems():
+        classSum = 0
+        geneCount = 0
+        for gene in genes:
+            len = geneLens.get(gene,0)
+            classSum+=len
+            geneCount+=1
+        classNameCount = className+"(%d)" % geneCount
+        #classNameCount = className
+        avg = classSum / float(geneCount)
+        overAvg = avg / annot_avg
+        print "\t".join([classNameCount, str(classSum), str(geneCount), str(avg), str(overAvg)])
+
+else:
+    for className, genes in class2Genes.iteritems():
+        for gene in genes:
+            if gene in geneLens:
+                print "\t".join([className, gene, str(geneLens.get(gene))])

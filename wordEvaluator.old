@@ -1,0 +1,215 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import regionView, util
+import tabfile, operator, math
+import dist
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inputWordFile motifSpecFile targetGenes backgroundGenes outfile - evaluate the quality of word-specifictation (a file of motif-combianations, one per line, in the format of wordsSeach) relative to some target annotations (comma separated list, substring-match)") 
+
+parser.add_option("-c", "--count", dest="count", action="store", help="number of times motifs have to occur in a block to trigger a match, this also implies that all OTHER fields than field0 will be ignored in the motif file [default: %default]", type="int", metavar="NUMBER", default=None) 
+parser.add_option("-w", "--winSize", dest="winSize", action="store", help="size of window where motifs have to be found [default: %default]", type="int", metavar="NUMBER", default=250) 
+#parser.add_option("-v", "--invert", dest="notKeyword", action="store", help="do not consider all genes with one of these annotations (comma separated)", type="string", metavar="COMMASEPLIST", default="") 
+parser.add_option("", "--flankType", dest="flankType", action="store", type="int", help="type of flanking regions, 2=take both genes, 1=take closest gene, 0=only downstream genes , default=%default", default=1) 
+parser.add_option("", "--maxDist", dest="maxDist", action="store", type="int", help="maximum distance to consider genes", default=3000000000) 
+parser.add_option("-s", "--specGenesFile", dest="specGenesFilename", action="store", help="a list with genes of interest, will be annotated for each motif, format is <id>tab<name>") 
+#parser.add_option("-n", "--cnsNumbers", dest="cnsNumbers", action="store_true", help="add a column with the numbers of CNS found per motif") 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+#parser.add_option("", "--targetGenes", dest="targetGenes", action="store", help="Instead of aniseed file: file with target genes", type="string", metavar="COMMASEPLIST", default="") 
+#parser.add_option("", "--annotatedGenes", dest="annotatedGenes", action="store", help="Instead of aniseed file: use this file as a list of annotated genes", type="string", metavar="COMMASEPLIST", default="") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+
+def allToString(list):
+    newList = []
+    for e in list:
+        newList.append(str(e))
+    return newList
+
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infname = args[0]
+motifsFile = args[1]
+fgGenesFile = args[2]
+bgGenesFile = args[3]
+
+annotFile = None
+targetRegions=[]
+count = options.count
+winSize = options.winSize
+fgGenes    = set(tabfile.slurplist(fgGenesFile))
+bgGenes = set(tabfile.slurplist(bgGenesFile))
+flankType      = options.flankType
+maxDist        = options.maxDist
+specGenesFilename = options.specGenesFilename
+specGenesNames = tabfile.slurpdict(specGenesFilename)
+
+#print fgGenes.difference(bgGenes)
+assert(len(fgGenes.difference(bgGenes))==0)
+
+prob = float(len(fgGenes)) / len(bgGenes)
+stderr.write("Found %d annotated genes of which %d genes are expressed in the target region (p=%f).\n" % (len(bgGenes), len(fgGenes), prob))
+
+#notKeywords    = options.notKeyword.split(",")
+#print "targets", targetGenes
+#print "annotated", annotatedGenes
+
+outf = args[4]
+if outf=="stdout":
+    of = stdout
+else:
+    of = open(outf, "w")
+
+if targetRegions:
+    stderr.write("Reading gene annotation, finding genes where expression is one of %s, but not in %s...\n" % (",".join(targetRegions), ",".join(notKeywords)))
+stderr.write("Reading words...\n")
+f = open(infname, "r")
+motifToDesc = wordParser.readMotifs(f)
+motifToDesc = dict(motifToDesc)
+
+stderr.write("Parsing word list to search...\n")
+motifDictList = []
+motifDictNames = []
+for l in open(motifsFile, "r"):
+    if l.startswith("#"):
+        continue
+    l = l.strip()
+    fs = l.split()
+    fs = [a for a in fs if a!=''] # filter out empty lines
+    # get description for motif
+    motif = fs[0]
+    if ":" in motif:
+        motif = motif.split(":")[0]
+    if motif in motifToDesc:
+        motifDesc = motifToDesc[motif]
+    elif util.revComp(motif) in motifToDesc:
+        motifDesc = motifToDesc[util.revComp(motif)]
+    else:
+        stderr.write("error: motif %s not found in words file\n" % motif)
+        exit(1)
+
+    if count:
+        words = {motif:count}
+        motifDictNames.append(str(count)+"x"+motifDesc)
+    else:
+        words = wordParser.parseWords(fs)
+        motifDictNames.append(l.strip())
+
+    if count!=None:
+        for w in words:
+            words[w]=count
+    motifDictList.append(words)
+
+# search through wordfile
+stderr.write("Searching wordfile...\n")
+geneScores = {}
+geneCnsCounts = {}
+word2Genes = {}
+backgroundCnsCount=0
+genomeCnsCount=0
+motifCnsCountsBg = {}
+motifCnsCountsFg = {}
+
+#for m in motifs:
+for i in range(0, len(motifDictList)):
+    word2Genes[i]=set()
+    motifCnsCountsBg[i]=0
+    motifCnsCountsFg[i]=0
+
+for b in wordParser.readBlocks(f):
+    # check if block is around annotated genes
+    skipBlock=True
+    flankedByFg = False
+    genomeCnsCount+=1
+    flankGenes, intronic = b.getGenes(flankType, maxDist)
+    for g in flankGenes:
+        if g in bgGenes:
+            skipBlock=False
+            # number of flanking blocks per gene
+            geneCnsCounts.setdefault(g, 0)
+            geneCnsCounts[g]+=1
+            # sum of flanking block scores per gene
+            geneScores.setdefault(g, 0)
+            geneScores[g]+=b.score
+            backgroundCnsCount+=1
+        if g in fgGenes:
+            flankedByFg=True
+
+    # check all motifSpecs
+    if not skipBlock: 
+        for i in range(0, len(motifDictList)):
+            motifsDict = motifDictList[i]
+            possibleWords = set(b.words).intersection(set(motifsDict))
+            # but only motifs which are in spec AND in block
+            for w in possibleWords:  # THIS LINE DOES NOT MAKE SENSE!?
+                if b.wordsFound(motifDictList[i], winSize):
+                    motifCnsCountsBg[i]+=1
+                    if flankedByFg:
+                        motifCnsCountsFg[i]+=1
+                    for gene in flankGenes:
+                        word2Genes[i].add(gene)
+
+stderr.write("Searched %d blocks, of which %d are flanking annotated genes.\n" % (genomeCnsCount, backgroundCnsCount) )
+
+# calc stats for each motif desc and genes dict
+stderr.write("Calculating stats\n")
+rows = []
+
+#print geneCnsCounts
+for i in range(0, len(motifDictNames)):
+    wordDesc = motifDictNames[i]
+    genes = word2Genes[i]
+    predFgGenes = genes.intersection(fgGenes)
+
+    cnsCountBg = sum([geneCnsCounts[g] for g in genes])
+    cnsCountFg = sum([geneCnsCounts[g] for g in predFgGenes])
+    cnsCountMotifBg = motifCnsCountsBg[i]
+    cnsCountMotifFg = motifCnsCountsFg[i]
+
+    TP = len(predFgGenes)
+    
+    binomProb = dist.pbinom(TP, len(genes), prob)
+    binomScore = -math.log10(binomProb)
+    if len(genes)!=0:
+        sens = float(TP) / len(fgGenes)
+    else:
+        sens = 0
+
+    # XX TEMPRORARY PART
+    motifProb = float(len(genes)) / len(bgGenes)
+    if motifProb!=0:
+        invProb   = dist.pbinom(TP, len(fgGenes), motifProb)
+        invScore  = -math.log10(invProb)
+    else:
+        invProb = 9999.0
+        invScore = 0.0
+    # XX TEMPRORARY PART CHANGE ALSO NEXT LINE
+    #data = [wordDesc, str(prob), len(genes), stats.TP, stats.CC, stats.bnpScore, stats.corr_bnpPval, stats.poissParams["pVal"]]
+    specGenesList = [specGenesNames[gene] for gene in genes if gene in specGenesNames] 
+    specGenesString = ", ".join(specGenesList)
+    specGenesCount = str(len(specGenesList))
+
+    data = [wordDesc, str(prob), len(genes), sens, TP, binomProb, binomScore, motifProb, len(fgGenes), invScore, cnsCountMotifBg, cnsCountMotifFg, cnsCountBg, cnsCountFg, specGenesCount, specGenesString]
+    rows.append(data)
+
+# sort and write to outfile
+of.write("##Background genes: %d\n" % len(bgGenes))
+of.write("##Foreground genes: %d\n" % len(fgGenes))
+of.write("##CNEs in genome: %d\n" % genomeCnsCount)
+of.write("##CNEs around background genes: %d\n" % sum([geneCnsCounts.get(g, 0) for g in bgGenes]))
+headers = ["motifs", "foregroundProbability", "predictedGenes", "Sensitivity", "TP", "binomialProb", "binomialScore", "invScore_motifProbability", "invScore_foregroundGenesNumber", "invScore", "matchingCNEs_backgroundGenes", "matchingCNEs_foregroundGenes", "flankCNEs_backgroundGenes", "flankCNEs_foregroundGenes", "specialGenesCount", "specialGenes"]
+of.write("#"+("\t".join(headers))+"\n")
+
+rows.sort(key = operator.itemgetter(6), reverse=True)
+for r in rows:
+    of.write("\t".join(allToString(r))+"\n")
+of.close()
+

@@ -1,0 +1,17 @@
+#!/usr/bin/gawk -f
+
+BEGIN   {
+	  print "track name=\"GenomatixConverted\" description=\"Genomatix Converted Search Result\" useScore=1 visibility=2"
+  }
+/Seq\. name/  { 
+       next
+ 	}
+
+// {    if ($6=="+") {
+	print $1, $4-1, $5, $3, $7*10, $6 
+	}
+	else {
+		print $1, $5-1, $4, $3, $7*10, $6
+	}
+} 
+

@@ -1,0 +1,15 @@
+#!/bin/bash
+if [ "$1" = "" ]; then 
+    echo usage: `basename $0` '<file> - puts file into apache dir and returns URL to file'
+    exit 1
+fi
+
+#echo establishing scp connection... > /dev/stderr
+#scp $1 max@max.butterbrot.org:homepage/biofiles
+#echo 'http://max.butterbrot.org/biofiles/'`basename $1`
+#echo changing attributes... > /dev/stderr
+#ssh max@butterbrot.org chmod a+r homepage/biofiles/`basename $1`; 
+rm -f /var/www/default/download/customTracks/`basename $1`
+ln -s `pwd`/$1 /var/www/default/download/customTracks/`basename $1` 
+echo 'http://max.smith.man.ac.uk/download/customTracks/'`basename $1`
+#cp $1 /var/www/genome.ciona/biofiles/

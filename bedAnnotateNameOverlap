@@ -1,0 +1,216 @@
+#!/usr/bin/python
+
+from optparse import OptionParser
+import tempfile, os, logging, sys
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] ref.bed annots1.bed annots2.bed ... : annotates reference bedfile with all overlapping names from second bedfile seperated by commas. If 2nd bedfile does not have feature-names, will use the filename instead.") 
+
+parser.add_option("-s", "--seperator", dest="sep", action="store", help="delimiter between old bed name and overlap annotations, comma by default", default="|", type="string") 
+parser.add_option("-i", "--internal-seperator", dest="isep", action="store", help="delimiter between annotations, default %default", default=",", type="string") 
+parser.add_option("-n", "--bedName", dest="bedName", action="store", help="if annoations do not have names, add this name instead", type="string") 
+parser.add_option("", "--overlapSelect", dest="useOverlapSelect", action="store_true", help="use overlapSelect, speeds up comparison by factor 100x") 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-o", "--outFile", dest="outFile", action="store", help="do not print to stdout, but use outFilename") 
+parser.add_option("", "--stripNames", dest="stripNameField", action="store_true", help="do not keep the old name field") 
+parser.add_option("", "--asTable", dest="asTable", action="store_true", help="do not output as BED, but as a table ref.name<tab>annot.name") 
+parser.add_option("", "--maxAnnots", dest="maxAnnots", action="store", type="int", help="ignore all features that lead to more than x different annotations (this is not the same as a overlap-limit on the feature level)") 
+
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ==== FUNCTIONs =====
+
+# ------- CLASS BED ------
+class bed:
+    """ a feature from a bed file """
+    def overlaps(self, hit):
+        """ returns number of overlapping bp if two Features overlap or 
+            false if no overlap """
+        if (( hit.start <= self.start and hit.end > self.start) or \
+            (hit.start < self.end and hit.end >= self.end) or 
+            (hit.start > self.start and hit.start < self.end)):
+            return (min (hit.end, self.end) - max (hit.start, self.start))
+        else:
+            return 0 
+    def __repr__(self):
+        #return "%s\t%d\t%d\t%s" % (self.chrom, self.start, self.end, self.name)
+        fields = [self.chrom,str(self.start),str(self.end)]
+        if "name" in self.__dict__:
+            fields.append(self.name)
+        if "score" in self.__dict__:
+            fields.append(str(self.score))
+        if "strand" in self.__dict__:
+            fields.append(self.strand)
+        if "blockStarts" in self.__dict__:
+            fields.append(str(self.thickStart))
+            fields.append(str(self.thickEnd))
+            fields.append(self.itemRgb)
+            fields.append(str(self.blockCount))
+            fields.append(self.blockSizes)
+            fields.append(self.blockStarts)
+        return "\t".join(fields)
+
+def parseBed(fname):
+    fname = fname
+    if fname!="stdin":
+        f = open(fname)
+    else:
+        f = stdin
+    #beds = {}
+    beds = []
+    for l in f:
+        l = l.strip()
+        b = bed()
+        if l.startswith("#"):
+            continue
+        if l.startswith("track") or l.startswith("browser"):
+                continue
+        fs = l.split()
+        b.chrom, b.start, b.end = fs[0:3]
+        if len(fs) >= 4:
+            b.name = fs[3]
+        else:
+            b.name = ""
+        if len(fs)>5:
+            b.strand = fs[5]
+        if len(fs)>6:
+            b.thickStart=int(fs[6])
+            b.thickEnd=int(fs[7])
+            b.itemRgb=fs[8]
+            b.blockCount=int(fs[9])
+            b.blockSizes=fs[10]
+            b.blockStarts=fs[11]
+
+        b.start = int(b.start)
+        b.end = int(b.end)
+        if len(fs) > 4:
+            b.score = fs[4]
+        else:
+            b.score = ""
+        #beds.setdefault(b.start, [])
+        #beds[b.start].append(b)
+        beds.append(b)
+    return beds
+        
+# ------------ FUNCTIONS -----------
+
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    sys.exit(1)
+
+nameToAnnotate=options.bedName
+useOverlapSelect = options.useOverlapSelect
+sep = options.sep
+isep = options.isep
+asTable = options.asTable
+maxAnnots = options.maxAnnots
+
+outFile = sys.stdout
+if options.outFile:
+    outFile = open(options.outFile, "w")
+
+# read and prepare bed-data
+bedFilename = args[0]
+annotFilenames = args[1:]
+
+if useOverlapSelect:
+    dummy, tempFilename = tempfile.mkstemp(prefix="bedAnnotateNameOverlap.", suffix=".overlapSelect")
+
+    overlapData = {}
+
+    for annotFilename in annotFilenames:
+        annotColumnCount = len(open(annotFilename).readline().split("\t"))
+
+        if nameToAnnotate==None:
+            newName=os.path.splitext(os.path.basename(annotFilename))[0]
+
+        # run overlapSelect into tempfile
+        cmd = "overlapSelect %s %s %s -mergeOutput" % (bedFilename, annotFilename, tempFilename)
+        logging.debug("Running %s" % cmd)
+        ret = os.system(cmd)
+        if ret!=0:
+            logging.error("Error when running %s" % cmd)
+            sys.exit(1)
+
+        # get names of overlapping annotations from tempfile
+        # and store in overlapData
+        for l in open(tempFilename):
+            #print l
+            fields = l.strip("\n").split("\t")
+            annotFields = fields[:annotColumnCount]
+            inFileFields = fields[annotColumnCount:]
+            if annotColumnCount>3:
+                name       = annotFields[3]
+            else:
+                name       = newName
+
+            key = " ".join(inFileFields[:4])
+            overlapData.setdefault(key, []).append(name)
+
+    os.remove(tempFilename) 
+
+    # now interate over input file, outputting features and annotations
+    beds = parseBed(bedFilename)
+    annotCount=0
+    for b in beds:
+        key = " ".join([b.chrom,str(b.start),str(b.end),b.name])
+        annots = set(overlapData.get(key, []))
+
+        if asTable:
+            if len(annots)==0:
+                continue
+            #print maxAnnots, annots
+            if maxAnnots!=None and len(annots) > maxAnnots:
+                continue
+            annotCount+=1
+            for a in annots:
+                data = [b.name, a]
+                line = "\t".join(data)+"\n"
+                outFile.write(line)
+
+        else:
+            if len(annots)==0:
+                annotStr=""
+            else:
+                annotCount+=1
+                annotStr = isep.join(annots)
+
+            oldName = b.name + sep
+            if options.stripNameField:
+                oldName = ""
+
+            b.name = oldName+annotStr
+            if options.stripNameField and b.name=="":
+                b.name = "None"
+
+            line =  str(b)
+            outFile.write(line)
+            outFile.write("\n")
+
+    logging.info("Annotated %d out of %d features" % (annotCount, len(beds)))
+
+else:
+    annot = parseBed(annotFilename)
+
+    for bedFilename in bedFilenames:
+        beds = parseBed(bedFilename)
+        for b in beds:
+            for a in annot:
+                if b.overlaps(a):
+                    if not b.name.endswith(isep):
+                        b.name += sep
+                    if a.name=="" or a.name==None:
+                        b.name += nameToAnnotate
+                    else:
+                        b.name += a.name
+
+    for b in beds:
+        print b
+

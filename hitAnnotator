@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, tabfile, operator, maxbio
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] hitFile - annotate a hits file with additional fields: predictedCount, matchCount, ") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-s", "--specialGeneNames", dest="specialGeneNames", action="store", help="read geneId<tab>geneName and based on this add two more columns to output: matchSpecialCount, matchSpecialNames") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+specialGenesFilename = options.specialGeneNames
+
+specialGeneNames = tabfile.slurpdict(specialGenesFilename)
+
+# get fore and background
+for line in open(filename):
+    line = line.strip("\n")
+    if line.startswith("allObjects"):
+        background = set(line.split()[1].split(","))
+    if line.startswith("foreground"):
+        foreground = set(line.split()[1].split(","))
+
+# headers
+infile = open(filename)
+headers = infile.readline().strip("\n").split("\t")
+headers.insert(-1, "predictedCount")
+headers.insert(-1, "matchCount")
+if specialGenesFilename:
+    headers.insert(-1, "matchSpecialCount")
+    headers.insert(-1, "matchSpecialNames")
+print "\t".join(headers)
+
+for line in infile:
+    if line.startswith("foreground") or line.startswith("allObjects"):
+        continue
+
+    fields = line.strip("\n").split("\t")
+    genes = set(fields[-1].split(","))
+    specMatchGenes = []
+    for specGeneId, specGeneName in specialGeneNames.iteritems():
+        if specGeneId in genes:
+            specMatchGenes.append(specGeneName)
+
+    matchGenes = foreground.intersection(genes)
+    addData = [len(genes), len(matchGenes), ]
+    if specialGenesFilename:
+        addData.extend([len(specMatchGenes), ",".join(specMatchGenes)])
+
+    for d in addData:
+        fields.insert(-1, d)
+    print "\t".join(maxbio.allToString(fields))
+

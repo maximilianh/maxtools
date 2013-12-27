@@ -1,0 +1,61 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import re
+from bed import * 
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] fastafile bedfile: annotate fasta ids with the name of overlapping bed-fields") 
+parser.add_option("-r", "--replace", dest="replace", action="store_true", help="completely replace fasta id line with annotation", default=False) 
+parser.add_option("-s", "--s", dest="split", action="store_true", help="split bed-names at character _ before processing", default=False) 
+parser.add_option("-p", "--prefix", dest="prefix", action="store_true", help="prefix with the first three letters of the original seq id", default=False) 
+
+(options, args) = parser.parse_args()
+replace = options.replace
+split = options.split
+prefix = options.prefix
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+faFName = args[0]
+bedFName = args[1]
+
+f = open (bedFName, "r")
+fts = parseBedFile(f)
+
+if split:
+    for f in fts:
+        f.chrom = f.chrom.split("_")[0]
+
+if faFName=="stdin":
+    f=stdin
+else:
+    f = open (faFName, "r")
+for l in f:
+    if l.startswith(">"):
+        id = l.strip()
+        seqname = l.split(" ")[0].strip(">")
+        try:
+            range = id.split(" ")[1].split("=")[1]
+            chromcoord = range.split(":")
+            chrom = chromcoord[0]
+            coords = chromcoord[1].strip().split("-")
+            start = int(coords[0])
+            end = int(coords[1])
+        except IndexError:
+            stderr.write("error: range=x:y-z not found in fasta header of sequence with id '"+id+"' . \n")
+            exit(1)
+        for f in fts:
+            if coordOverlap(f.start, f.end, start, end) and f.chrom == chrom:
+                if replace:
+                    newname = f.name.strip()
+                    if prefix:
+                        newname = newname+"_"+seqname[:3]
+                    l = ">" + newname + "\n"
+                else:
+                    l = l.strip() + " " + f.name.strip() + "\n"
+    print l,

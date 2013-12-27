@@ -1,0 +1,315 @@
+#!/usr/bin/env python
+# we cannot use python2.4 here as macOs does not support this statement
+
+from sys import *
+from optparse import OptionParser
+import logging, types, sys, os
+
+if sys.version_info <= (2, 4):
+    raise "must use python 2.4 or greater"
+
+# add t2ghome/lib to sys path, otherwise python won't find the t2g libraries
+t2gHome = os.environ.get("T2GHOME","")
+if t2gHome=="":
+    t2gHome="."
+homeDir = os.path.join(t2gHome, "lib")
+sys.path.append(homeDir)
+
+# now load the t2g libraries
+import t2gProcess, t2gConvert, t2gConfig, t2gExtract, t2gAlign, tabfile, maxbio
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""usage: %prog [options] command parameters - wrapper to
+run the different stages of the Text2Genome pipeline.  Accepts the following
+commands. Is configured via t2g.conf or via key=value assignments on command
+line.
+
+MAIN COMMANDS
+command:    tabToFa
+    convert output from pubtools to fasta file
+
+command:    align
+    run local aligner on fasta file from step "dna" on genomes and
+    transcripts (=cDNA,genes)
+
+command:    convert
+    convert tabular blast files to compact Blast format, with genome names
+    translated to taxon ids. Sorts the file by document id using UNIX sort.
+
+command:    filter
+    given compact blast (cb) file and disambiguation weights, identifies best
+    genomes, best genes and features for both and writes them to
+    four tab-sep files.
+
+command:    toUcsc
+    create UCSC-style table/bed files based on the output of the filter-command
+
+OPTIONAL COMMANDS
+(Not needed if using pubtools for literature fulltext management)
+command:    dna 
+    extract all nucleotide-like strings from ascii or xml files in all
+    subdirectories of a filesystem path of from a mysql table and writes the
+    sequences to a fasta file and some meta-information to a table.
+command:    protein
+    just like dna, but extract all protein-like strings
+
+""")
+
+#parser.add_option("", "--maxDist", dest="maxDist", action="store", help="maximum distance for chaining, default %default", type="int", default=50000) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="display debug messages") 
+parser.add_option("-v", "--verbose", dest="verbose", action="store_true", help="display more debug messages") 
+#parser.add_option("", "--referenceSet", dest="referenceSet", action="store", help="for GENOMEHITS/GENEHITS: specify a <docId><taxonId> file which is used to track where the specified taxon id is occuring the different predicted sets (scoring, weighting), will output to logger.info", metavar="FILENAME") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def initDataGetter():
+    """ create a dataGetter based on the information in the [text]-section of the config file """
+    storage      = t2gConfig.get("text", "fulltextStorage", "files").lower()
+    if storage=="files":
+        filepath      = t2gConfig.get("text", "fulltextPath", "fulltext")
+        dataGetter = t2gExtract.FileGetter(filepath)
+    elif storage=="mysql":
+        connString = t2gConfig.get("text", "fulltextSqlDb", None)
+        query      = t2gConfig.get("text", "fulltextSqlQuery", "select * from articles;")
+        dataGetter = t2gExtract.MysqlGetter(connString, query)
+    return dataGetter
+
+# ----------- MAIN --------------
+if len(args)==0:
+    parser.print_help()
+    exit(1)
+
+# option parsing
+debug             = options.debug
+verbose           = options.verbose
+command           = args[0].lower()
+
+if debug:
+    level=logging.DEBUG
+elif verbose:
+    level=5
+else:
+    level=logging.INFO
+
+logging.getLogger('').setLevel(level)
+# define a Handler which writes INFO messages or higher to the sys.stderr
+#console = logging.StreamHandler()
+# set a format which is simpler for console use
+#formatter = logging.Formatter('%(levelname)-8s-%(message)s')
+# tell the handler to use this format
+#console.setFormatter(formatter)
+#console.setLevel(level)
+# add the handler to the root logger
+#logging.getLogger('').addHandler(console)
+
+if command=="dna":
+    t2gConfig.initFromString("text", args[1:])
+    t2gConfig.initFromString("dna", args[1:])
+
+    seqTabFilename   = t2gConfig.get("dna", "tsvFile", "nucleotides.tsv")
+    fastaFilename    = t2gConfig.get("dna", "fastaFile", "nucleotides.fa")
+    metaInfoFilename = t2gConfig.get("text", "pmcMetaInfoFile", None)
+
+    seqTabFile   = maxbio.openFile(seqTabFilename, "w")
+    fastaFile    = maxbio.openFile(fastaFilename, "w")
+    metaInfoFile = maxbio.openFile(metaInfoFilename, "w")
+
+    # write headers
+    seqTabFile.write   ( "#"+"\t".join ( ["documentId", "DocumentSource", "seqId", "sequence", "startPos", "endPos", "rawTextContext", "countWordParts", "nonDNALettersRemoved?"])+"\n")
+    if metaInfoFile:
+        metaInfoFile.write ( "#"+"\t".join ( ["documentId", "displayId", "authors", "title", "journal", "year", "pages", "pmid", "abstract", "hasfulltext", "isopenaccess"])+"\n")
+
+    storage      = t2gConfig.get("text", "fulltextStorage", "files").lower()
+
+    logging.info("Processing articles, extracting sequences")
+    if storage=="files":
+        filepath      = t2gConfig.get("text", "fulltextPath", "fulltext")
+        t2gExtract.extractNucleotides_files(filepath, seqTabFile, fastaFile, metaInfoFilename)
+    elif storage=="mysql":
+        connString = t2gConfig.get("text", "fulltextSqlDb", None)
+        query      = t2gConfig.get("text", "fulltextSqlQuery", "select * from articles;")
+        t2gExtract.extractNucleotides_sql(connString, query, seqTabFile, fastaFile, metaInfoFilename)
+    logging.info("Wrote DNA sequences to %s and %s" % (seqTabFilename, fastaFilename))
+
+elif command=="protein":
+    t2gConfig.initFromString("text", args[1:])
+    t2gConfig.initFromString("protein", args[1:])
+
+    dataGetter = initDataGetter()
+
+    fastaFilename    = t2gConfig.get("protein", "fastaFile", "peptides.fa")
+    seqTabFilename   = t2gConfig.get("protein", "tsvFile", "peptides.tsv")
+    #minScore         = float(t2gConfig.get("protein", "minScore", "0.4"))
+    peptideDectector = t2gConfig.get("protein", "peptideDetector", "detectPeptides.pl 0.4")
+
+    seqTabFile   = maxbio.openFile(seqTabFilename, "w")
+    fastaFile    = maxbio.openFile(fastaFilename, "w")
+    # write headers
+    seqTabFile.write ( "#"+"\t".join ( ["documentId", "DocumentSource", "seqId", "sequence", "originalText", "score"])+"\n")
+
+    t2gExtract.extractPeptides(dataGetter, seqTabFile, fastaFile, peptideDectector)
+    logging.info("Wrote protein sequences to %s and %s" % (seqTabFilename, fastaFilename))
+
+elif command=="align":
+    t2gConfig.setSection("align")
+    inputFile    = t2gConfig.getPath("inputFile", None)
+    targetPath   = t2gConfig.getPath("targetPath", "targets")
+    targetFilter = t2gConfig.getValue("targetFilter", None)
+    outDir       = t2gConfig.getPath("alignFiles", "blast")
+    testMode     = t2gConfig.getValue("testMode", None)
+    aligner      = t2gConfig.getValue("aligner", "blast")
+    clusterSystem= t2gConfig.getValue("clusterSystem", None)
+    queue        = t2gConfig.getValue("clusterQueue", None)
+    logPath      = t2gConfig.getValue("clusterLogPath", None)
+    addOptions   = t2gConfig.getValue("alignOptions", "")
+    blastPath    = t2gConfig.getPath("blastPath", "") 
+
+    protInputFile  = t2gConfig.getValue("protInputFile", None)
+    protTargetPath = t2gConfig.getValue("protTargetPath", None) 
+    protOutDir     = t2gConfig.getValue("protOutDir", None) 
+    protAddOptions = t2gConfig.getValue("protAddOptions", "") 
+
+
+    if aligner.lower()=="blat":
+        ext = ".2bit"
+    elif aligner.lower()=="blast":
+        ext = ".nin"
+    elif aligner.lower()=="bwa":
+        ext = ".bwt"
+
+    printOnly=False
+    trySubMode=False
+    if testMode=="print":
+        printOnly=True
+    elif testMode=="try":
+        trySubMode=True
+
+    if inputFile:
+        logging.info("DNA-Align (Please ignore BLAST error messages they are due to low-complexity DNA (blat doesn't have this problem.)")
+        t2gAlign.runAligner(blastPath, "blastn", inputFile, targetPath, ext, targetFilter, outDir, printOnly, aligner, False, clusterSystem, trySubMode, queue, logPath, addOptions)
+
+    if protInputFile:
+        logging.info("Prot-Align")
+        t2gAlign.runAligner(blastPath, "blastp", protInputFile, protTargetPath, ".pin", targetFilter, protOutDir, printOnly, "blast", False, clusterSystem, trySubMode, queue, logPath, protAddOptions)
+
+elif command=="convertblast" or command=="convert" or command=="conv":
+    #t2gConfig.setSection("align")
+    #aligner          =  t2gConfig.getValue("aligner", "blast")
+
+    t2gConfig.setSection("convertBlast")
+    blastDirs           = [t2gConfig.getPath("blastFilePath", "blast")]
+    genomeToTaxFilename =  t2gConfig.getPath("genomeToTaxonId", "genomes.tsv")
+    tempFile            =  t2gConfig.getPath("tempFile", "/tmp/convertBlast.tsv")
+    outFile             =  t2gConfig.getPath("compactBlastFile", "blastHits.tsv")
+    fileFormat          =  t2gConfig.getValue("fileFormat", "blast")
+
+    protBlastDir        =  t2gConfig.getPath("protBlastDir", None)
+    protOutFile         =  t2gConfig.getPath("protCompactBlastFile", "protBlastHits.tsv")
+
+    logging.info("DNA alignment conversion")
+    t2gConvert.convertBlastFiles(blastDirs, genomeToTaxFilename, tempFile, outFile, fileFormat)
+
+    if protBlastDir!=None:
+        logging.info("Protein alignment conversion")
+        t2gConvert.convertBlastFiles([protBlastDir], None, tempFile, protOutFile, "blast")
+
+elif command=="filter":
+    # dna
+    t2gConfig.setSection("filter")
+    compBlastFilename     = t2gConfig.getPath( "compactBlastFile")
+    helperTaxonsFile      = t2gConfig.getPath( "helperTaxons")
+    bestTaxons            = t2gConfig.get("filter" , "bestTaxons"       , "10090, 9606, 7227, 4932, 10116, 39947, 3694, 6239, 7955, 7245, 4558, 3702")
+
+    genomeWeightsFilename = t2gConfig.getPath( "genomeWeights")
+    geneWeightsFilename   = t2gConfig.getPath( "geneWeights")
+    
+    outBestGenomeFilename = t2gConfig.getPath( "bestGenomes")
+    outBestGeneFilename   = t2gConfig.getPath( "bestGenes")
+
+    outGenomeFeatFilename = t2gConfig.getPath( "genomeFeatures")
+    outGeneFeatFilename   = t2gConfig.getPath( "geneFeatures")
+    maxDist               = int(t2gConfig.get("filter" , "maxChainDist"     , 50000))
+
+    # proteins
+    protBlastFilename     = t2gConfig.getPath("protCompBlastFile")
+    proteinTableFilename  = t2gConfig.getPath("proteinTable")
+
+    compBlastFile     = maxbio.openFile(compBlastFilename)
+    genomeFeatureFile = maxbio.openFile(outGenomeFeatFilename, "w")
+    geneFeatureFile   = maxbio.openFile(outGeneFeatFilename, "w")
+    bestGenomeFile    = maxbio.openFile(outBestGenomeFilename, "w")
+    bestGeneFile      = maxbio.openFile(outBestGeneFilename, "w")
+
+    genomeHeaders     = "\t".join(["#taxonID", "chromosome", "start", "end", "documentId", "sequenceId", "blastBitScore", "chainId"])
+    geneHeaders       = "\t".join(["#taxonID", "transcript", "start", "end", "documentId", "sequenceId", "blastBitScore", "geneId"])
+    bestGenomeHeaders = "\t".join(["#documentId", "taxonId"])
+    bestGeneHeaders    = "\t".join(["#documentId", "matchingGeneId"])
+
+    genomeFeatureFile.write(genomeHeaders+"\n")
+    geneFeatureFile.write(geneHeaders+"\n")
+    bestGenomeFile.write(bestGenomeHeaders+"\n")
+    bestGeneFile.write(bestGeneHeaders+"\n")
+
+    bestTaxonSet      = set([int(string.strip()) for string in bestTaxons.split(",")]) # convert to set of integers
+
+    logging.debug("parsing helperTaxons, genome and gene weights")
+    helperTaxons  = tabfile.slurpdictset(helperTaxonsFile, keyType=types.IntType, valType=types.IntType)
+    genomeWeights = tabfile.slurpdict(genomeWeightsFilename, asInt=True, keyAsInt=True)
+    geneWeights   = tabfile.slurpdict(geneWeightsFilename,   asInt=True)
+
+    logging.debug("""filtering %s, taking into account helperTaxons from %s """ % (compBlastFilename, helperTaxonsFile))
+    logging.debug("and disambiguation weights from %s (genomes) and %s (genes)" % (genomeWeightsFilename, geneWeightsFilename))
+
+    t2gProcess.filter(compBlastFile, genomeWeights, helperTaxons, bestTaxonSet, geneWeights, genomeFeatureFile, geneFeatureFile, bestGenomeFile, bestGeneFile, maxDist)
+
+    if protBlastFilename and proteinTableFilename:
+        logging.info("Filtering protein matches")
+        protBlastFile = maxbio.openFile(protBlastFilename)
+        t2gProcess.filterProtein(protBlastFile, proteinTableFilename)
+
+elif command=="toucsc":
+    t2gConfig.setSection("toUcsc")
+    featureFilename     = t2gConfig.getPath("featureFile", "genomeFeatures.tsv")
+    taxonToUcscFilename = t2gConfig.getPath("taxonToUcscFile", "taxonToucsc.tsv")
+    docKeyFilename      = t2gConfig.getPath("documentKeyFilename", "")
+    outputDir           = t2gConfig.getPath("ucscDir", "bed")
+    toUcscDb            = t2gConfig.getValue("toUcscDb", None)
+    writeDefaultPos     = t2gConfig.getBool("toUcsc", "writeDefaultPos", 0)
+    asCustomTrack       = t2gConfig.getBool("toUcsc", "asCustomTrack", 0)
+    convertChrom       = bool(int(t2gConfig.getValue("convertChrom", 0)))
+
+    forceDefaulPosList  = t2gConfig.getAllPrefix("toUcsc", "forceDefaultPos")
+    dbDict = t2gConfig.sqlConnStringToDict(toUcscDb)
+    taxonToUcsc = tabfile.slurpdict(taxonToUcscFilename, comments=True)
+
+    #bedDir = os.path.join(outputDir, "bed")
+    bedDir = outputDir
+    if not os.path.isdir(bedDir):
+        try:
+            os.mkdir(bedDir)
+        except IOError:
+            pass
+
+    t2gConvert.featuresToBed(featureFilename, taxonToUcsc, docKeyFilename, bedDir, dbDict, forceDefaulPosList, asCustomTrack, writeDefaultPos, convertChrom)
+
+    #tableDir = os.path.join(outputDir, "tables")
+    tableDir = outputDir
+    if not os.path.isdir(tableDir):
+        os.mkdir(tableDir)
+    if asCustomTrack:
+        logging.info("toUcscDb not set, not outputting Ucsc export tables") 
+    else:
+        t2gConvert.exportToUcscTables(dbDict, taxonToUcsc, tableDir)
+
+elif command=="tabtofa":
+    inFilename, outFilename = args[1:3]
+    linnaeusFilename = None
+    genomesFilename = None
+    if len(args)>3:
+        linnaeusFilename = args[3]
+        genomesFilename = args[4]
+    t2gConvert.tabToFasta(inFilename, outFilename, linnaeusFilename, genomesFilename)
+
+else:
+    stderr.write("error: '%s' is not a valid command for t2g\n" % command)
+

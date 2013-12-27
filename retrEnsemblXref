@@ -1,0 +1,109 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import util, tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] species externalDatabaseName linkedVia outFile - download a table with Ensembl gene identifiers and their xrefs in another database, you can list the external database names with select * from external_db on the ensembl sql server. species can be a comma-separated list. linkedVia can be Translation or Transcript, you probably have to play around to find the right value or search in the XREF docs.") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+parser.add_option("", "--host", dest="host", action="store", help="Host of ensembl mysql server, default: %default", default="ensembldb.ensembl.org") 
+parser.add_option("", "--port", dest="port", action="store", help="Post on ensembl mysql server to use, default: %default", default="5306")
+parser.add_option("", "--db", dest="db", action="store", help="Database on ensembl mysql server to use, default: %default", default="ensembl_compara_55") 
+parser.add_option("", "--release", dest="release", action="store", help="Release of ensembl db, default: %default", default="56") 
+parser.add_option("", "--addHeaders", dest="addHeaders", action="store_true", help="add headers to output file") 
+parser.add_option("", "--append", dest="append", action="store_true", help="append, do not overwrite output file") 
+parser.add_option("", "--taxonIds", dest="taxonIdFile", action="store", help="Use this file (format: species<tab>desc<tab>taxonId) to add the taxonId of SPECIES to all lines", default=None, metavar="FILENAME") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+speciesParam, extDbName, linkedVia, outFile = args
+speciesParam = speciesParam
+port = options.port
+host = options.host
+release = options.release
+dbName = options.db
+addHeaders = options.addHeaders
+append = options.append
+taxonIds = tabfile.slurpdict(options.taxonIdFile, valField=2)
+
+linkedVia=linkedVia.lower()
+if not linkedVia in ["transcript", "translation"]:
+    print "error: linkedVia can only be transcript or translation"
+    exit(1)
+
+if "," in speciesParam:
+    speciesList = speciesParam.split(",")
+else:
+    speciesList = [speciesParam]
+
+# prep outfile handle
+if outFile=="stdout":
+    outFh=stdout
+else:
+    if append:
+        mode = "a"
+    else:
+        mode = "w"
+    outFh = open(outFile, mode)
+
+if addHeaders:
+    headers = ["EnsemblID", dbName]
+    outFh.write("\t".join(headers)+"\n")
+
+for species in speciesList:
+    # resolve species to taxonId
+    if taxonIds:
+        taxonId = taxonIds[species.replace("_", " ")]
+        print "taxonId is ", taxonId
+    else:
+        taxonId = None
+
+    # resolve species name to database name
+    db = util.dbConnect("anonymous", "", "", int(port), host)
+    dbNames = util.sql(db, "show databases;")
+
+    found = False
+    searchName = species.lower()+"_core_"+release
+    for name in dbNames:
+        if name[0].startswith(searchName):
+            found = True
+            dbName = name[0]
+
+    if not found:
+        print ("Could not find %s on ensembl server %s, port %s" % (searchName, host, port))
+
+    util.sql(db, "use %s;" % dbName)
+
+    # download data in format (STABLE_ID, XREFID)
+    print "Downloading data for external database %s for species %s" % (extDbName, species)
+    if linkedVia=="transcript":
+        # we go gene -> transcript -> object_xref -> xref -> external_db
+        query ='select distinct gene_stable_id.stable_id, xref.dbprimary_acc from gene_stable_id, transcript, object_xref, xref, external_db where gene_stable_id.gene_id = transcript.gene_id and transcript.transcript_id=object_xref.ensembl_id and object_xref.ensembl_object_type="Transcript" and object_xref.xref_id =xref.xref_id and xref.external_db_id =external_db.external_db_id and external_db.db_name="%s";' % extDbName 
+    else:
+        # we go gene -> transcript -> translation -> object_xref -> xref -> external_db
+        query = 'select distinct gene_stable_id.stable_id, xref.dbprimary_acc from gene_stable_id, translation, transcript, object_xref, xref, external_db where gene_stable_id.gene_id = transcript.gene_id and transcript.transcript_id=translation.transcript_id and translation.translation_id=object_xref.ensembl_id and object_xref.ensembl_object_type="Translation" and object_xref.xref_id =xref.xref_id and xref.external_db_id =external_db.external_db_id and external_db.db_name="%s";' % extDbName 
+
+    print query
+    data = util.sql(db, query)
+
+    if data!=None:
+        for tuple in data:
+            if taxonId:
+                tuple = list(tuple)
+                tuple.insert(0, taxonId)
+            outFh.write("\t".join(tuple)+"\n")
+    else:
+        print "No data found"
+
+outFh.close()

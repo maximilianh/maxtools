@@ -1,0 +1,58 @@
+#!/usr/bin/python
+
+# === importing of modules
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import logging
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] file1 otherFile1 otherFile2 ... - intersect lists, output all lines from file1 which contains a value that is also part of all otherFiles") 
+parser.add_option("-f", "--field", dest="field", action="store", help="use only this field from the first file", type="int", default=0) 
+parser.add_option("", "--otherField", dest="otherField", action="store", help="use only this field from the other files", type="int", default=0) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-t", "--splitChar", dest="splitChar", action="store", help="split on this char, default %default", default="\t") 
+
+(options, args) = parser.parse_args()
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ----------- MAIN --------------
+field = options.field
+otherField = options.otherField
+
+# data input
+f1 = args[0]
+otherFiles = args[1:]
+
+#list1 = tabfile.slurplist(f1, check=False, field=field)
+#set1 = set (list1)
+#inters = set1
+file1Lines = {}
+for line in open(f1):
+    fs = line.strip("\n").split(options.splitChar)
+    if field < len(fs):
+        f1Field = fs[field]
+        file1Lines.setdefault(f1Field, []).append(line)
+    else:
+        logging.debug("Could not find field %d in line %s" % (field, line))
+
+for f2 in otherFiles:
+    list2 = tabfile.slurplist(f2, check=False, field=otherField)
+    set2 = set (list2)
+    diff = set(file1Lines).difference(set2)
+    for diffEl in diff:
+        del file1Lines[diffEl]
+# processing
+
+# output
+for lines in file1Lines.values():
+    for line in lines:
+        print line,
+

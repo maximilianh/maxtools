@@ -1,0 +1,115 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import Fasta
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] fastafile maf-file : Convert fasta-alignments to maf") 
+
+parser.add_option("-t", "--type", dest="type", action="store", help='how to parse fasta headers to get positions, possible types: ucsc (">ci range=chr1:1-1000 revComp=True"), simple (">ci chr1 1 1000 +)', metavar="TYPE", default="ucsc", type="string") 
+parser.add_option("-d", "--databases", dest="databases", action="store", help='comma-separated list (no spaces!) of genome assemblies or species names, e.g. "ci1,cs1", one for every line in every alignment', metavar="LIST", default="UndefDB1,UndefDB2", type="string") 
+parser.add_option("-s", "--sizeFiles", dest="sizeFiles", action="store", help='comma-separated list (no spaces!) of files that contain sizes of chromosomes, "undef" if you do not have a file for the respective species', metavar="LIST", default="undef,undef", type="string") 
+
+# ==== FUNCTIONs =====
+def errorAbort(text):
+    stderr.write(text + "\n")
+    exit(1)
+    
+# PARSERS FOR FASTA-HEADERS TO GENOME POSITION 
+
+# style: >ci chr1 1000 1080 +
+def idToPosSimple(faId):
+    fs = faId.split()
+    return fs[1], int(fs[2]), int(fs[3]), fs[4]
+
+# >C. intestinalis 1.0 Scaffold_255:130-5504 (+)
+def idToPosSlagan1(faId):
+    fs = faId.split()
+    pos = fs[-2]
+    chrom = pos.split(":")[0]
+    fromto = pos.split(":")[1]
+    start = fromto.split("-")[0]
+    end = fromto.split("-")[1]
+    strand = fs[-1][1]
+    return chrom, int(start), int(end), strand
+
+
+# style: >ci range=chr1:1000-1012 revComp=TRUE
+def idToPosUcsc(faId):
+    fs = faId.split()
+    for f in fs:
+        if f.startswith("range"):
+            fs2 = f.split("=")[1]
+            fs3 = fs2.split(":")
+            fs4 = fs3[1].split("-")
+        if f.lower().startswith("revcomp"):
+            fs2 = f.split("=")
+            strand = "x"
+            if fs2[1].lower()=="true":
+                strand="-"
+            else:
+                strand="+"
+            return fs3[0], int(fs4[0]), int(fs4[1]), strand
+    return fs3[0], int(fs4[0]), int(fs4[1]), "unknown"
+
+def faToMaf(infile, sizefiles, outfile, type, genomes):
+    # set conversion function
+    type = type.lower()
+    if type=="ucsc":
+        convFunc = idToPosUcsc
+    elif type=="simple":
+        convFunc = idToPosSimple
+    elif type=="slagan":
+        convFunc = idToPosSlagan1
+    else:
+        errorAbort("illegal type")
+
+    # slurp sizefiles
+    allSizes = []
+    for sizefile in sizefiles:
+        sizes = {}
+        if sizefile!="undef":
+            for l in open(sizefile, "r"):
+                chrom, size = l.split()
+                sizes[chrom] = int(size)
+        allSizes.append(sizes)
+
+    if infile=="stdin":
+        ifh = stdin
+    else:
+        ifh = open(infile, "r")
+    lastline = ifh.readline()
+
+    if outfile!="stdout":
+        of = open(outfile, "w")
+    else:
+        of = stdout
+    of.write("##maf version=1 program=slagan\n")
+    of.write("# maf2fasta -t %s -g %s\n" % (type, genomes))
+    maxAln = len(genomes)
+
+    # convert
+    while lastline!="":
+      i = 0
+      lastline, aln = Fasta.parseFastaUntil(ifh, maxAln, lastline)
+      of.write("a score=0\n")
+      for seq in aln:
+          chrom, start, end, strand = convFunc(seq.fullid)
+          if (not end > start) and i == 0:
+              print chrom, start, end, strand
+              errorAbort("illegal coordinates - end is not > start!")
+          size = allSizes[i].get(chrom, 123456789)
+          of.write("s %50s %10s %7s %13s %10s %s\n" % (genomes[i]+"."+chrom, start, int(end)-int(start), strand, size, seq.nucl ))
+          i += 1 
+      of.write("\n")
+
+# ----------- MAIN --------------
+
+(options, args) = parser.parse_args()
+if len(args)!=2: 
+    parser.print_help()
+    exit(1)
+
+infile, outfile = args
+faToMaf(infile, options.sizeFiles.split(","), outfile, options.type, options.databases.split(','))

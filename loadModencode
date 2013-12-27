@@ -1,0 +1,287 @@
+#!/usr/bin/env python
+
+from optparse import OptionParser
+import logging, glob, os.path, datetime, csv, collections, sys
+
+MDENCPREFIX = "mdEnc"
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("""usage: %prog [options] db trackName trackInfoCsv SubmissionInfoCsv gffdir beddir trackDbFile - load modEncode data into local UCSC installation
+
+""") 
+
+parser.add_option("", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-e", "--experiment", dest="experiment", action="store", help="is this option is set, use this value as the name of an experiment and the longLabel of the track") 
+parser.add_option("-d", "--download", dest="download", action="store_true", help="do step 1: download data from modEncode intermine to gffdir") 
+parser.add_option("-c", "--convert", dest="convert", action="store_true", help="do step 2: convert data from gff to bed to beddir") 
+parser.add_option("-l", "--loadBeds", dest="loadBeds", action="store_true", help="do step 3: load bed files from beddir with hgLoadBed") 
+parser.add_option("-t", "--trackDb", dest="trackDb", action="store_true", help="do step 4: create trackDb and write to trackDbFile, based on trackInfoCsv and SubmissionInfoCsv") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ==== FUNCTIONs =====
+
+def parseTrackInfo(filename):
+    logging.info("Parsing %s" % filename)
+    TrackRec = collections.namedtuple("trackInfo", "experiment, shortLabel, featureTypes")
+    data = {}
+    reader = csv.DictReader(open(filename))
+    for row in reader:
+        featureTypes = row['featureTypes'].split(",")
+        data[row['mainTrack']]=TrackRec(row['experiment'], row['shortLabel'], featureTypes)
+    return data
+
+def parseSubmissionData(fname):
+    def addToDict(dict, key, value):
+        if value!="" and not value.startswith("No ") and not value.startswith("Not "):
+            dict[key]=value
+
+    logging.info("Parsing %s" % fname)
+    stages, cellLines, antibodyTargets, expTypes = {},{},{}, {}
+    dccIds = set()
+    reader = csv.DictReader(open(fname))
+    # we need a first pass due to bug in intermine exporter (sometimes duplicate rows)
+    for row in reader:
+        dccId = row['Submission > DCCid']
+        dccIds.add(dccId)
+        stage = row['Submission > developmentalStages > name']
+
+        # XX hack strings to make them abit shorter
+        for fromRepl, toRepl in [(" stage larvae", " larv"), ("Embryo", "Emb"), ("Female", "Fem"), ("late embryonic stage", "late emb.")]:
+            stage = stage.replace(fromRepl, toRepl)
+
+        cellLine = row['Submission > cellLines > name']
+        antibodyTarget = row['Submission > antibodies > targetName']
+        expType = row['Submission > experimentType']
+        addToDict(stages, dccId, stage)
+        addToDict(cellLines, dccId, cellLine)
+        addToDict(antibodyTargets, dccId, antibodyTarget)
+        addToDict(expTypes, dccId, expType)
+
+    SubRec = collections.namedtuple("modencodeSubmission", "expType, cellType, antibody")
+    data = {}
+
+    # now can load data
+    for dccId in dccIds:
+        stage = stages.get(dccId, None)
+        cellLine = cellLines.get(dccId, None)
+        if stage:
+            stageOrCellLine = stage
+        elif cellLine:
+            stageOrCellLine = cellLine
+        else:
+            stageOrCellLine = "Unspecified"
+
+        antibodyTarget = antibodyTargets.get(dccId, "Unspecified")
+        expType = expTypes.get(dccId, "Unspecified")
+
+        #print dccId, stageOrCellLine, antibodyTarget
+        data[dccId]=SubRec(expType, stageOrCellLine, antibodyTarget)
+    return data
+    
+def writeTrackDb(mainTrack, shortLabel, longLabel, subMetaData, fileAndTracknames, outFile):
+
+    def makeTypeString(rows, field, removeStrings=None):
+        strings = list(set([row._asdict()[field] for row in rows]))
+        strings.sort()
+        if removeStrings:
+            for rs in removeStrings:
+                strings = [s.replace(rs,"") for s in strings]
+
+        listString = ",".join(strings)
+        strings = ["%s=%s" % (c.replace(" ","_"),c.replace(" ","_")) for c in strings]
+        assignString = " ".join(strings)
+        return assignString, listString
+
+    dccIds = fileAndTracknames.keys()
+    rows = [subMetaData[dccId] for dccId in dccIds]
+
+    cellTypeString, cellTypes = makeTypeString(rows, "cellType")
+    antibodyString, antibodies = makeTypeString(rows, "antibody")
+    expTypeString, expTypes = makeTypeString(rows, "expType")
+
+    mainTrackString = \
+    """
+    track %(mainTrack)s
+    compositeTrack on
+    shortLabel %(shortLabel)s
+    longLabel ModEncode %(longLabel)s
+    group modencode
+    subGroup1 antibody Antibody %(antibodyString)s
+    subGroup2 cellType Cell_Type %(cellTypeString)s
+    subGroup3 expType Experiment %(expTypeString)s
+    dimensions dimensionY=antibody dimensionX=cellType dimensionZ=expType
+    dimensionZchecked %(expTypes)s
+    sortOrder antibody=+ cellType=+ expType=+
+    dragAndDrop subTracks
+    #noInherit on
+    priority 100
+    type bed 3
+    visibility dense
+    #wgEncode 1
+
+    """ % locals()
+
+    outFile.write(mainTrackString)
+
+    for dccId, fileAndTrackname in fileAndTracknames.iteritems():
+        filename, trackName = fileAndTrackname
+        trackName           = camelCase(trackName)
+        metaData            = subMetaData[dccId]
+        cellType            = metaData.cellType.replace(" ","_")
+        antibody      = metaData.antibody.replace(" ","_")
+        expType      = metaData.expType.replace(" ","_")
+
+        setStringPresent = "set2" in filename.lower()
+        if setStringPresent:
+            setString = " (Set2)"
+        else:
+            setString = ""
+
+        shortLabel = " ".join([antibody, cellType, expType+setString])
+        longLabel = " ".join([antibody, cellType, expType+setString])
+        subTrackString = \
+        """
+        track %(trackName)s
+        subTrack %(mainTrack)s off
+        shortLabel %(shortLabel)s
+        longLabel %(longLabel)s
+        subGroups antibody=%(antibody)s cellType=%(cellType)s expType=%(expType)s
+        type bed 4
+
+        """ % locals()
+
+        outFile.write(subTrackString)
+
+def downloadExperiment(trackName, experiment, featureTypes, outdir):
+    filenames = []
+    for featureType in featureTypes:
+        url = "http://intermine.modencode.org/release-21/features.do?type=experiment&action=export&experiment=%s&feature=%s&format=gff3" % (experiment.replace(" ", "%20"), featureType)
+
+        dayString = datetime.date.today()
+        outFile = "%s.%s.%s.gff3" % (trackName, featureType, dayString)
+        outPath = os.path.join(indir, outFile)
+        ret = os.system("wget '%s' -O %s" % (url, outPath))
+        if ret!=0:
+            logging.info("Download error when running wget")
+            sys.exit(1)
+        filenames.append(outPath)
+    return filenames
+    
+def gff3ToBed(filenames, trackPrefix, outdir):
+    outFilenames = {}
+    for filename in filenames:
+        logging.info("Reading %s" % filename)
+        ##gff-version 3
+        ##species http://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=7227
+        ##genome-build FlyBase r5.32(drosophila)
+        #modMine 21 20Jan2011
+        # #index-subfeatures 1
+        #2L	modMine	histone_binding_site	5477	5897	650.0	+	.	ID=E0_4_H3K4me3_new.E0-4_K4Me3_region_2414;submissions.DCCid=771;submissions.experimentalFactors.name=yellow+cinnabar+brown+speck;submissions.experimentalFactors.type=strain
+        data = {}
+        for line in open(filename):
+            if line.startswith("#"):
+                continue
+            chrom, source, type, start, end, score, strand, phase, attrString = line.strip("\n").split("\t")
+            if chrom=="dmel_mitochondrion_genome":
+                chrom="chrM"
+            else:
+                chrom = "chr"+chrom
+            start = str(int(start)-1)
+            if start==end:
+                logging.warn("Warning: feature with zero-length at %s" % start)
+                continue
+            #start, end = int(start), int(end)
+            attrList = attrString.split(";")
+            attrDict = {}
+            for attr in attrList:
+                key, val = attr.split("=")
+                attrDict[key]=val
+            #track = "_".join(attrDict["ID"].split("_")[:-2])
+            track = attrDict["ID"].split(".")[0]
+            subId = attrDict["submissions.DCCid"]
+            track = track[:40] # max mysql table name length is 64
+            track = track.replace("  "," ")
+            track = track.replace("____","_")
+            track = track.replace("___","_")
+            track = track.replace("__","_")
+            track = track.strip("_")
+            trackName = trackPrefix+track+"__dccId"+subId
+
+            featLine = "\t".join((chrom, start, end))
+            data.setdefault(trackName, [])
+            data[trackName].append(featLine)
+
+        for track, lines in data.iteritems():
+            filename = os.path.join(outdir, track+".bed")
+            logging.info("Writing to %s" % filename)
+            file = open(filename, "w")
+            dccId = track.split("__")[-1].replace("dccId","")
+            outFilenames[dccId]=(filename, track)
+            for line in lines:
+                file.write(line)
+                file.write("\n")
+    return outFilenames
+
+def camelCase(string):
+    """ replace _ with up case in the following word """
+    string = string.replace("__","_")
+    strings = string.split("_")
+    strings = [s[0].upper()+s[1:] for s in strings]
+    string = "".join(strings)
+    return string
+
+def loadTracks(db, fileAndTracknames):
+    for filename, trackname in fileAndTracknames:
+        trackname = camelCase(trackname)
+        cmd = "hgLoadBed %(db)s %(trackname)s %(filename)s" % locals()
+        logging.info("Running %s" % cmd)
+        ret = os.system(cmd)
+        if ret!=0:
+            logging.error("Could not run command %s" % cmd)
+            sys.exit(1)
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    sys.exit(1)
+
+db, trackNames, trackInfoFilename, submissionInfoFilename, indir, outdir, trackDbFilename = args
+
+trackInfos = parseTrackInfo(trackInfoFilename)
+subMetaData = parseSubmissionData(submissionInfoFilename)
+
+if options.trackDb:
+    trackDbFile = open("trackDb.modEncode.ra", "w")
+
+for trackName in trackNames.split(","):
+    logging.info("Processing track %s" % trackName)
+    trackInfo = trackInfos[trackName]
+
+    if options.download:
+        filenames = downloadExperiment(trackName, trackInfo.experiment, trackInfo.featureTypes, outdir)
+    else:
+        filenames = glob.glob(os.path.join(indir, trackName+"*.gff3"))
+
+    mainTrack = MDENCPREFIX+trackName
+
+    if options.convert:
+        dccIdToFileTracknames = gff3ToBed(filenames, mainTrack, outdir)
+    else:
+        filenames = glob.glob(os.path.join(outdir, MDENCPREFIX+trackName+"*.bed"))
+        dccIdToFileTracknames = {}
+        for f in filenames:
+            trackname = os.path.splitext(os.path.basename(f))[0]
+            dummy, dccId = trackname.split("__")
+            dccId = dccId.replace("dccId","")
+            dccIdToFileTracknames[dccId] = (f, trackname)
+
+    if options.trackDb:
+        writeTrackDb(mainTrack, trackInfo.shortLabel, trackInfo.experiment, subMetaData, dccIdToFileTracknames, trackDbFile)
+
+    if options.loadBeds:
+        loadTracks(db, dccIdToFileTracknames.values())

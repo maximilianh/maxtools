@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - sum up all values of a bedGraph file, if there are several lines with the same chrom,start,end values. Input files has to be sorted with sort -k1,1 -k2,2n unsorted.bed first.")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+if filename=="stdin":
+    ifh = sys.stdin
+else:
+    ifh = open(filename)
+
+lastChrom, lastStart, lastEnd = None, None, None
+scoreSum = 0
+line = None
+for line in ifh:
+    chrom, start, end, score = line.strip().split()[:4]
+    if (chrom==lastChrom and lastStart==start and lastEnd==end) or lastChrom==None:
+        scoreSum += int(score)
+    else:
+        if lastChrom!=None:
+            row = [lastChrom, lastStart, lastEnd, str(scoreSum)]
+            print "\t".join(row)
+            scoreSum = int(score)
+
+    lastChrom = chrom
+    lastStart = start
+    lastEnd = end
+# last line
+if line!=None:
+    row = [chrom, start, end, score]
+    print "\t".join(row)

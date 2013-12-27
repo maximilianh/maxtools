@@ -1,0 +1,30 @@
+#!/usr/bin/env python
+import fileinput, operator
+
+for line in fileinput.input(): # reads over all lines from all input files in args vector
+    if line.startswith("#"):
+        continue
+
+    fs = line.split()
+    if len(fs)<2:
+        continue
+    pmcId = fs[0].split("|")[0].replace("PMC","")
+    taxId = fs[1].replace("species:ncbi:","")
+
+    if "?" in taxId or "|" in taxId:
+        taxIdScores = [] # a vector in python is defined with [ ] 
+        taxIdParts = taxId.split("|")
+        for sp in taxIdParts:
+            fs = sp.split("?")
+            taxId = int(fs[0])
+            if len(fs)>1:
+                score = float(fs[1])
+            else:
+                score = 0.0
+            taxIdScores.append( [taxId, score] )
+        taxIdScores.sort( key=operator.itemgetter(1), reverse=True ) # sort list by field 2
+        taxId = str(taxIdScores[0][0]) # keep taxId with highest score
+
+    print pmcId+"\t"+taxId
+
+

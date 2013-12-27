@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging, maxbio, operator
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename filename ... - sort tab-sep files, keep headers") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-k", "--colIndex", dest="colIndex", action="store", type="int", help="index of column to use, default %default", default=0)
+parser.add_option("-n", "--colName", dest="colName", action="store", help="name of column to use, this implies that the first line of the tab file contains headers", default=None)
+parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="inverse sort order")
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+colIndex = options.colIndex
+colName = options.colName
+reverse = options.reverse
+
+filenames = args
+values = set()
+
+
+for filename in filenames:
+    if filename == "stdin":
+        ifh = stdin
+    else:
+        ifh = open(filename)
+    if colName:
+        line = ifh.readline()
+        while line.startswith("##"):
+            line = ifh.readline()
+        if "\t" not in line:
+            logging.error("No tab character found in first line!")
+        headers = line.strip("#\n").split("\t")
+        if colName not in headers:
+            logging.error("colName not found")
+            exit(1)
+        colIndex = headers.index(colName)
+
+    lines = []
+    otherLines = []
+
+
+    for line in ifh.readlines():
+        if line.startswith("#"):
+            continue
+        line = line.strip("\n")
+        line = line.split("\t")
+        if len(line)>colIndex:
+            line[colIndex] = float(line[colIndex])
+            lines.append(line)
+        else:
+            logging.debug("cannot get column %d from line %s" % (colIndex, line[0]))
+            otherLines.append(line)
+
+    lines.sort(key=operator.itemgetter(colIndex), reverse=(reverse==True))
+    #, reverse=reverse
+
+    print "\t".join(headers)
+    for l in lines:
+        print "\t".join(maxbio.allToString(l))
+    for l in otherLines:
+        print "\t".join(l)
+

@@ -1,0 +1,52 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import re
+import datetime
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] transfacfile regex1 regex2 regex3...: Filter transfac files") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-f", "--field", dest="field", action="store", help="which field to match, default %default", default="ID") 
+(options, args) = parser.parse_args()
+field = options.field
+
+# ==== FUNCTIONs =====
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+stderr.write("Reading file...\n")
+fname = args.pop(0)
+f = open(fname, "r")
+
+regexps = []
+for str in args:
+    regexps.append(re.compile(str))
+
+
+buf = []
+matched = False
+print "VV  Extract from %s, created %s, using search strings %s" % (fname,  datetime.date.today().isoformat(), args)
+print "XX"
+print "//"
+
+for l in f:
+    buf.append(l)
+    if l.startswith(field):
+        for regex in regexps:
+            if regex.search(l):
+                matched=True
+                break
+    if l.startswith("//"):
+        if matched:
+            print "".join(buf),
+        buf=[]
+        matched=False
+
+
+

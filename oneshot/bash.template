@@ -1,0 +1,37 @@
+#!/bin/bash
+if [ "$1" = "-h" ]; then 
+    echo `basename $0`: 
+    echo usage: `basename $0` '<file> <file>'
+echo example: `basename $0` alignment.fa mouse
+#echo parameters:
+#echo    -w : window size, default 100
+exit 1;
+
+fi
+
+# set default options
+#win=100
+#shift
+
+# parse cmdline
+while getopts ":w" Option
+do
+  echo parsing option $Option
+  case $Option in
+    w ) win=$OPTARG ;;
+  esac
+done
+
+# parameter with default handling
+#if [ $baseseq != 0 ]; then
+#    echo BASE SPECIFIED!!!
+#    base=$baseseq
+#else
+#    base=`cat $fafile | head -n1 | cut -d'>' -f2 | cut -d' ' -f1`
+#fi
+
+# trapping ctrl+c
+#mkdir temp
+#trap "rm -rf temp.vista; exit" SIGHUP SIGINT SIGTERM
+
+#rm -rf temp

@@ -1,0 +1,145 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - convert words file to table for classification packages (weka) ") 
+
+parser.add_option("", "--flankType", dest="flankType", action="store", help="2=take both genes, 1=take closest gene, 0=only downstream genes, default: %default ", default=0, type="int") 
+parser.add_option("-c", "--chromAsGene", dest="chromAsGene", action="store_true", help="do not search for flanking gene but use chromosome as the name of the gene") 
+parser.add_option("-s", "--addScore", dest="addScore", action="store_true", help="add conservation score as additinal field") 
+parser.add_option("-b", "--blockWithGene", dest="blockWithGene", action="store_true", help="display results not on a per-gene but on a per-block basis") 
+parser.add_option("-w", "--words", dest="wordFile", action="store", help="only show the words from this file (one per line)")
+parser.add_option("", "--minCountAll", dest="minCountAll", action="store", type="int", help="only show motifs that occur more than x times in minRatio of blocks/genes, default %default", default=0)
+parser.add_option("", "--minRatio", dest="minRatio", action="store", type="float", help="if minCountAll is set: motif needs to occur in at least minRatio of all blocks/genes, default %default", default=1.00)
+parser.add_option("", "--minCountAny", dest="minCountAny", action="store", type="int", help="only show motifs that occur more than x times in ANY block/gene, default %default", default=0)
+parser.add_option("-r", "--resultFile", dest="resultFile", action="store", help="Used to add class data to the table. Parse this file in gene<tab>result format and add a column 'results' with the value of this file for each gene/block. Will limit the results to only these genes")
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def filterMotifs(motifs, motifCounts, minCountAny, minCountAll, minRatio):
+    assert(minCountAll==0 or minCountAny==0) # you can only set one of these two
+    motifBlockCount = {}
+    # dict: motif -> count of blocks/genes where motif appears >= minCount times
+    for geneBlock, counts in motifCounts.iteritems():
+        for motif, count in counts.iteritems():
+            if count>=minCountAll and count>=minCountAny:
+                motifBlockCount.setdefault(motif, 0)
+                motifBlockCount[motif]+=1
+    # keep only motifs where count >= no of blocks/genes
+    goodMotifs = []
+    for motif, blockCount in motifBlockCount.iteritems():
+        if minCountAll>0:
+            if blockCount >= minRatio * len(motifCounts):
+                goodMotifs.append(motif)
+        elif minCountAny>0:
+            if blockCount >= 0:
+                goodMotifs.append(motif)
+                
+    return goodMotifs
+
+# ----------- MAIN --------------
+# init parameters
+if args==[]: 
+    parser.print_help()
+    exit(1)
+filename = args[0]
+stderr.write("Reading words file...\n")
+f = open(filename, "r")
+flankType = options.flankType
+chromAsGene = options.chromAsGene
+wordFile = options.wordFile
+resultsFile = options.resultFile
+blockWithGene = options.blockWithGene
+addScore = options.addScore
+minCountAll = options.minCountAll
+minCountAny = options.minCountAny
+minRatio = options.minRatio
+
+onlyWords = []
+if wordFile:
+    onlyWords = tabfile.slurplist(wordFile)
+
+results = {}
+if resultsFile:
+    results   = tabfile.slurpdictset(resultsFile)
+
+if addScore:
+    scoreSums = {}
+
+# optionally: parse list of genes and limit analysis to these or use resultsFile if specified
+filteredGenes = set()
+if resultsFile:
+    filteredGenes = results.keys()
+#if genesFile:
+    #filteredGenes = tabfile.slurplist(options.genesFile, field=0)
+filteredGenes = set(filteredGenes)
+
+# parse files and collect data
+motifs = wordParser.readMotifs(f) 
+if len(onlyWords)==0:
+    motifs = [motif for motif, mDesc in motifs] # strip motif description
+else:
+    motifs = onlyWords
+
+motifCounts = {}
+nblocks=0
+for block in wordParser.readBlocks(f):
+    nblocks+=1
+    if chromAsGene:
+        genes, intronic = [block.chrom], True
+    else:
+        genes, intronic = block.getGenes(flankType)
+    
+    for g in genes:
+        if resultsFile:
+            if g not in results:
+                continue
+        
+        motifCounts.setdefault(g, {})
+        for w in block.words:
+            count = len(block.words[w])
+            motifCounts[g].setdefault(w, 0) 
+            motifCounts[g][w]+=count
+        if addScore:
+            scoreSums.setdefault(g, 0)
+            scoreSums[g]+=block.score
+
+stderr.write("Scanned %d blocks, containing %d motifs, around %d genes. \n" % (nblocks, len(motifs), len(motifCounts)))
+
+if minCountAny!=0 or minCountAll!=0:
+    motifs = filterMotifs(motifs, motifCounts, minCountAny, minCountAll, minRatio)
+
+# output headers for table (remember to tell R to parse them, "headers=T" in read.table
+if resultsFile:
+    allVals = set()
+    for gene, values in results.iteritems():
+        allVals.update(values)
+    valStr = (",".join(allVals))
+    print "# format result={%s}" % valStr
+
+head = "gene/enhancer" + "\t"+"\t".join(motifs)
+if addScore:
+    head+="\tscore"
+if resultsFile:
+    head+="\tresult"
+print head
+
+for obj, counts in motifCounts.iteritems():
+    data = [obj]
+    for m in motifs:
+        if m in counts:
+            data.append(str(motifCounts[obj][m]))
+        else:
+            data.append("0")
+    if addScore:
+        data.append(str(scoreSums[obj]))
+    gene = obj.split("_")[0]
+    #gene = obj
+    if resultsFile:
+        data.append(",".join(results.get(gene)))
+
+    print "\t".join(data)

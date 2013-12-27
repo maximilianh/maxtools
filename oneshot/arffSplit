@@ -1,0 +1,47 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, random
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] inFile ratio outFile1 outFile2 - split an arff file into pieces") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+def splitArff(inFname, ratio, outFname1, outFname2):
+    ofhs = []
+    ofhs.append( open(outFname1, "w"))
+    ofhs.append( open(outFname2, "w"))
+
+    for line in open(inFname):
+        if len(line)==1:
+            continue
+        if line.startswith("@"):
+            for ofh in ofhs:
+                ofh.write(line)
+        else:
+            rnd = random.random()
+            if rnd > ratio:
+                ofhIdx = 0
+            else:
+                ofhIdx = 1
+            ofhs[ofhIdx].write(line)
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+inFname, ratio, outFname1, outFname2 = args
+ratio = float(ratio)
+splitArff(inFname, ratio, outFname1, outFname2)
+#if options.test:
+    #logging.debug("test is set")
+    #f = open(options.file, "r")

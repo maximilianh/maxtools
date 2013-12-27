@@ -1,0 +1,661 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+import glob
+import os.path
+import util
+import tabfile
+
+MAXMATCHES = 10 # ignore sequences with more than x "best matches" matches (identical score) per genome
+CHAINDIST = 50000 # fuse two features from the same paper if they are closer than 100 bp and on the same strand
+
+NAMESEP = "|" # separator between pmid and linecount
+RESULTTRACKNAME="t2g_chainedFiltered" # the name of the track that includes the final bed information for further processing
+RAWTRACKNAME="t2g_rawBlastHits"
+FILTERDBID="UniVec_Core"  # either univec or emvec
+MINSCORE = 30 # minimal score of blast lines, if lower they will be dropped in the first filtering step
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inDir ctBedOutDir resultBedOutDir bestGenomesFile - convert *.blast-m8 files to UCSC custom tracks and to final bed file for further processing (determine best genome, filter out seqs with too many matches, chain adjacent matches) and output best genomes to bestGenomesFile") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-t", "--trackLine", dest="trackLine", action="store", help="add this to the start of all bed files", default='track name=textToGenome url=http://www.ncbi.nlm.nih.gov/pubmed/$$') 
+parser.add_option("-p", "--prefix", dest="prefix", action="store", help="Only treat files in inDir that start with a given prefix", default="") 
+parser.add_option("-t", "--taxonMapFile", dest="taxonFile", action="store", help="only if --entrezFile is used: Map genome-codes to taxon ids, read genome-code to taxon-id mapping from this file, format: <genomeCode>tab<taxonId>, one per line", default=None) 
+parser.add_option("-e", "--entrezFile", dest="entrezFile", action="store", help="only if taxonMapFile is used: Use the taxonMapFile to convert from genome name to taxonIds and compare with entrezGene's data using the entrezFile, format is <pmid>tab<taxonId>", default=None) 
+parser.add_option("-c", "--chainDist", dest="chainDist", action="store", help="fuse two features from the same paper if they are closer than X basepairs, default %default", default=CHAINDIST, metavar="X", type="int") 
+parser.add_option("-m", "--maxMatches", dest="maxMatches", action="store", help="ignore sequences (not pmids) with more than Xmatches per genome, default %default", default=MAXMATCHES, metavar="X", type="int") 
+(options, args) = parser.parse_args()
+
+# ==== CLASSES =======
+class Features(list):
+    def __str__(self):
+        buf = []
+        for i in self:
+            buf.append(str(i))
+        return "\n".join(buf)
+
+    def __repr__(self):
+        return str(self)
+
+    def __sort__(self):
+        self.sort(Feature.sort)
+
+    def writeToFileHandle(self, fh):
+        for b in self:
+            fh.write(str(b)+"\n")
+
+    def writeToFile(self, fname):
+        fh = open(fname, "w")
+        self.writeToFileHandle(fh)
+        fh.close()
+
+    def countChromosomes(self):
+        chroms = set()
+        for b in self:
+            chroms.add(b.chrom)
+        return len(chroms)
+
+    def indexByChromAndName(self, stripCommentChar="_"):
+        # return double hash chrom -> bedName (using only part before stripCommentChar) -> list of features
+        idx = {}
+        for f in self:
+            name = f.name.split(stripCommentChar)[0]
+            idx.setdefault(f.chrom, {}).setdefault(name, []).append(f)
+        return idx
+
+    def sort(self):
+        self.sort(key=lambda f: f.start)
+
+    def extendMark(self, fts, nameSuffix):
+        for f in fts:
+            f.name+=nameSuffix
+        self.extend(fts)
+
+class Feature:
+    def __init__(self, line):
+        l = line.split()
+        count = len(l)
+        self.chrom = l[0]
+        self.start = int(l[1])
+        self.end = int(l[2])
+        if count >= 4:
+            self.name = l[3]
+        if count >= 5:
+            self.strand= l[4] 
+        if count >= 6:
+            self.score = int(l[5])
+
+    def __init__(self,seqid="",start=0,end=0,name="",score=0,strand="+"):
+        self.chrom = seqid
+        self.start = int(start)
+        self.end = int(end)
+        self.name = name
+        self.score = int(score)
+        self.strand = strand
+
+    def __str__(self):
+        if "strand" in self.__dict__:
+            return self.chrom+"\t"+str(self.start)+"\t"+str(self.end)+"\t"+self.name+"\t"+str(self.score)+"\t"+self.strand
+        if "score" in self.__dict__:
+            return self.chrom+"\t"+str(self.start)+"\t"+str(self.end)+"\t"+self.name+"\t"+str(self.score)
+        if "name" in self.__dict__:
+            return self.chrom+"\t"+str(self.start)+"\t"+str(self.end)+"\t"+self.name
+        return self.chrom+"\t"+str(self.start)+"\t"+str(self.end)
+
+    def __repr__(self):
+        return str(self)
+
+    def includes(self, f, tol=0):
+        if self.chrom!=f.chrom:
+            return False
+        else:
+            if self.start-tol <= f.start and self.end+tol >= f.end:
+                return True
+
+    def closerThan(self, maxDist, f):
+        return self.chrom==f.chrom and (abs(self.end - f.start) <= maxDist or abs(f.end - self.start) <=maxDist)
+
+    def chain(self, f2):
+        if self.chrom != f2.chrom:
+            stderr.write("error: Cannot chain features on different chromosomes\n")
+            exit(1)
+        if self.start < f2.start:
+            ft1 = self
+            ft2 = f2
+        else:
+            ft1 = f2
+            ft2 = self
+        newft = Feature(ft1.chrom, ft1.start, f2.end, ft1.name+"+"+ft2.name, ft1.score, ".")
+        return newft
+
+    def sameCoordinates(self, f2):
+        if self.chrom == f2.chrom and self.start == f2.start and self.end == f2.end:
+            return True
+        else:
+            return False
+
+        
+# ==== FUNCTIONs =====
+
+def indexBlast(fname, genome, idx, log, filterSeqids, minScore, ctData=None):
+    """ parse blast m8 and return best matches as pmid -> no -> genome -> list of matches, filter out filterSeqids"""
+    """ add the data to idx, then return idx """
+
+    f = open(fname, "r")
+    # example
+    # 11495631        chr1    100.00  23      0       0       1       23      25500772        25500750        2e-05   46.1
+    # features = Features()
+    ignoredSeqids = set()
+    # parse blast matches and index them:
+    # pmid -> no -> genome -> chrom -> list (score, bedFeature)
+    # then pick out best blast match for each sequence and create a data structure
+    # pmid -> genome -> list of scores
+    dropped = 0
+    for l in f:
+        fs = l.split("\t")
+        srcId, trgId, perc, length, dummy, dummy, dummy, length, trgStart, trgEnd, eVal, score = fs
+        score = int(score.split(".")[0])
+        if score < minScore:
+            dropped+=1
+            continue
+        trgEnd = int(trgEnd)
+        trgStart = int(trgStart)
+        if trgEnd < trgStart:
+            trgStart, trgEnd = trgEnd, trgStart
+            strand="-"
+        else:
+            strand="+"
+            
+        srcId = srcId.replace("_",NAMESEP) # XX
+
+        # create feature
+        chrom = trgId
+        feat = Feature(chrom, trgStart, trgEnd, srcId, score, strand)
+        fs = srcId.split(NAMESEP)
+        pmid = fs[0]
+        try:
+            pmid = int(pmid)
+        except:
+            log.log("   Ignored feature %s as first field does not look like a valid pmid" % str(feat))
+            continue
+
+        # filter out sequence if match to vector database
+        if filterSeqids!=None and srcId in filterSeqids:
+            ignoredSeqids.add(srcId)
+            feat.name+="VectorContamination"
+            if ctData!=None:
+                ctData.setdefault(genome, {}).setdefault(RAWTRACKNAME, Features()).append(feat)
+            continue
+
+        if len(fs)>1:
+            no   = int(fs[1])
+        else:
+            log.log("   warning: no seq-number for features %s" % (str(feat)))
+            no = 0
+        #print "--",srcId, no
+
+        feat.pmid = pmid
+        #features.append(feat)
+
+        idx.setdefault(pmid, {}).setdefault(no, {}).setdefault(genome, []).append( (score, feat))
+        if ctData!=None:
+            ctData.setdefault(genome, {}).setdefault(RAWTRACKNAME, Features()).append(feat)
+
+        # keep track of score for this pmid & genome
+        #if genome!=None:
+            #genomeScores.setdefault(pmid, {}).setdefault(genome, []).append(score)
+        #genomeScores[pmid][genome].append(score)
+
+    log.log("  Ignored %d sequences as they match the vector database" % len(ignoredSeqids))
+    for i in ignoredSeqids:
+        log.log("   VecMatch: %s" % i)
+    log.log("  Dropped %d features where score is < %d" % (dropped, int(minScore)))
+    return idx
+
+
+def outputToFiles(ctData, ctOutDir, filtDir):
+    def writeFeatsStrip(outfh, feats):
+        for f in feats:
+            f.name = f.name.split(NAMESEP)[0]
+        feats.writeToFileHandle(outfh)
+
+    # write tracks for manual inspection into ct-files with track lines
+    if ctData!=None:
+        for of, tracks in ctData.iteritems():
+            print of
+            outfn = os.path.join(ctOutDir, of+".bed") # add dir to output file
+            stderr.write("Writing to "+outfn+"\n")
+            outfh = open(outfn, "w")
+            for trackName, feats in tracks.iteritems():
+                outfh.write('track name=%s url=http://www.ncbi.nlm.nih.gov/pubmed?term=$$ visibility=1\n' % trackName)
+                feats.writeToFileHandle(outfh)
+
+            # write end results also to custom track file
+            outfh.write('track name=t2g_Results_Outlinks url=http://www.ncbi.nlm.nih.gov/pubmed?term=$$ visibility=3\n' )
+            print tracks.keys()
+            writeFeatsStrip(outfh, tracks[RESULTTRACKNAME])
+
+            outfh.close()
+
+    # end results are written into raw bed tracks without track-lines
+    # and without the bed-name-additional information
+    for of, tracks in ctData.iteritems():
+        outfn = os.path.join(filtDir, of+".bed") # add dir to output file
+        outfh = open(outfn, "w")
+        stderr.write("Writing to "+outfn+"\n")
+        feats = tracks[RESULTTRACKNAME]
+        writeFeatsStrip(outfh, feats)
+
+
+def chainFilterFeats(feats, onlyChainable=False):
+    """ chain features that are closer than CHAINDIST bp into one single feature and return the resulting list"""
+    """ if onlyChainable==True, then drop all features that are not chainable """
+    def makeCoverFt(stack, onlyChainable):
+        """ create a single feature covering all features in the list stack """
+        if len(stack)==1:
+            if onlyChainable:
+                return []
+            else:
+                return [stack[0]]
+        else:
+            ft1 = stack[0]
+            startMin = min([ft.start for ft in stack])
+            endMax   = max([ft.end   for ft in stack])
+            # create a name for the new feature
+            baseName = ft1.name.split(NAMESEP)[0]
+            nameExts = []
+            for f in stack:
+                fs = f.name.split(NAMESEP)
+                if len(fs) > 1:
+                    nameExts.append(fs[1])
+            name  = baseName+NAMESEP+"+".join(nameExts)
+
+            # create a feature covering all features on the stack
+            coverFt = Feature(ft1.chrom, startMin, endMax, name, ft1.score, ft1.strand)
+            return [coverFt]
+
+    #ignoredPapers = []
+    newFts = Features()
+    idx = feats.indexByChromAndName(NAMESEP)
+    for chrom, chromidx in idx.iteritems(): 
+        for name, feats in chromidx.iteritems():
+            #if len(feats)>MAXMATCHES:
+                #ignoredPapers.append(name)
+                #continue
+            feats.sort()
+            stack = []
+            for f in feats:
+                if len(stack)==0:
+                    stack.append(f)
+                else:
+                    lastFt = stack[-1]
+                    if f.sameCoordinates(lastFt):
+                        continue
+                    if f.closerThan(CHAINDIST, lastFt):
+                        stack.append(f)
+                    else: # feature f is far away from the last feature in the stack
+                        coverFt = makeCoverFt(stack, onlyChainable)
+                        newFts.extend(coverFt)
+                        stack = [f]
+            # saving stack
+            newFts.extend(makeCoverFt(stack, onlyChainable))
+    return newFts
+
+def logIgnored(log, outfn, ignoredPapers):
+    log.log("%s: Ignored the following %d papers as they resulted in more than %d matches on a genome:" % (outfn, len(ignoredPapers), MAXMATCHES))
+    for p, genomeHits in ignoredPapers.iteritems():
+        strList = []
+        for genome, hitCount in genomeHits.iteritems():
+            strList.append("genome %s with %d hits" % (genome, hitCount))
+        log.log("   "+str(p)+": "+",".join(strList))
+
+def pmidBestGenome(pmidGenomeScores, outfile, log, scoreType="ecoli"):
+    """ determine best genome per pmid """
+    """ result are written as hash to outfile, complete debug info written to logger """
+    """ scoreType can be either "sum" of all scores per genome or "max" of all scores per genome """
+    """ or "ecoli" which is like max but ecoli has always preference """
+    bestGenomes = {}
+    for pmid, genomeScores in pmidGenomeScores.iteritems():
+        #scores = genomeScores.items() # convert hash to list
+        # convert hash with scoreList to sum of scores per genome and sort
+        scores = []
+        genomes = set()
+        for genome, scoreList in genomeScores.iteritems():
+            if scoreType=="sum":
+                score = sum(scoreList)
+            else:
+                score = max(scoreList)
+            scores.append( (genome, score) )
+            genomes.add(genome)
+        scores.sort( key= lambda (x,y): y, reverse=True) # sort list by 2nd member of pair
+
+        # take best score and save result
+        bestGenome = scores[0][0]
+        if scoreType=="ecoli" and "ecoli" in genomes:
+            bestGenome="ecoli"
+
+        bestGenomes[pmid] = bestGenome
+        log.log("   pmid=%s, genomeScores=%s, bestGenome=%s" % (pmid, str(scores), bestGenome))
+
+    # write results to outfile
+    of = open(outfile, "w")
+    for pmid, bestGenome in bestGenomes.iteritems():
+        #taxid = genomeToTaxid.get(bestGenome, bestGenome)
+        of.write("%s\t%s\n" % (pmid, bestGenome))
+    of.close()
+    return bestGenomes
+
+def readEntrezData(entrezFile):
+    """ return pmid (int!) -> taxon (int!) dict """
+    f = open(entrezFile)
+    lines = f.read().splitlines()
+    pmidToTaxon = {}
+    for l in lines:
+        fs = l.split()
+        pmidToTaxon[int(fs[0])] = int(fs[1])
+    del lines
+    return pmidToTaxon
+
+def tooManyMatches(pmidGenomeScores):
+    """ return dict pmid -> list of genomes where pmid exceeded threshold MAXMATCHES """
+    ignorePmids = {}
+    for pmid, genomeScores in pmidGenomeScores.iteritems():
+        for genome, scoreList in genomeScores.iteritems():
+            if len(scoreList)>MAXMATCHES:
+                ignorePmids.setdefault(pmid, {})
+                ignorePmids[pmid][genome]=len(scoreList)
+    return ignorePmids
+
+#def genomeScoresToBest(pmidGenomesScores):
+    #""" replace list of scores by best matching genome in pmidGenomesScores-dict """
+    #bestGenome = {}
+    #for pmid, genomeScores in bestGenomes.iteritems():
+        #for genome, scoreList in genomeScores.iteritems():
+            #newBestGenomes.setdefault(pmid, {})[genome]=sum(scoreList)
+    #return bestGenomes
+
+    #for pmid, bestGenome in bestGenomes.iteritems():
+        # ignore all pmids that are not castable to int
+        #try:
+            #entrezTaxon = entrezPmidToTaxon.get(int(pmid), None)
+        #except:
+            #continue 
+        # ignore all pmids that are not mappable to one of our genomes
+
+def logT2gEntrezDiff(genomeToTaxon, entrezFile, bestGenomes):
+    genomeToTaxid = tabfile.slurpdict(genomeToTaxon)
+    ourTaxons = set([int(i) for i in genomeToTaxid.values()])
+    taxidToGenome = {}
+    for genome, taxid in genomeToTaxid.iteritems():
+        taxidToGenome[taxid]= genome
+
+    log.log(" * Comparison of best genomes from blast matches with Entrez Genes data", toStderr=True)
+    entrezPmidToTaxon = readEntrezData(entrezFile)
+
+    t2gTaxons = {}
+    entrezTaxons = {}
+
+    count = 0
+    goodTaxons = 0
+    validationPapers = 0
+    for pmid, entrezTaxon in entrezPmidToTaxon.iteritems():
+        # ignore if no data from blast
+        if not pmid in bestGenomes:
+            continue
+        # ignore if taxon in entrez is not in our list of genomes-of-interest:
+        if not entrezTaxon in ourTaxons:
+            continue
+        validationPapers += 1
+
+        ourGenome = bestGenomes[pmid]
+        t2gTaxon = genomeToTaxid.get(ourGenome, 0)
+        entrezTaxonName = taxidToGenome[str(entrezTaxon)]
+
+        t2gTaxons[pmid]=ourGenome
+        entrezTaxons[pmid]=entrezTaxonName
+
+        if int(t2gTaxon)==int(entrezTaxon):
+            count+=1
+        else:
+            log.log("   Wrong: pmid=%s, t2gGenome=%s, entrezGenome=%s" % (pmid, ourGenome, entrezTaxonName))
+    log.log(" * Results of comparison with Entrez:", toStderr=True)
+    log.log( "   Number of pmids with data after blast filtering AND in Entrez AND one of our genomes if interest: %d" % validationPapers, toStderr=True)
+    #log.log( "   Number of pmids with one of our genomes (taxIds: %s, UCSCIds: %s): %d" % (str(ourTaxons), str(genomeToTaxid.values()), goodTaxons), toStderr=True)
+    log.log( "   Absolute number of taxons we guessed correctly (true positives): %d" % count, toStderr=True)
+    log.log( "   Share of true positives relative to all papers where we can guess (sequenced genome + nucleotides in paper): %f" % (float(count) / validationPapers), toStderr=True)
+    #log.log( "   Share of true positives relative to all papers with nucleotides: %f" % (float(count) / goodTaxons), toStderr=True)
+
+    # write out the results in the form of two hashes
+    t2gFh, entrezFh = open("log/t2g_blastProcess.t2gGenomes.hash", "w") , open("log/t2g_blastProcess.entrezGenomes.hash", "w")
+    for pmid in t2gTaxons:
+        t2gTaxon, entrezTaxon = t2gTaxons[pmid], entrezTaxons[pmid]
+        t2gFh.write("%s\t%s\n" % (pmid, t2gTaxon))
+        entrezFh.write("%s\t%s\n" % (pmid, entrezTaxon))
+    t2gFh.close()
+    entrezFh.close()
+
+    # log the top-10 error-types:
+    errTypes = {}
+    for pmid in t2gTaxons:
+        t2gTaxon, entrezTaxon = t2gTaxons[pmid], entrezTaxons[pmid]
+        if t2gTaxon!=entrezTaxon:
+            errString = "pred=%s,expect=%s" % (t2gTaxon, entrezTaxon)
+            errTypes.setdefault(errString, 0)
+            errTypes[errString]+=1
+
+    log.log(" * 10 Most commmon errors:")
+    errTypes = errTypes.items()
+    errTypes.sort( key = lambda (x,y): y, reverse=True)
+    for i in range(0, min(10,len(errTypes))):
+        errType, count = errTypes[i]
+        log.log("    %d : %s" % (count, errType))
+
+def parseEmvecFile(files, minScore):
+    # Pull out the vector file from our blast files and 
+    # create a list of plasmid-related sequence-identifiers 
+    emvecFiles = [f for f in files if f.find(FILTERDBID)!=-1]
+    emvecIds = set()
+
+    if len(emvecFiles)>1:
+        stderr.write("Found too many files that look like vectors: %s" % str(emvecFiles))
+        exit(1)
+    elif len(emvecFiles)==0:
+        log.log("warning: Could not find vectors-blast files. Vector plasmid filtering desactivated.\n", toStderr=True)
+    else:
+        emvecFile = emvecFiles[0]
+        files.remove(emvecFile)
+        lines = open(emvecFile).readlines()
+        dropped=0
+        for l in lines:
+            fs = l.split()
+            score = float(fs[11])
+            if score<minScore:
+                dropped+=1
+                continue
+            id = fs[0]
+            id = id.replace("_", NAMESEP)
+            emvecIds.add(id)
+        log.log("read vector match file %s, dropped %d features as their score is lower than %f" % (emvecFile, dropped, minScore))
+    return files, emvecIds
+
+def parseBlast(files, filterSeqids, log, ctData, minScore):
+    """ parse blast files into data structure idx: pmid -> seqno -> genome -> list of matches """
+    """ keep the raw blast results as a ctTrack and log into the logger """
+    idx = {}
+    for f in files:
+        log.log("   Reading %s" % f, toStderr=True)
+        genome = os.path.basename(f).split(".")[0] # strip chromosome info from input file, assume that prefix=genome name
+        idx = indexBlast(f, genome, idx, log, filterSeqids, minScore, ctData)
+    return idx
+
+def filterBlast(idx, log):
+
+    def bestMatches(idx, eliminated):
+        """ remove all matches that are not best matches for each seq and those seqNos with too many matches on any genome"""
+        toRemove=set()
+        for pmid, noIdx in idx.iteritems():
+            for no, genomeIdx in noIdx.iteritems():
+                for genome, scoreList in genomeIdx.iteritems():
+                    scoreList.sort( key= lambda (x,y): x, reverse=True) # sort list by 2nd member of pair
+                    bestScore = scoreList[0][0]
+                    bestScores = [(score, ft) for (score, ft) in scoreList if score >= bestScore]
+                    scoreElim = [ft for (score, ft) in scoreList if score < bestScore]
+                    eliminated.setdefault(genome, Features()).extendMark(scoreElim, "|NotBestMatch")
+                    if len(bestScores)<MAXMATCHES:
+                        idx[pmid][no][genome] = bestScores
+                    else:
+                        tooManyElim = [ft for (score, ft) in bestScores]
+                        eliminated.setdefault(genome, Features()).extendMark(tooManyElim, "|TooManyBestMatches")
+                        log.log("Too many matches, removing pmid %s, sequence %s (trigger: %s)" % (pmid, no, genome))
+                        toRemove.add( (pmid, no) )
+
+        for (pmid, no) in toRemove:
+            del idx[pmid][no]
+
+        return idx
+
+
+    def bestGenomesPerSeq(idx, eliminated, log):
+        #def bestElements(list):
+            #""" sort list of pairs (text, score), determine best score and return only elements that exceed this score """
+            #list.sort( key= lambda (x,y): y, reverse=True) 
+            #bestScore = list[0][0]
+            #bestElements [ (text, score) for (text,score) in list if score >= bestScore]
+            #return bestElements
+
+        # output: idx and bestGenomes = pmid -> no -> bestGenome
+        bestGenomes = {}
+        for pmid, noIdx in idx.iteritems():
+            for no, genomeIdx in noIdx.iteritems():
+                genomeScores = []
+                for genome, scoreList in genomeIdx.iteritems():
+                    scores = [x for (x, y) in scoreList]
+                    genomeScores.append( (genome, max(scores)) )
+                genomeScores.sort( key= lambda (x,y): y, reverse=True) 
+                bestGenome = genomeScores[0][0]
+                log.log("   pmid=%s, no=%d, bestGenome=%s, scores=%s" % (pmid, no, bestGenome, str(genomeIdx)))
+                bestGenomes.setdefault(pmid, {})[no]=bestGenome
+
+                #bestGenomeFts = [f for (score, f) in idx[pmid][no][bestGenome]]
+                #idx[pmid][no]=(bestGenome, score, bestGenomeFts)
+                for genome, scoreList in genomeIdx.iteritems():
+                    if genome==bestGenome:
+                        continue
+                    else:
+                        fts = [f for (score, f) in idx[pmid][no][genome]]
+                        eliminated.setdefault(genome, Features).extendMark(fts, "|NotBestSeqGenome")
+        return idx, bestGenomes
+
+    def bestGenomePerPmid(idx, bestSeqGenomes, eliminated, log):
+        # input idx: pmid -> no -> genome -> (score, fts) + bestGenome: pmid -> no -> bestGenome
+        # ouput idx: idx and bestGenome: pmid -> bestGenome
+        bestPmidGenomes = {}
+        genomeFeats = {}
+        for pmid, noIdx in bestSeqGenomes.iteritems():
+            # determine best genome for this pmid
+            genomeSupport = {}
+            for no, bestGenome in noIdx.iteritems():
+                genomeSupport.setdefault(bestGenome, 0)
+                genomeSupport[bestGenome]+=1
+            genomeSupport=genomeSupport.items()
+            genomeSupport.sort(key = lambda (x,y): y, reverse=True)
+            log.log("   pmid=%d, genomeSupport=%s" % (pmid, str(genomeSupport)))
+            bestPmidGenome = genomeSupport[0][0]
+            bestPmidGenomes[pmid]=bestPmidGenome
+
+            # remove all other features
+            # browse index, keep bestGenome-features if bestGenome, or all other features if
+            # seqbestgenome != pmidbestGenome
+            noIdx = idx[pmid] # number index
+            for no, genomeIdx in noIdx.iteritems():
+                if bestPmidGenome in genomeIdx:
+                    scoreFts = genomeIdx[bestPmidGenome]
+                    fts = [fts for (score, fts) in scoreFts]
+                    # keep good features 
+                    genomeFeats.setdefault(bestPmidGenome, Features()).extend(fts)
+
+                    # mark the others as eliminated
+                    for genome, scoreFts in genomeIdx.iteritems():
+                        if genome==bestPmidGenome:
+                            continue
+                        else:
+                            fts = [fts for (score, fts) in scoreFts]
+                            eliminated.setdefault(genome, Features()).extendMark(fts, "|NotBestPmidGenome")
+                else:
+                    pass
+                    # keep matches from sequences that do not match on best genome
+                    #for genome, scoreFts in genomeIdx.iteritems():
+                        #fts = [fts for (score, fts) in scoreFts]
+                        #genomeFeats.setdefault(genome, Features()).extend(fts)
+        return genomeFeats, bestPmidGenomes
+
+
+    eliminated = {}
+    # keep only matches with best scores per genome
+    # idx: pmid -> no -> genome -> (score, fts) 
+    log.log(" * Filter1: Best matches only", onlyStderr=True)
+    idx = bestMatches(idx, eliminated)
+    # determine best genome PER SEQ and keep only matches from it
+    # bestGenomes: pmid -> no -> bestGenome
+    log.log(" * Filter2: Best genome per sequence", toStderr=True)
+    idx, bestSeqGenomes = bestGenomesPerSeq(idx, eliminated, log)
+    log.log(" * Filter3: Best genome per PMID by voting", onlyStderr=True)
+    feats, bestPmidGenomes = bestGenomePerPmid(idx, bestSeqGenomes, eliminated, log)
+    return feats, bestPmidGenomes
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+inDir, ctOutDir, filtOutDir, bestGenomesFile = args
+prefix = options.prefix
+genomeToTaxon = options.taxonFile
+entrezFile = options.entrezFile
+chainDist = options.chainDist
+
+log = util.Logger()
+
+# collect .blast files from dir
+files = set(glob.glob(os.path.join(inDir, prefix+'*.blast')))
+if len(files)==0:
+    stderr.write("No input files found in directory %s.\n" % inDir)
+    exit(1)
+
+#ctData   = {} # dict: genome -> trackName -> bed lines without \n
+ctData = None
+
+#pmidGenomeScores = {} # dict: 
+# step 2: determine best genome for each pmid
+#log.log(" * Identification of best genome for each pmid", toStderr=True)
+#bestGenomes = pmidBestGenome(pmidGenomeScores, bestGenomesFile, log)
+#ctData.setdefault(genome,{}).setdefault(RAWTRACKNAME, Features()).extend(feats)
+
+# step 1: read in vector matches, keep files that are NOT vector blast files
+log.log(" * Parsing univec blast results", onlyStderr=True)
+noVecFiles, vectorMatchIds = parseEmvecFile(files, MINSCORE)
+
+log.log(" * Parsing blast files, static e-Value filter, flag vector contaminations", toStderr=True)
+idx = parseBlast(noVecFiles, vectorMatchIds, log, ctData, MINSCORE)
+
+log.log(" * Find out best genome per PMID and use to filter blast results", toStderr=True)
+feats, bestGenomes = filterBlast(idx, log)
+
+# optional step 2b: compare our best genomes with entrez' gene taxon-ids
+if entrezFile:
+    if genomeToTaxon==None:
+        stderr.write("Need taxon mapping file to compare with entrez\n")
+        exit(1)
+    logT2gEntrezDiff(genomeToTaxon, entrezFile, bestGenomes)
+
+# step 3: chain resulting features 
+for genome, genomeFeats in feats.iteritems():
+    log.log("   Chaining features for %s" % genome, onlyStderr=True)
+    chainedFeats = chainFilterFeats(genomeFeats, onlyChainable=True)
+    if ctData==None:
+        ctData={}
+    ctData.setdefault(genome,{})[RESULTTRACKNAME]=chainedFeats
+
+outputToFiles(ctData, ctOutDir, filtOutDir)

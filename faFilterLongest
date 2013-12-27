@@ -1,0 +1,74 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import Fasta
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] genes.lst in.fa out.fa - filter out all but longest sequence from a fasta file with grouped fasta sequences (=genes), groups/genes are given by a tabsep-file (genes.lst: withinFastaId<tab>geneName)") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-f", "--field", dest="field", action="store", type="int", help="protein id is found in field x of fasta header (first field is 0)", default=None) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def fastaIndex(list, field):
+    idx = {}
+    for f in list:
+	if f.nucl=="Sequenceunavailable":
+	    continue
+        if field==None:
+            id = f.id 
+        else:
+            id = f.id.split("|")[field]
+        if id in idx:
+	    print id
+            stderr.write("error: double fasta header\n")
+            exit(1)
+        else:
+            idx[id] = f
+    return idx
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+genefname, infaname, outfaname = args
+field = options.field
+if outfaname.lower()=="stdout":
+    outf = stdout
+else:
+    outf = open(outfaname, "w")
+
+stderr.write("Reading fasta sequences %s and gene list %s...\n" % (infaname, genefname))
+seqs = Fasta.readFastaAsList(infaname)
+faIdx = fastaIndex(seqs, field)
+geneToTrans = tabfile.slurpdictlist(genefname, reverse=True)
+#print seqs
+#print geneToTrans
+
+stderr.write("Writing...\n")
+n = 0
+#print faIdx
+for geneId, transIds in geneToTrans.iteritems():
+    todelete=[]
+    for i in range(0, len(transIds)):
+	ti = transIds[i]
+	if ti not in faIdx:
+	    stderr.write("warning: could not find %s in fasta file, dropping it\n" % ti)
+	    todelete.append(i)
+	    print i
+    for i in reversed(todelete):
+	del transIds[i]
+    transIds.sort(key = lambda x: len(faIdx[x].nucl), reverse=True)
+    if len(transIds)==0:
+	continue
+    longestFa = faIdx[transIds[0]]
+    outf.write(">%s %s\n" % (geneId, longestFa.fullid))
+    outf.write("%s\n" % longestFa.nucl)
+    n+=1
+
+stderr.write("Wrote %d sequences.\n" % n)

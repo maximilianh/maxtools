@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re, operator, glob
+import maxbio 
+from maxMarkov import Markov, MarkovClassifier
+
+try:
+    import re2 as re
+except ImportError:
+    import re
+
+from os.path import *
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("""usage: %prog [options] [trainFa|trainText|dump|score|filterFa] faFile modelFile1 modelFile2 - train or run markov models against fasta files
+
+trainFa: train on fasta file with sequences
+trainText: train on a text file, uses only protein-like words in the file
+dump: output first -f file to stdout as a seq,logProb table
+score: score a fasta file (or directory with .fa files), output scores and final result
+filterFa: filter a fasta file (or directory with .fa files), only let pass "pos" and "unsure" sequences
+
+""")
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+parser.add_option("-r", "--removedSeqs", dest="removedSeqs", action="store", help="for filterFa: write removedSeqs to this file")
+parser.add_option("-m", "--minDiff", dest="minDiff", action="store", type="float", help="minimum difference first to 2nd best score to classify into a group, default %default. If the top two groups are close than this, will classify as 'unsure'. unsure is treated as a positive", default=0.02)
+parser.add_option("-l", "--markovLen", dest="markovLen", action="store", type="int", help="markov chain length, 1 means order 0, 2 means order 1, etc", default=2)
+#parser.add_option("-p", "--removePrefix", dest="removePrefix", action="store", type="str", help="for 'filterFa': prefix of markov models to remove when filtering, default %default", default="medline")
+parser.add_option("-f", "--foregroundModel", dest="foregroundModels", action="append", type="str", help="specify a markov mode treated as foreground, option can be used several times")
+parser.add_option("-b", "--backgroundModel", dest="backgroundModels", action="append", type="str", help="specify a markov mode treated as background, option can be used several times")
+parser.add_option("-o", "--outputFile", dest="outFile", action="store", type="str", help="output file for trainText and trainFasta")
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+cmd = args[0]
+inFname = args[1]
+fgModelFnames = options.foregroundModels
+bgModelFnames = options.backgroundModels
+markovLen = options.markovLen
+
+#removePrefix = options.removePrefix
+
+if cmd=="trainFa":
+    assert(options.outFile!=None)
+    seqs  = maxbio.parseFastaAsDict(inFname).values()
+    m = Markov(markovLen=markovLen)
+    m.train(seqs)
+    m.save(options.outFile)
+
+if cmd=="trainText":
+    assert(options.outFile!=None)
+    m = Markov(markovLen=markovLen)
+    likeProtWords = []
+    for line in maxbio.openFile(inFname):
+        text = line.strip().upper()
+        words = re.findall("[a-zA-Z]+", text)
+        protWords = []
+        for word in words:
+            if len(word)<4:
+                continue
+
+            if re.match("^[%s]+$" % "".join(m.alpha), word) and len(word)>5:
+                likeProtWords.append(word)
+
+    m.train(likeProtWords)
+    m.save(options.outFile)
+
+if cmd=="dump":
+    #modelFname = fgModelFnames[0]
+    modelFname = inFname
+    m = Markov(modelFname, markovLen=markovLen)
+    m.printProbs()
+
+elif cmd in ["score", "filterFa"]:
+    assert(len(fgModelFnames)!=0 and len(bgModelFnames)!=0) # need at least one fg and one bg model
+
+    if isdir(inFname):
+        inFnames = glob.glob(join(inFname, "*.fa"))
+    else:
+        inFnames = [inFname]
+    
+    rfh = None
+    if options.removedSeqs!=None:
+        rfh = open(options.removedSeqs, "w")
+
+    seqSorter = MarkovClassifier(options.minDiff)
+    seqSorter.loadModels(markovLen, fgModelFnames, bgModelFnames)
+
+    logging.info("running on %d files" % len(inFnames))
+    for inFname in inFnames:
+        for seqId, seq in maxbio.parseFasta(inFname):
+            className, seqType = seqSorter.classify(seq)
+
+            if cmd=="score":
+                diffStr = "%0.3f" % seqSorter.diff
+                row = [seqId, seq, className, seqType, diffStr, \
+                    str(seqSorter.fgScores), str(seqSorter.bgScores)]
+                row = [str(x) for x in row]
+                print "\t".join(row)
+            else:
+                className, seqType = seqSorter.classify(seq)
+                outStr = ">%s %s %s\n%s\n" % (seqId, className, seqType, seq)
+                if className in ["pos", "unsure"]:
+                    sys.stdout.write(outStr)
+                else:
+                    if rfh!=None:
+                        rfh.write(outStr)
+
+else:
+    assert(False) # illegal command
+

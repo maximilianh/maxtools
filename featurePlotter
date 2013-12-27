@@ -1,0 +1,141 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+from array import *
+import copy
+import bed
+import Fasta
+from alignmentViewer import *
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("%prog [options] faFile bedFile: print a multiple alignment with annotations located as ungapped coords on base seq in ASCII textmode. Can read UCSC maf or fasta files for sequences") 
+
+parser.add_option("-s", "--start", dest="minpos", action="store", help="only display seq from start to end ", type="int", metavar="NUMBER", default=-1) 
+parser.add_option("-e", "--end", dest="maxpos", action="store", help="only display seq from start to end ", type="int", metavar="NUMBER", default=-1) 
+
+parser.add_option("-a", "--absolute", dest="absolute", action="store_true", help="bed coordinates are absolute: substract alignment start from all beds", default=False) 
+parser.add_option("-b", "--basename", dest="basename", action="store", help="bed file coordinates are placed on sequence named, default is FIRST sequence (not the one referenced by the bed-features)") 
+parser.add_option("-o", "--onlybed", dest="onlybed", action="store_true", help="do not draw, just output projected bed file", default=False) 
+
+parser.add_option("-d", "--faDir", dest="faDir", action="store_true", help="faFile is not a file but a dir full of files. Will search dir for <chromname from bed>.fa, open it and search for sequences that have the right range=xxx in their header. Off by default.", default=False) 
+parser.add_option("-l", "--alnLen", dest="alnLen", action="store", type="int", help="needed for -d, specifies how many seqences in fa file for one alignment", default=2) 
+parser.add_option("-r", "--regions", dest="regions", action="store", type="string", help="specify a second bed file that contains regions around matches. If specified, will iterate over these regions, displaying them, with their features", default="") 
+
+(options, args) = parser.parse_args()
+
+# ------------ FUNCTIONS -----------
+
+def searchFasta(dir, bed, max):
+    """ searches in dir for fasta with name chrom.fa, with seq covering start-end. will read only up to <max> sequences."""
+    chrom = bed.chrom
+    start = bed.start
+
+    if not dir.endswith("/"):
+        dir += "/"
+    f = open(dir+chrom+".fa", "r")
+    for l in f:
+        if not l.startswith(">"):
+            continue
+        else:
+            parts=l.split()
+            for p in parts[1:]:
+                pair = p.split("=")
+                if pair[0]=="range":
+                    coord = pair[1].split(":")
+                    seqchrom= coord[0]
+                    startend= coord[1].split("-")
+                    seqstart = int(startend[0])
+                    seqend= int(startend[1])
+                    break
+            #print seqchrom, chrom, seqstart, start, seqend
+            if seqchrom == chrom and seqstart <= start < seqend: 
+               seqs = Fasta.parseFastaUntil(f, max, l)
+               return seqs
+    return None
+
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+seqfile = args[0]
+
+# read and prepare bed-data
+stderr.write("Reading, preparing bed ...\n")
+fname = args[1]
+if fname!="stdin":
+    f = open(args[1], "r")
+else:
+    f = stdin
+beds = bed.parseBedFile(f)
+
+# read fasta
+if options.faDir:
+    stderr.write("Reading fasta dir, searching in %s...\n" % args[0])
+    firstBed = beds[0]
+    seqs = searchFasta(args[0], firstBed, options.alnLen)
+    if seqs==None:
+        stderr.write("error: No Seq found in fasta file.\n")
+        exit(1)
+# read fasta
+elif seqfile.endswith(".fa") or seqfile.endswith(".fasta"):
+    stderr.write("Reading fasta ...\n")
+    seqs = Fasta.readFastaAsList(seqfile) 
+# read maf
+elif seqfile.endswith(".maf"):
+    stderr.write("Reading maf ...\n")
+    blocks = Fasta.readMaf(seqfile) 
+    if len(blocks)>1:
+	stderr.write("Error: cannot process maf files that contain more than one block\n")
+	exit(1)
+    seqs  = Fasta.mafToFasta(blocks[0])
+# error msg
+else:
+    stderr.write("Error: Could not recognize sequence file format for file %s, does not end with fa/fasta/maf\n" % seqfile)
+    exit(1)
+
+# if baseseq specified, pull it out from fasta file and correct bed features
+if options.basename:
+    baseseq=None
+    for s in seqs:
+        if s.id==options.basename:
+            baseseq=s
+            break
+    if not baseseq:
+	stderr.write("Could not find sequence with name %s, possible names are %s\n" % (options.basename, str([s.id for s in seqs])))
+	exit(1)
+    for b in beds:
+	b.chrom = baseseq.id
+else:
+    baseseq = seqs [ 0 ]
+
+baseSeqLen = len(baseseq.nucl.replace("-",""))-1
+
+if (baseseq.end!=0 and options.maxpos > baseseq.end) or (baseseq.end==0 and options.maxpos > baseSeqLen):
+    stderr.write("error: maxpos > end-offset from fasta sequence.\n")
+    exit(1)
+
+# correct coordinates of beds
+if options.absolute:
+    start = baseseq.start
+    for b in beds:
+	b.start = b.start - start
+	b.end = b.end - start
+
+# convenience vars
+maxpos = options.maxpos
+minpos = options.minpos
+
+offset = baseseq.start
+if options.regions=="":
+    #print "Showing",baseseq.chrom, offset+options.minpos, "(gapped coord: %d-%d, ungapped: %d-%d)" % (alnLimitLeft, alnLimitRight, minpos, maxpos)
+    print prettyPrintBlock(seqs, baseseq, beds, minpos, maxpos)
+else:
+    print "HAAAAA"
+    regions = parseBed(open(options.regions, "r"))
+    ungappedToGapped(baseseq.nucl, regions,0,0)
+    for r in regions:
+        print "Showing: ",r.name,", located on:",baseseq.chrom, offset+options.minpos, "(slice shown: gapped coord: %d-%d)" % (r.start, r.end)
+        paint(seqs, lines, r.start, r.end)

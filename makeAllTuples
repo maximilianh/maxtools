@@ -1,0 +1,50 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import os
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] list.lst cmd(with %s, %s) - exec make with all tuples of list") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-s", "--sep", dest="sep", action="store", help="use x as seperator, default is tab", default="\t") 
+parser.add_option("-i", "--inverse", dest="inverse", action="store_true", help="inverse order of names", default=False) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def ensName(name):
+    fs = name.split("_")
+    return (fs[0][0]+fs[1]).lower()
+    
+# ----------- MAIN --------------
+
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+es = []
+filename = args[0]
+cmd = args[1]
+inverse = options.inverse
+#cmd = "make -C ortho ORG=%s COMPORG=%s %s-%s.ortho.lst"
+
+f = open(filename, "r")
+for l in f:
+    es.append(l.strip())
+
+es.sort()
+for e1 in es:
+    for e2 in es:
+        if e1<e2:
+            if inverse:
+		    fullcmd = cmd % (e2, e1, e2, e1, e2, e1)
+            else:
+		    fullcmd = cmd % (e1, e2, e1, e2, e1, e2)
+
+            stderr.write("running: %s\n" % fullcmd)
+            ret = os.system(fullcmd)
+            if ret!=0:
+                stderr.write("error.\n")
+                exit(1)
+

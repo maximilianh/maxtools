@@ -1,0 +1,50 @@
+#!/usr/bin/gawk -f
+
+BEGIN { 
+    db = "";
+    db = ARGV[1];
+    if (db=="") {
+        print "no database name specified for bed2fasta! -h for help." > "/dev/stderr";
+        noend=1
+        exit(1);
+    }
+    if (db=="-h") {
+        print "bed2fasta-http: get fasta sequence from given assembly (parameter 1) for given regions (bed from stdin) with a dumb and simple wget request to UCSC.";
+        print "remember to sleep enough between requests, UCSC is unhappy otherwise";
+        noend=1
+        exit;
+        }
+
+    c = 0;
+    ARGV[1]="-"
+
+    }
+
+/^track/ { next }
+/^#/ {next}
+
+// { 
+    split($0, fields)
+    seq = fields[1];
+    begin = fields[2];
+    end = fields[3];
+    strand="-"
+    if (length(fields)>3) {
+        name=fields[4];
+        score=fields[5];
+        strand=substr(fields[6],1,1);
+        }
+    else {
+        strand="+";
+    }
+    print "Downloading " seq ":" begin "-" end "/" strand > "/dev/stderr";
+    system("fastaFromUCSC " seq " " begin " " end " " db " "strand"");
+    c+=1;
+}
+
+END { if (noend=0) { 
+    print "Got " c " sequences, check the results! (invalid coords will lead to wrong sequence)" > "/dev/stderr" ; }
+}
+
+
+

@@ -1,0 +1,85 @@
+#!/usr/bin/env python2.4
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import os
+import copy
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filenames - filter columns/rows of tsv file") 
+
+parser.add_option("-c", "--columns", dest="columns", action="store", help="columns to show", type="string", metavar="LIST", default=None) 
+parser.add_option("-r", "--remColumns", dest="remColumns", action="store", help="columns to remove from output", type="string", metavar="LIST", default="") 
+parser.add_option("-f", "--filterExpr", dest="expression", action="store", help='evaluate an expression, column values can be referred to by name, this will be typically something like (name=="test" or float(testVal)>0.5), all columns are strings by default, spaces in names are replaced by underscores', default=None) 
+parser.add_option("-a", "--addExpr", dest="prefixExpr", action="store", help='add column, use the value of an expression, all columns and "filename" can be used as variables, spaces are replaced by underscores in column names', default=None) 
+parser.add_option("", "--prefixName", dest="prefixHeader", action="store", help='name of column of prefix field, default is %default', default="prefix") 
+parser.add_option("-n", "--noHeaders", dest="noHeaders", action="store_true", help='suppress printing of headers') 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help='debug mode, output all') 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filenames = args
+columns = options.columns 
+remColumns = options.remColumns
+expression = options.expression
+noHeaders = options.noHeaders
+prefixExpr = options.prefixExpr
+prefixHeader = options.prefixHeader
+debug = options.debug
+
+# process comments only from first file!
+#comments, headers1, data = tabfile.parseTsv(filenames[0], [])
+#headers1 = [h.replace(" ","_") for h in headers1]
+
+fileNo = 0
+for filename in filenames:
+    comments, headers, lines = tabfile.parseTsv(filename, [], asListOfDicts=True)
+    headers = [h.replace(" ","_") for h in headers]
+
+    if fileNo!=0:
+        if set(headers).difference(headers1)!=set([]):
+            stderr.write("error: headers of file %s (%s) are different from file %s (%s)" % (filename, str(headers), filenames[0], str(headers1)))
+            exit(1)
+    else:
+        for c in comments:
+            print "#"+c
+        headers1=headers
+        if columns!=None:
+            columns = options.columns.split(",")
+        else:
+            columns = copy.copy(headers1)
+
+        if remColumns:
+            remColumns = remColumns.split(",")
+            for rc in remColumns:
+                columns.remove(rc)
+
+        if not noHeaders:
+            if prefixExpr:
+                print prefixHeader+"\t",
+            print "\t".join(columns)
+
+    fileNo+=1
+
+    for variables in lines:
+        variables["filename"]=filename
+        if debug:
+            print "expression: %s, variables=%s, result=%s" % (expression, str(variables), eval(expression, globals(), variables))
+        if expression==None or eval(expression, globals(), variables):
+            orderedData = []
+
+            if prefixExpr:
+                prefixVal = eval(prefixExpr, globals(), variables)
+                orderedData.append(prefixVal)
+
+            for h in columns:
+                orderedData.append(variables[h])
+            print "\t".join(orderedData)

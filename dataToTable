@@ -1,0 +1,110 @@
+#!/usr/bin/python
+import os
+from sys import *
+from optparse import OptionParser
+import tabfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] files - parse python-style(=ini-style) files and arrange data in the form of a table") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-f", "--filter", dest="filter", action="store", help="filter: only print these columns, also used to print columns in a certain order", default=None) 
+parser.add_option("-a", "--add", dest="add", action="append", help="add: add columns from external file after a certain column, example -a myBigColumn,bigcol.txt,2", default=None) 
+parser.add_option("-n", "--noHead", dest="noHead", action="store_true", help="suppress header line", default=False) 
+parser.add_option("", "--noFile", dest="noFile", action="store_true", help="suppress file name (column 0)", default=False) 
+
+(options, args) = parser.parse_args()
+
+if len(args)==0:
+    parser.print_help()
+    exit(1)
+# =====================
+def searchValues(values, column, value):
+    keysFound=[]
+    for fname,sdata in values.iteritems():
+        if sdata[column]==value:
+            keysFound.append(fname)
+    return keysFound
+
+# ----------- MAIN ----------------------------
+files = args
+
+#outf = args[-1]
+#if outf=="stdout":
+#    of=stdout
+#else:
+#    of = open(outf, "w")
+of=stdout
+
+values = {}
+columns=[]
+fnames = []
+
+for f in files:
+    name = f.split("/")[-1].split(".")[0]
+    fnames.append(name)
+    if name in values:
+        stderr.write("%s: non-unique name %s\n" % (f,name))
+        exit(1)
+    values[name]={}
+    vars = {}
+    lvars = {}
+    execfile(f, vars, lvars)
+    # the variables from sumFile are now in vars
+    for key,val in lvars.iteritems():
+        if type(val)==type(list()):
+            val = ",".join([str(x) for x in val])
+        values[name][key]=str(val)
+        if key not in columns:
+            columns.append(key)
+
+if options.filter:
+    columns=options.filter.split(",")
+else:
+    columns=list(columns)
+#columns.sort()
+
+if options.add:
+    for o in options.add:
+        name,col,desc,no = o.split(",") # filename,refkey,description,col-number
+        no = int(no)
+        data = tabfile.slurpdict(name)
+        for key,val in data.iteritems():
+            # search filename where tag named col equals key
+            names = searchValues(values, col, key)
+            if names==[]:
+                stdout.write("warning: could not find key %s in fname %s using refkey %s\n" % (key, name, col))
+                continue
+
+            #print col, key, names
+            for f in names:
+                #print str(val)
+                values[f][desc] = str(val)
+        columns.insert(no, desc)
+
+if options.noHead==False:
+    if not options.noFile:
+        of.write("File\t")
+    of.write("\t".join(columns)+"\n")
+
+for f in fnames:
+    fields=[]
+    if len(values[f])==0:
+        stderr.write("warning: no data for %s \n" % f)
+        continue
+    if not options.noFile:
+        of.write(f+"\t")
+    for c in columns:
+        if f in values:
+            if not c in values[f]:
+                stderr.write("warning: file %s, could not find tag %s\n" % (f, c))
+                fields.append("NOTFOUND")
+            else:
+                fields.append(values[f][c])
+        else:
+            stderr.write("warning: field %s missing in %s \n" % (c, f))
+
+    of.write("\t".join(fields)+"\n")
+
+of.close()
+

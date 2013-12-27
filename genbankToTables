@@ -1,0 +1,333 @@
+#!/usr/bin/env python
+
+import sys
+from optparse import OptionParser
+import glob, os.path
+
+import gzip
+import collections, logging
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio.Alphabet import DNAAlphabet
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inDir outDir - parse genbank to tables: recordInfo, references, referenceLinks") 
+
+parser.add_option("-s", "--startAuthorId", dest="startAuthorId", action="store", type="int", help="first author id (for running on a cluster)", default=0) 
+parser.add_option("", "--bigTable", dest="bigTable", action="store_true", help="Output only one big table") 
+parser.add_option("", "--onlySubmitter", dest="onlySubmitter", action="store_true", help="try to identify the submitter, as the last reference (or second last, if title is direct submission and submitting last author name is part of second last reference author list)") 
+parser.add_option("", "--seqList", dest="seqList", action="store", help="FILTER: read accession ids from file and process only records with an id from this file, will process only the part of the accession up to the first dot", metavar="FILENAME")
+parser.add_option("", "--taxonList", dest="taxonList", action="store", help="FILTER: read list of organisms from file, process only records if organism is in file", metavar="FILENAME")
+parser.add_option("", "--seqMaxLen", dest="seqMaxLen", action="store", type="int", help="FILTER: maximum length of sequence in record", metavar="SIZE", default=100000000000000)
+parser.add_option("-f", "--fasta", dest="fasta", action="store", help="write fasta sequences to this directory, filename: prefix.species.fa", metavar="DIRECTORY")
+parser.add_option("", "--bySpecies", dest="bySpecies", action="store_true", help="split fasta sequences into several files, one file per species")
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="activate debug output", metavar="FASTAFILE")
+parser.add_option("-m", "--maxSeqs", dest="maxSeqs", action="store", help="FILTER: maximum number of accessions for a reference, default %default", metavar="NUMBER", type="int", default=50)
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def writeList(fname, list):
+    of = open(fname, "w")
+    for row in list:
+        row = [str(d) for d in row]
+        of.write("\t".join(row))
+        of.write("\n")
+    of.close()
+    
+def writeDict(fname, dict, valLimit):
+    of = open(fname, "w")
+    for key, valList in dict.iteritems():
+        if len(valList) > valLimit:
+            logging.warn("Ignoring %s, too many accessions" % str(valList))
+            continue
+        for val in valList:
+            row = [val, key]
+            of.write("\t".join(row))
+            of.write("\n")
+    of.close()
+    
+# RECORDS
+RecordInfo = collections.namedtuple("RecordInfo", "gi, accession, description, year, seqLen, organism, taxonId, seqVersion, clone, clone_lib, cell_line, cell_type, dev_stage, tissue_type, organelle, mol_type, isolate")
+
+RefInfo = collections.namedtuple("ReferenceInfo", "pmid, medlineId, authors, title, journal, comment")
+
+FusedRecordInfo = collections.namedtuple("fusedRecordInfo", RecordInfo._fields + RefInfo._fields)
+
+def outputToFile(asBigTable, fileStem, records, refMap, giRefMap):
+    if not asBigTable:
+        writeList    ( fileStem+".records", records)
+        refMap.writeToFile   ( fileStem+".refs")
+        giRefMap.writeToFile ( fileStem+".recordToRefs")
+    else:
+        writeList    ( fileStem+".genbankTable", records)
+
+def fuseRecords(recInfo, refInfos):
+    """ create new records, fusing recInfo and all refInfos into new fusedRecordInfos """
+    newRecs = []
+    for ref in refInfos:
+        recFields = list(recInfo)
+        recFields.extend(ref)
+        fusedRec = FusedRecordInfo(*recFields)
+        newRecs.append(fusedRec)
+    return newRecs
+
+def getRecordInfo(seq):
+        # parse record itself
+        annot = seq.annotations
+        #accs = annot["accessions"]
+        id = seq.id
+        gi = annot["gi"]
+        seqLen = len(seq.seq)
+        desc = seq.description
+        #xrefs = seq.dbxrefs
+        date = annot["date"]
+        year = date.split("-")[2]
+
+        # parse from source feature (the first one)
+        clone, clone_lib, cell_line, cell_type, taxonId, dev_stage, tissue_type = "", "", "", "", "", "", ""
+        if  seq.features[0].type=="source":
+            srcFt = seq.features[0]
+            quals = srcFt.qualifiers
+
+            xrefs = quals.get("db_xref", [])
+            taxonRefs = [x for x in xrefs if x.startswith("taxon:")]
+            if len(taxonRefs)==0:
+                logging.debug("%s: no taxon id" % id)
+                taxonId="noTaxonId:"
+            elif len(taxonRefs)==1:
+                taxonId = taxonRefs[0]
+            else:
+                logging.info("%s: more than one taxonId" % id)
+                taxonId = taxonRefs[0]
+            taxonId=taxonId.split(":")[1]
+
+            clone = quals.get("clone",[""])[0]
+            clone_lib = quals.get("clone_lib",[""])[0]
+            cell_line = quals.get("cell_line",[""])[0]
+            dev_stage = quals.get("dev_stage",[""])[0]
+            tissue_type = quals.get("tissue_type",[""])[0]
+            organelle = quals.get("organelle",[""])[0]
+            mol_type = quals.get("mol_type",[""])[0]
+            isolate = quals.get("isolate",[""])[0]
+
+        data = RecordInfo(str(gi), id, desc, year, str(seqLen), annot["organism"], taxonId, str(annot["sequence_version"]), clone, clone_lib, cell_line, cell_type, dev_stage, tissue_type, organelle, mol_type, isolate)
+        #print "\t".join(data)
+        return data
+
+class RefMap:
+    """ a bag of reference strings of which each has a unique id, that starts from startRefid """
+    def __init__(self, startRefId):
+        self.refIds = {}
+        self.nextRefId = startRefId
+
+    def getRefId(self, refInfo):
+        refString = "\t".join(refInfo)
+        if refString not in self.refIds:
+            thisRefId = self.nextRefId
+            self.refIds[refString] = thisRefId
+            self.nextRefId+=1
+        else:
+            thisRefId=self.refIds[refString]
+        return thisRefId
+
+    def writeToFile(self, fname):
+        sys.stderr.write("Writing references to %s\n" % fname)
+        fh = open(fname, "w")
+        for author, authorId in self.refIds.iteritems():
+            fh.write(str(authorId)+"\t"+str(author)+"\n")
+        fh.close()
+
+class GiRefMap:
+    """ a map between references, gis and their index in them """
+    def __init__(self):
+        self.giRefMap = []
+
+    def add(self, gi, refId, refIdx):
+        self.giRefMap.append( (gi, refId, refIdx) )
+
+    def writeToFile(self, fname):
+        sys.stderr.write("Writing record <-> ref links to %s\n" % fname)
+        fh = open(fname, "w")
+        for gi, authorId, index in self.giRefMap:
+            fh.write(str(gi)+"\t"+str(authorId)+"\t"+str(index)+"\n")
+        fh.close()
+
+def getRefInfo(ref):
+    authorData = RefInfo(ref.pubmed_id, ref.medline_id, ref.authors, ref.title, ref.journal, ref.comment)
+    return authorData
+
+def findSubmitRef(refs):
+    """ try to identify the submitting reference and return as string: if there
+    are more than one, check if the last one is direct submission. In this
+    case, return the preceding one if we have only two or otherwise the last one 
+    with the family name of the submitter """
+
+    if len(refs)==0:
+        sys.stderr.write("NoReferenceFound")
+        return None
+    elif len(refs)==1:
+        return "\t".join(refs[0])
+    else:
+        # need to distinguish between publication ref and
+        # submission ref
+
+        # search backwards for subRef, starting from last
+        # until all direct submissions have been removed
+        # see http://www.ncbi.nlm.nih.gov/nuccore/M24665.2
+        subRef = refs[-1]
+        while len(refs)>1 and refs[-1].title.lower()=="direct submission":
+            subRef = refs.pop(-1)
+
+        subFamName = subRef.authors.split(",")[0]
+        # search backwards from submission upwords
+        # until we find name of submitter
+        # http://www.ncbi.nlm.nih.gov/nuccore/U01378
+        # keep name of first ref as a fallback
+        pubRef = refs[-1]
+        fallbackPubRef = refs[-1]
+        while len(refs)>0 and not subFamName.lower() in refs[-1].authors.lower():
+            pubRef = refs.pop(-1)
+            if len(refs)==0:
+                logging.warn("Submitter is not coauthor of any ref. Using pre-submission ref as publication.")
+                logging.warn(str(fallbackPubRef))
+                pubRef = fallbackPubRef
+        # submission journal contains address of submitter, we add it as a comment
+        # to publication ref
+        # see http://www.ncbi.nlm.nih.gov/nuccore/M24665.2
+        pubRef = pubRef._replace(comment=subRef.journal)
+        return "\t".join(pubRef)
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+inDir = args[0]
+outDir = args[1]
+startAuthorId = options.startAuthorId
+onlySubmitter = options.onlySubmitter
+seqListFilename = options.seqList
+fastaDir = options.fasta
+debug = options.debug
+seqMaxLen = options.seqMaxLen
+taxonFilename = options.taxonList
+bySpecies = options.bySpecies
+asBigTable = options.bigTable
+maxSeqs = options.maxSeqs
+
+if debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+if seqListFilename:
+    logging.info("Reading filter accession IDs")
+    filterIds = set([x.strip() for x in open(seqListFilename).readlines()])
+else:
+    filterIds = None
+
+if taxonFilename:
+    logging.info("Reading filter filter organism names")
+    taxonNames = set([x.strip() for x in open(taxonFilename).readlines()])
+else:
+    taxonNames = None
+
+if os.path.isdir(inDir):
+    filenames = glob.glob(os.path.join(inDir, "*.seq"))
+else:
+    filenames = [inDir]
+
+for filename in filenames:
+    # file opening
+    logging.info("Parsing %s\n" % filename)
+    basename = os.path.splitext(os.path.basename(filename))[0]
+    if filename.endswith(".gz"):
+        input_handle = gzip.open(filename)
+    else:
+        input_handle = open(filename)
+
+    try:
+        sequences = SeqIO.parse(input_handle, "genbank")
+    except:
+        sys.stderr.write("Parsing error, skipping this file")
+        continue
+
+    # all our data is stored here
+    refMap      = RefMap(startAuthorId)
+    giRefMap    = GiRefMap()
+    records = []
+    submitInfos = {} # only needed for onlySubmitter-mode
+    seqDict = {} # sequences indexed by species
+
+    for seq in sequences:
+        id = seq.id.split(".")[0] 
+        # process filters
+        if filterIds and id not in filterIds:
+            logging.debug("skipping %s, not in id file" % id)
+            continue
+        if taxonNames and seq.annotations["organism"] not in taxonNames:
+            logging.debug("skipping %s, not in taxon file" % id)
+            continue
+        if len(seq.seq) > seqMaxLen:
+            logging.debug("skipping %s, too long" % id)
+            continue
+
+        # save record info
+        recInfo = getRecordInfo(seq)
+        records.append(recInfo)
+
+        # add reference information to the two collection classes
+        refIdx = 0
+        refs = []
+        for ref in seq.annotations["references"]:
+            refIdx+=1
+            refInfo = getRefInfo(ref)
+
+            if onlySubmitter:
+                refs.append(refInfo)
+            else:
+                refId = refMap.getRefId(refInfo)
+                giRefMap.add(recInfo.gi, refId, refIdx)
+
+        if onlySubmitter:
+            submitRef = findSubmitRef(refs)
+            submitInfos.setdefault(submitRef, []).append(recInfo.accession)
+
+        # HACK: for bigTableOutputFormat: remove record, fuse with refs, add back 
+        # to records
+        if asBigTable:
+            recInfo = records.pop()
+            bigRecords = fuseRecords(recInfo, refs)
+            records.extend(bigRecords)
+
+        if fastaDir:
+            onlySeq = SeqRecord(Seq(str(seq.seq), DNAAlphabet), id=seq.id, description="")
+            seqDict.setdefault(recInfo.organism, []).append(onlySeq)
+
+    # output to file
+    fileStem = os.path.join(outDir, basename)
+    if onlySubmitter:
+        sys.stderr.write("Writing submitter info\n")
+        writeDict(fileStem+".submitterInfo", submitInfos, maxSeqs)
+    else:
+        if len(records)!=0:
+            outputToFile(asBigTable, fileStem, records, refMap, giRefMap)
+
+    if fastaDir:
+        if bySpecies:
+            for species, seqs in seqDict.iteritems():
+                species = species.replace(" ","_")
+                species = species.replace("/","_")
+                filename = os.path.join(fastaDir,basename+"."+species+".fa")
+                print("Writing fasta %s" % filename)
+                fastaFh = open(filename, "w")
+                SeqIO.write(seqs, fastaFh, "fasta")
+        else:
+            seqs = []
+            for species, specSeqs in seqDict.iteritems():
+                seqs.extend(specSeqs)
+            filename = os.path.join(fastaDir,basename+".fa")
+            print("Writing fasta %s" % filename)
+            fastaFh = open(filename, "w")
+            SeqIO.write(seqs, fastaFh, "fasta")

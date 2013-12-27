@@ -1,0 +1,91 @@
+#!/usr/bin/python
+
+from os.path import *
+import bed
+import sys
+import copy # for shallow copies
+from optparse import OptionParser
+from collections import defaultdict
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] args\n - plot the number of different names in bed features per x-bp window as a wiggle file") 
+
+parser.add_option("-w", "--winsize", dest="winsize", help="size of window [default: %default]", type="int", default="200", metavar="SIZE")
+parser.add_option("-p", "--plot", dest="plot", help="filename to plot as png with matplotlib", metavar="FNAME")
+parser.add_option("-t", "--title", dest="title", help="title for plot", metavar="STR")
+#parser.add_option("-s", "--score", dest="score", help="do not plot number of features in window but plot the sum of the features' scores within sliding window", action="store_true", default=False)
+
+#parser.add_option("-m", "--mindist", dest="distcond", action="append", help="specify minimum distance between all two-tuples of names  names, e.g. A-B:50", type="string", metavar="NUMBER") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+# ==== MAIN ====
+if len(args)==0:
+    sys.stderr.write("\nPlease specify a bed-file. \n")
+    parser.print_help()
+    sys.exit(1)
+
+winSize = options.winsize
+#sys.stderr.write("Parameters: Winsize=%d, UsingScores=%d, files=%s" % (winsize, options.score, args))
+
+for filename in args:
+    sys.stderr.write("Reading file %s\n" % filename)
+    if filename=="stdin":
+        lines = sys.stdin
+    else:
+        lines = open(filename, "r").readlines()
+    fts = bed.parseBedFile(lines, fieldCount=4)
+    ftsByStart = bed.indexBedsByStart(fts)
+    minStart = min(ftsByStart)
+    maxEnd = max([f.end for f in fts])
+    # can only process a single chrom at a time
+    assert(len(set([f.chrom for f in fts]))==1)
+    chrom = fts[0].chrom
+    
+    halfWinLen = winSize/2
+    plotX = []
+    plotY = []
+    stepSize = 10
+    for winStart in range(minStart, maxEnd, stepSize):
+        for i in range(winStart, winStart+winSize):
+            print "i", i
+            names = []
+            namePos = defaultdict(list)
+            if i not in ftsByStart:
+                continue
+            for f in ftsByStart[i]:
+                print "adding", f.name
+                names.append(f.name)
+                namePos[f.name].append(i)
+        
+        nameCount = len(set(names))
+        pos = winStart+halfWinLen
+        #row = [chrom, pos, pos+stepSize, nameCount, ",".join(names)]
+        row = [chrom, pos, pos+stepSize, nameCount, str(namePos)]
+        row = [str(x) for x in row]
+        print "\t".join(row)
+        plotX.append(pos)
+        plotY.append(nameCount)
+
+    if options.plot:
+        import matplotlib as mpl
+        mpl.use('Agg')
+        import matplotlib.pyplot as plt
+        #from pylab import *
+        plt.plot(plotX, plotY, 'ro')
+        #plot.axis(plotX)
+        x1,x2,y1,y2 = plt.axis()
+        plt.axis((x1,x2,y1,y2+3))
+        #ax = plt.gca()
+        #ax.xaxis.set_major_locator(MultipleLocator(winSize))
+        #ax.xaxis.set_minor_locator(MultipleLocator(0.1))
+        #ax.yaxis.set_major_locator(MultipleLocator(winSize))
+        #ax.yaxis.set_minor_locator(MultipleLocator(0.1))
+        plt.xticks(range(minStart, maxEnd, winSize), rotation=90)
+        title =basename(filename)
+        if options.title:
+            title = options.title
+        plt.title(title)
+        plt.grid(True)
+        plt.savefig(options.plot)
+    # prepare dic: pos -> number of features OR pos -> sum of scores of features

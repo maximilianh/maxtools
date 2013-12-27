@@ -1,0 +1,93 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import re
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] filename - filter a file that consists of key-value pairs") 
+
+parser.add_option("-l", "--lessThan", dest="maxValues", action="store", help="remove keys with less than NUMBER values [default: %default]", type="int", metavar="NUMBER", default=None) 
+parser.add_option("-m", "--moreThan", dest="minValues", action="store", help="remove keys with more than NUMBER values [default: %default]", type="int", metavar="NUMBER", default=None) 
+parser.add_option("-v", "--notValue", dest="notValue", action="store", help="ignore all keys that contain a certain value", default=None) 
+parser.add_option("-o", "--onlyValue", dest="onlyValue", action="store", help="only use keys that contain certain values", default=None) 
+parser.add_option("-e", "--replaceValues", dest="replaceValues", action="store", help="if a key has a combination of values, replace them all by one single value (format: a,b,c,d=z) ", default=None) 
+parser.add_option("", "--removeAndValues", dest="removeAndValues", action="store", help="remove keys that are associated to both of any of two lists, comma sep., e.g. 'val1,val2'/'val3,val4' will remove all keys that are associated with (val1 or val2) and (val3 or val4)", default=None) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename  = args[0]
+maxValues = options.maxValues
+minValues = options.minValues
+notValue  = options.notValue
+onlyValue = options.onlyValue
+replaceValues = options.replaceValues
+removeAndValues = options.removeAndValues
+
+if replaceValues:
+    replaceValues = replaceValues.split("=")
+    replaceValues[0] = set(replaceValues[0].split(","))
+
+#stderr.write("Reading file...\n")
+hash = tabfile.slurpdictlist(filename)
+hashR = tabfile.slurpdictlist(filename, reverse=True)
+
+if removeAndValues:
+    fs = removeAndValues.split("/")
+    vals1 = set(fs[0].split(","))
+    vals2 = set(fs[1].split(","))
+
+for key, values in hash.iteritems():
+    OK = False
+
+    if maxValues and len(values)>=maxValues:
+        continue
+
+    if minValues and len(values)<=minValues:
+        continue
+
+    if removeAndValues:
+        if len(vals1.intersection(values))!=0 and len(vals2.intersection(values))!=0:
+            stderr.write("info: removing key %s, as its value %s is contained in %s and %s\n" % (key, str(values), str(vals1), str(vals2)))
+            continue
+
+    if notValue:
+	notRex = re.compile(notValue)
+	stop = False
+	for v in values:
+	    if notRex.match(v):
+		stop=True
+		break
+	if stop:
+	    continue
+   
+    found = True
+    if onlyValue:
+        rex = re.compile(onlyValue)
+        found = False
+        for v in values:
+            if rex.match(v):
+                found=True
+                break
+
+    if replaceValues:
+        if len(replaceValues[0].intersection(values))==len(replaceValues[0]):
+            for v in values:
+                if v in replaceValues[0]:
+                    print "%s\t%s" % (key, replaceValues[1])
+                else:
+                    print "%s\t%s" % (key, v)
+            continue
+
+    if found==True:
+        for v in values:
+            print "%s\t%s" % (key, v)
+

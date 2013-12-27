@@ -1,0 +1,248 @@
+#!/usr/bin/python
+
+import PWM
+import bed
+import re
+from Fasta import *
+from SeqWindow import *
+from MultiAlign2Block import *
+from sys import *
+from optparse import OptionParser
+import WindowIterator
+import itertools
+from os import environ
+import copy
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] maf-file/fasta-files\nList words/oligos that are almost 100% conserved in alignment and occur more than x times and (optional) that occur in every file that was specified") 
+
+parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-n", "--nchars", dest="maxN", action="store", help="number of N-characters allowed in one word [default: %default]", type="int", metavar="NUMBER", default="1") 
+
+parser.add_option("-c", "--conservation", dest="conservation", action="store", help="word has to be conserved in x sequences of alignment [default: Number of sequences in alignment]", default="-1", type="int", metavar="NUMBER") 
+parser.add_option("-w", "--wordCutoff", dest="wordCutoff", action="store", help="word has to be found x times (different positions in alignment) to be kept [default: %default]", default="1", type="int", metavar="X") 
+parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=None) 
+parser.add_option("-f", "--fasta", dest="fasta", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+parser.add_option("-b", "--bases", dest="bases", action="store", help="base sequence names, comma separated list [default: %default]", default="hg17,hg18,oryLat1,Ci") 
+parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="when outputting the motif found, add the reverse complement for every word", default=True) 
+parser.add_option("-g", "--nogenomecoords", dest="genomeCoords", action="store_false", help="do not try to parse UCSC-style genome coords from sequences, simply return the position of matches on the sequences [default: will return genome coods]", metavar="", default="True") 
+
+parser.add_option("-j", "--justWords", dest="justWords", action="store_true", help="just output words and the number of matches, do not output bed-file", default=False) 
+parser.add_option("-o", "--motifModel", dest="motifModel", action="store", type="int", help="type of motif model: 0 = no degenerate positions, 1 = length=7 and two wildcards at position 3/4 (AAANNAA), 2 = AAANAAA, 3 = AAAANAA, 4 = AAANAA, 5 = AANAAA", default=0) 
+parser.add_option("", "--filter", dest="filter", action="store_true", help="try to filter out too simple motifs: remove motifs that contain a stretch of 4 identical nucleotides", default=False)
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+def calcCounts(alignment):
+    """ 
+    list the number of occuring nucleotides/symbols at every position:
+    Given alignment (=dict seqname => FastaSequence), build a new dict
+    (sequenceposition => countdict), where countdict contains: 'most'=>nucleotide
+    that occurs most often, 'a'=> number of a's in alignment, 'c'=>number of
+    c's in alignment, etc... also '-' and 'n'
+    """
+    length = len(alignment.values()[0].nucl)
+    counts = {}
+    for pos in xrange(length-1,-1,-1):
+        poscount = {}
+        for seq in alignment.values():
+            c = seq.nucl[pos].lower()
+            poscount[c]=poscount.get(c,0)+1
+        # convert dict to list of tuples,sort
+        l = []
+        for k,v in poscount.iteritems():
+            l.append( (k,v) )
+        l.sort( key= lambda (x,y): y, reverse=True)
+        nuc,count = l[0]
+        # put mostconserved into dict
+        poscount['m']=nuc
+        counts[pos]=poscount
+    return counts
+
+def conservedWord(counts, pos, minConserv, wordSize, maxNumN):
+    """
+    return the string that describes this conserved word or None if the current word
+    is not conserved well enough 
+    """
+    nN = 0 # number of N characters so far
+    nConservNucl = 0
+    word = []
+    for i in xrange(pos, pos+wordSize):
+        mostConserved = counts[i]['m']
+        # break if dominant gap or dominant n in word
+        if mostConserved=='-' or mostConserved=='n':
+            #print "dominant gap at pos %u" % i
+            return None
+        countMost = counts[i][mostConserved]
+        if countMost >= minConserv:
+            word.append(mostConserved.upper())    
+        else:
+            # break if more than 1 non-dominant pos found
+            if nN==maxNumN:
+                # print "max N limit reached at pos %u" % i
+                # print "MostConserved: %s occuring %u times" % (mostConserved, countMost)
+                return None 
+            else:
+                nN+=1
+                word.append('N')
+    return word
+
+def revComp(seq):
+    table = { ".":".", "a" : "t", "A" : "T", "t" : "a", "T" : "A", "c" : "g", "C":"G", "g":"c", "G":"C", "-":"-" , "N":"N", "n":"n"}
+    newseq = []
+    for nucl in reversed(seq):
+       newseq += table[nucl]
+    return newseq
+    
+def tooSimple(word):
+    #chars = set(word)
+    #if len(chars)<=2:
+    if word.find("AAAA")!=-1 or word.find("TTTT")!=-1 or word.find("GGGG")!=-1 or word.find("CCCC")!=-1:
+	return True
+    else:
+	return False
+
+def printBeds(onlyWords, beds, wordCutoff, filenames, filter):
+        alreadyPrinted = set()
+	count=0
+	filterFiles = len(filenames) > 1
+	for word, files in beds.iteritems():
+	    if filterFiles and len(files) < len(filenames):
+		continue
+	    if filter and tooSimple(word):
+		continue
+	    for fname, beds in files.iteritems():
+		if len(beds)<wordCutoff:
+			continue
+		starts = set([b.start for b in beds])
+		if len(starts)<wordCutoff:
+			continue
+		for b in beds:
+			if b.start not in alreadyPrinted:
+			    if onlyWords:
+				print word, len(starts)
+			    else:
+				count+=1
+				print b
+				alreadyPrinted.add(b.start)
+	stderr.write("%d words passed all filters\n" % count)
+
+def maskWord(word, maskedPositions):
+    newWord = copy.copy(word)
+    for i in maskedPositions:
+	newWord[i] = 'N'
+    return newWord
+
+def addWord(beds, word, maskedPositions, strand, fname):
+    if maskedPositions!=[]:
+	maskedWord = maskWord(word, maskedPositions)
+    else:
+	maskedWord = word
+    wordStr = "".join(word)
+    maskedStr = "".join(maskedWord)
+    b = bed.Feature()
+    b.chrom = baseseq.chrom
+    b.start = basepos
+    b.end = basepos+motifSize
+    b.name = maskedStr
+    b.seq = wordStr # additional attribute
+    b.strand = strand
+    beds.setdefault(maskedStr, {})
+    beds[maskedStr].setdefault(fname, [])
+    beds[maskedStr][fname].append(b)
+
+# ----------- MAIN --------------
+if args==[]: 
+    sys.stderr.write("\nNo sequence files specified. Use -h for help.\n") 
+    exit(1)
+
+filenames    = args
+bases        = options.bases.split(",")
+maxN         = options.maxN
+wordCutoff   = options.wordCutoff
+motifSize    = options.motiflength
+conserv      = options.conservation
+motifModel   = options.motifModel
+justWords    = options.justWords
+filter       = options.filter
+
+maskedPositions=[]
+if motifModel:
+    if motifModel==1:
+	motifSize=7
+	maskedPositions=[3,4]
+    elif motifModel==2:
+	motifSize=7
+	maskedPositions=[3]
+    elif motifModel==3:
+	motifSize=7
+	maskedPositions=[4]
+    elif motifModel==4:
+	motifSize=6
+	maskedPositions=[3]
+    elif motifModel==5:
+	motifSize=6
+	maskedPositions=[2]
+    else:
+	stderr.write("error: illegal value for motif model\n")
+	exit(1)
+	
+
+beds = {}  # results, unfiltered
+for filename in filenames:
+	sys.stderr.write("Reading sequences from %s...\n" % filename)
+	f = open(filename, "r")
+	goOn=True
+	addReverse=options.reverse
+	wordCount=0
+
+	while goOn==True:
+	    # parse files
+	    if options.maf==True or filename.endswith(".maf"):
+	       align = readMafNext(f)
+	    elif options.fasta==True or filename.endswith(".fa"):
+	       align = readFasta(f.name)
+	       goOn=False
+	    else:
+	       stderr.write("error: cannot determine filetype for file %s\n" % filename)
+	       exit(1)
+
+	    if align=={}:
+		#sys.stderr.write("Reading finished.\n")
+		break
+
+	    for b in bases:
+		    if b in align.keys():
+			    base = b
+			    break
+
+	    baseseq = copy.copy(align[base])
+
+	    # count nucleotides per position
+	    #sys.stderr.write("Counting nucleotides...\n")
+	    counts = calcCounts(align)
+
+	    i=0
+	    basepos = baseseq.start
+	    while i < len(counts.keys())-motifSize:
+		if conserv==-1:
+			minConserv = len(align)
+		else:
+			minConserv = conserv
+		word = conservedWord(counts,i,minConserv,motifSize,maxN)
+		if word!=None:
+		    wordCount += 1
+		    addWord(beds, word, maskedPositions, "+", filename)
+		    if addReverse==True:
+			word = revComp(word)
+			addWord(beds, word, maskedPositions, "-", filename)
+
+		i+=1
+		if baseseq.nucl[i].lower()!='-':
+		    basepos+=1
+	sys.stderr.write("Found %d words\n" % wordCount)
+if justWords:
+    printBeds(True, beds, wordCutoff, filenames, filter)
+else:
+    printBeds(False, beds, wordCutoff, filenames, filter)

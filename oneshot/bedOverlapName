@@ -1,0 +1,8 @@
+#!/bin/bash
+if [ -z "$1" ]; then
+    echo bedOverlapName: add name of overlapping feature from 2nd file to beds
+    echo example: bedOverlapName feats.bed annotation.bed Prefix
+    exit 1
+fi
+PREFIX=$3
+overlapSelect $1 $2 -mergeOutput stdout -dropped=stdout|  cut -f 1,2,3,4,8 | gawk '{OFS="\t";print $1,$2,$3,$4"|'$PREFIX'"$5}'

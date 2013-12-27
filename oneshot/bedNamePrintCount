@@ -1,0 +1,19 @@
+#!/usr/bin/perl
+
+# print number of features of each type found
+# 
+
+%n = ();
+
+while (<>) 
+{
+    split; 
+    $n{$_[3]}++;
+    #print $_[3];
+}
+
+print @lines;
+
+while ( ($key, $value) = each(%n) ) {
+    print $key, "\t", $value,"\n";
+}

@@ -1,0 +1,24 @@
+#!/usr/bin/perl
+
+open (FILE, "$ARGV[0]") or die "cannot open patterns";
+@pats= <FILE> ;
+close FILE;
+pop @ARGV;
+
+while (<>) {
+    if ( /^>/ ) {
+        foreach $pat (@pats) {
+            $match=0;
+            if (/$pat/) {
+                print;
+                $match=1;
+                last;
+            }
+        }
+    }
+        else {
+        if ($match) {
+            print;
+        }
+    }
+}

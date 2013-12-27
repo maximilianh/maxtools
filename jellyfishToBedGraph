@@ -1,0 +1,69 @@
+#!/usr/bin/env python2.7
+
+import glob, optparse, logging, sys
+from os.path import *
+from Bio import Seq
+from Bio import SeqIO
+
+def parseJellyfish(jellyFname):
+    " parse seq<space>int table to dict "
+    logging.info("Parsing %s" % jellyFname)
+    table = {}
+    for line in open(jellyFname):
+        fields = line.strip().split()
+        seq, count = fields
+        count = int(count)
+        table[seq] = count
+    return table
+
+def getJellyCounts(seq, jellyFname, maxLimit):
+    jellyCounts = {}
+    jellyDict = parseJellyfish(jellyFname)
+    kmerLen = len(jellyDict.keys()[0])
+    #print "kmer", kmerLen
+    for start in range(0, len(seq)-kmerLen):
+        #print start
+        end = start+kmerLen
+
+        subseq = seq[start:end]
+        subseqStr = subseq.tostring().upper()
+        count = jellyDict.get(subseqStr, None)
+        #print subseqStr
+        if count==None:
+            revSeq = subseq.reverse_complement()
+            subseqStr = revSeq.tostring().upper()
+            #print subseqStr
+            count = jellyDict.get(subseqStr, 0)
+            
+        if count > maxLimit:
+            count = maxLimit
+        jellyCounts[start] = count
+    return jellyCounts
+
+def main():
+    parser = optparse.OptionParser("usage: %prog [options] fastaFile jellyfishTable - create wig file with counts per position taken from jellyfish tab output ") 
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+    (options, args) = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+
+    if len(args)==0:
+        parser.print_help()
+        sys.exit(0)
+
+    faFname, jellyFname, maxCount = args
+    maxCount = int(maxCount)
+
+    # parse seq
+    handle = open(faFname, "rU")
+    rec = list(SeqIO.parse(handle, "fasta"))[0]
+    seqLen  = len(rec.seq)
+
+    jellyCounts = getJellyCounts(rec.seq, jellyFname, maxCount)
+
+    for i, count in jellyCounts.iteritems():
+        data = ["chr1",str(i), str(i+1), str(count)]
+        print "\t".join(data)
+
+main()

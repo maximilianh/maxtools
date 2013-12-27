@@ -1,0 +1,259 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import logging
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] oboFile upId - map all OBO ids to coarser-grained obo ids that are children of upId. Can be used with 'lstOp replace' later to simplify textfiles that contain obo terms") 
+
+parser.add_option("", "--namespace", dest="namespace", action="store", help="remove all terms that are not part of the given namespace") 
+parser.add_option("", "--subset", dest="subset", action="store", help="remove all terms that are not part of the given subset") 
+parser.add_option("-r", "--relationships", dest="relationships", action="store", help="comma-sep list of relationship indicators, to build graph from, can be something like is_a, or part_of or develops_from, default is %default", default="part_of,is_a") 
+parser.add_option("", "--childrenRelationship", dest="childrenRelationship", action="store", help="relationship to get target nodes, default %s", default="is_a") 
+parser.add_option("-n", "--outputNames", dest="outputNames", action="store_true", help="Do not output replacement IDs but their names") 
+parser.add_option("", "--outputChildren", dest="allChildren", action="store_true", help="change output completely: do not map obo terms upwards, but rather output recursively all children of upId in obo file") 
+parser.add_option("", "--flybaseHack", dest="flybaseHack", action="store_true", help="use the first relationship from -r first to resolve, if this doesn't work, try a combination") 
+parser.add_option("", "--clean", dest="clean", action="store_true", help="Remove all annotations that map to two different target terms") 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ==== FUNCTIONs =====
+class Term:
+    def __init__(self):
+        self.id = ""
+        self.parents = {} # a dictionary with links to objects, e.g. "is_a" : termObjectList
+        self.children = {} # a dictionary with links to objects, e.g. "is_a" : termObjectList
+        self.relationship = {} # just raw dict of ID-strings, e.g. "is_a" : "FBbt00000001"
+
+    def __repr__(self):
+        return "Term-Object__"+self.id+" ("+self.name+")"
+
+    #def __str__(self):
+        #lines = ["\nobo-term"]
+        #for key, val in self.__dict__.iteritems():
+            #lines.append("%s : %s" % (key, val))
+        #return "\n".join(lines)
+
+def splitLine(str): 
+    """ for line in obo-format: split tag from value and remove comments"""
+    pos = str.find(": ")
+    cmtPos = str.find("!")
+    if cmtPos==-1:
+        cmtPos = len(str)+1
+    return str[0:pos], str[pos+2:cmtPos-1]
+
+def parseTerm(fh):
+    term = Term()
+    l = "dummy"
+    while l!="":
+        # parse lines until next term found
+        l = fh.readline()
+        if l=="":
+            return None
+        cl = l.strip()
+        # comment
+        if cl.startswith("!"):
+            continue
+        # new stanza
+        if cl.startswith("["):
+            #print "stanze end HIT, RETURNING"
+            return term
+        # tag-value -pair
+        if cl.startswith("id: "):
+            tag, val = splitLine(cl)
+            term.id = val
+        elif cl.startswith("name: "):
+            tag, val = splitLine(cl)
+            term.name = val
+        elif cl.startswith("is_a: "):
+            tag, termId = splitLine(cl)
+            term.relationship.setdefault("is_a", []).append(termId)
+        elif cl.startswith("relationship: "):
+            tag, relationShipString = splitLine(cl)
+            relationshipType, termId = relationShipString.split("!")[0].strip().split(" ")
+            term.relationship.setdefault(relationshipType, []).append(termId)
+        else:
+            tag, val = splitLine(cl)
+            #if tag in term.__dict__:
+                #logging.info("error in oboParser/parseTerm: found two lines with the same tag for one term (%s,%s,%s)" % (tag,val,l))
+                #exit(1)
+            term.__dict__.setdefault(tag, []).append(val)
+    return term
+
+def parseObo(fh, filterNamespace=None, removeObsoletes=True, filterSubset=None):
+    """ given a filehandle, parse an obo file and return a list of terms, removing all with a namespace == filterNamespace or subset == filterSubset """
+    terms = []
+    l = fh.readline().strip().lower()
+    # skip until first [term] found
+    while l!="[term]":
+        l = fh.readline()
+        if l=="":
+            return []
+        l = l.lower().strip()
+    # parse terms until eof
+    term = parseTerm(fh)
+    while term !=None:
+        #print "----appending-------"
+        terms.append(term)
+        term = parseTerm(fh)
+        #print "RETURN"
+
+    # remove obsolete terms
+    if removeObsoletes:
+        terms = [t for t in terms if not ("is_obsolete" in t.__dict__ and t.is_obsolete[0].lower()=="true")]
+    # filter on namespace
+    if filterNamespace:
+        terms = [t for t in terms if ("namespace" in t.__dict__ and filterNamespace in t.namespace)]
+
+    if filterSubset:
+        terms = [t for t in terms if ("subset" in t.__dict__ and filterSubset in t.subset)]
+    return terms
+
+def searchParents(term, targetIds, relationships):
+    """ walk up the tree and return the top-most parent term if targetIds is empty
+    or
+    if targetIds is a list of term IDs, stop as soon as one of the targetId-terms has been found.
+        
+    """
+    #print "RECURSIVE CALL", term
+    # collect all parents
+    parents = set()
+    for relationship in relationships:
+        parents.update(term.parents.get(relationship, []))
+
+
+    if len(parents)==0 or term.id in targetIds:
+        #print "STOPPING RECURSION "
+        return [term]
+    else:
+        allTargets = set()
+        #print "ALL PARENTS: ", term.parents.get(relationship, [])
+        for parent in parents:
+            targets = searchParents(parent, targetIds, relationships)
+            allTargets.update(targets)
+        return allTargets
+
+def findChildren(termById, termId):
+    """ return all direct children (term-objects and term-ids (strings)) of a given termId """
+    targetIds = set()
+    targetTerms = set()
+    term = termById[termId]
+    childrenTerms = term.children.get(childrenRelationship, [])
+    for term in childrenTerms:
+        targetIds.add(term.id)
+        targetTerms.add(term)
+    return targetTerms, targetIds
+
+def findAllChildren(term, allChildren=set()):
+    """ return recursively all direct or indirect children of a term """
+    childrenTerms = term.children.get(childrenRelationship, [])
+    for childTerm in childrenTerms:
+        allChildren.add(childTerm)
+        allChildren = findAllChildren(childTerm, allChildren)
+    return allChildren
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+#subtree = options.subtree
+namespace = options.namespace
+subset = options.subset
+relationships = options.relationships.split(",")
+childrenRelationship = options.childrenRelationship
+outNames = options.outputNames
+allChildren = options.allChildren
+flybaseHack = options.flybaseHack
+clean = options.clean
+
+obofname, targetParent = args
+
+#exceptions = []
+#if options.exceptions:
+    #exceptions = options.exceptions.split(",")
+    
+logging.info("Reading obo file...\n")
+terms = parseObo(open(obofname, "r"), filterNamespace=namespace, filterSubset=subset)
+#for t in terms:
+   #print t
+
+logging.info("Indexing terms by id...\n")
+termById = {}
+for t in terms:
+    termById[t.id.strip()] = t
+
+logging.info("Graph from terms by linking parents and children together...\n")
+for term in terms:
+    for relationship, relatedIds in term.relationship.iteritems():
+        for relatedId in relatedIds:
+            relatedTerm = termById[relatedId]
+            term.parents.setdefault(relationship, []).append(relatedTerm)
+            relatedTerm.children.setdefault(relationship, []).append(term)
+
+logging.info("Getting target IDs from terms by getting all %s-children of term with ID %s...\n" % (childrenRelationship, targetParent))
+if allChildren:
+    childrenTerms = findAllChildren(termById[targetParent])
+    for term in childrenTerms:
+        print("%s\t%s" % (term.id, term.name))
+    exit(0)
+else:
+    targetTerms, targetIds = findChildren(termById, targetParent)
+
+logging.info("Target Ids are:")
+for tid in targetTerms:
+    logging.info("  %s (%s)" % (tid.id, tid.name))
+
+logging.info("Walking up the graph, following relationships %s, until hitting one of the target ids." % (str(relationships)))
+
+# DEBUG PART
+#terms =[]
+#terms.append(termById['FBbt:00005245'])
+#terms.append(termById['FBbt:00001778'])
+#terms.append(termById['FBbt:00100192'])
+#terms.append(termById['FBbt:00001760'])
+# DEBUG PART END
+
+#print "TERM", term
+for term in terms:
+    logging.debug("term: %s" % term)
+    if flybaseHack:
+        # try to resolve via part_of first
+        termTargets2 = searchParents(term, [], [relationships[0]])
+        logging.debug("resolving via part_of gave: %s" % str(termTargets2))
+        # and resolve the results via is_a
+        if len(termTargets2)>0:
+            for term2 in termTargets2:
+                termTargets = searchParents(term2, targetIds, [relationships[1]])
+                logging.debug("subsequence resolving via is_a gave %s" % str(termTargets))
+        # otherwise resolve everything using both part_of and is_a
+        else:
+            termTargets = searchParents(term, targetIds, relationships)
+            logging.debug("subsequence resolving via is_a gave %s" % str(termTargets))
+    # normal mode: resolve using all relationships
+    else:
+        termTargets = searchParents(term, targetIds, relationships)
+        logging.debug("cannot resolve via part_of, used is_a, which lead to %s" % str(termTargets))
+
+    termTargetIds = [repr(t) for t in termTargets]
+    if clean and len(termTargetIds)>1:
+        continue
+
+    for termTarget in termTargets:
+        if termTarget.id not in targetIds:
+            continue
+        if outNames:
+            value = termTarget.name
+        else:
+            value = termTarget.id
+            
+        data = [term.id, value]
+        print "\t".join(data)
+

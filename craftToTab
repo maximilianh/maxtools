@@ -1,0 +1,187 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, glob, marshal
+import xml.etree.ElementTree as et
+from os.path import join, basename, isfile
+from collections import defaultdict
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("""usage: %prog [options] type inDirOrFile - convert CRAFT corpus standoff XML to tab-sep format, prints to stdout
+
+type can be "prot" or "gene"
+
+for entrez genes:
+    requires geneToSym.tab in the same dir, create it like this:
+    wget ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/gene_info.gz -O - | gunzip | cut -f1,2,3 > geneToSym.tab
+    cat geneToSym.tab | gawk '($1=="9606")' > geneToSym.9606.tab
+    also requires homologene.data:
+    wget ftp://ftp.ncbi.nih.gov/pub/HomoloGene/current/homologene.data
+
+for proteins:
+    requires uniprotmapping.txt:
+    wget ftp://ftp.pir.georgetown.edu/databases/ontology/pro_obo/PRO_mappings/uniprotmapping.txt
+""")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+def convertEntrez(tree, entrezToSymTax, groupToGenes, geneToGroups):
+    mentions = {}
+    for annotEl in tree.findall("annotation"):
+        mentionEl = annotEl.find("mention")
+        instId = mentionEl.attrib["id"]
+        spanEl = annotEl.find("span")
+        start = spanEl.attrib.get("start")
+        end = spanEl.attrib.get("end")
+        spannedText = annotEl.find("spannedText").text
+        mentions[instId] = (start, end, spannedText)
+
+    slotToInstance = {}
+    for classEl in tree.findall("classMention"):
+        instanceId = classEl.attrib.get("id")
+        slotId = classEl.find("hasSlotMention").attrib.get("id")
+        slotToInstance[slotId] = instanceId
+        
+    for slotEl in tree.findall("integerSlotMention"):
+        slotId = slotEl.attrib.get("id")
+        instId = slotToInstance[slotId]
+        start, end, spanText = mentions[instId]
+
+        entrezId = int(slotEl.find("integerSlotMentionValue").attrib.get("value"))
+        sym, taxId = entrezToSymTax.get(entrezId, ("VALID_GENE?", "VALID_GENE?"))
+        homoloGroup = geneToGroups.get(entrezId, None)
+        humanGeneIdStr, humanSymStr = "Unknown", "Unknown"
+        if homoloGroup!=None:
+            humanGeneIds = groupToGenes[homoloGroup].get(9606, ["NO_HOMOLOG"])
+            humanSyms = [entrezToSymTax.get(hGene, ("VALID_HUMAN_GENE?", 0))[0] for hGene in humanGeneIds]
+            humanGeneIds = [str(x) for x in humanGeneIds]
+            humanGeneIdStr = "|".join(humanGeneIds)
+            humanSymStr = "|".join(humanSyms)
+        row = [ pmid, entrezId, sym, taxId, humanGeneIdStr, humanSymStr, \
+            spanText.encode("utf8"), start, end]
+        row = [str(x) for x in row]
+        print "\t".join(row)
+    
+def convertProt(tree, protToUp, upToEntrezList, entrezToSymTax):
+    #   <classMention id="PRO_Instance_30000">
+    #     <mentionClass id="PR:000004918">(PR) carbonic anhydrase 2 ({carbonic anhydrase C, CA-II, carbonate dehydratase II, carbonic anhydrase II}{CAC, CA2, Car2})</mentionClass>
+    #   </classMention>
+    classToProtOnt = {}
+    for classEl in tree.findall("classMention"):
+        classId = classEl.attrib.get("id")
+        protOntId = classEl.find("mentionClass").attrib.get("id")
+        classToProtOnt[classId] = protOntId
+
+    #   <annotation>
+    #   <mention id="PRO_Instance_30000" />
+    #   <annotator id="PRO_Instance_400000">CCP Colorado Computational Pharmacology</annotator>
+    #   <span start="807" end="828" />
+    #   <spannedText>carbonic anhydrase II</spannedText>
+    #   </annotation>
+    for annotEl in tree.findall("annotation"):
+        mentionEl = annotEl.find("mention")
+        mentionId = mentionEl.attrib["id"]
+        spanEl = annotEl.find("span")
+        start = spanEl.attrib.get("start")
+        end = spanEl.attrib.get("end")
+        spannedText = annotEl.find("spannedText").text.encode("utf8")
+        protOntId = classToProtOnt[mentionId]
+        #print protOntId
+        upIds = protToUp[protOntId]
+        for upId in upIds:
+            if not upId in upToEntrezList:
+                continue
+            entrezIds = upToEntrezList[upId]
+            for entrezId in entrezIds:
+                sym, taxId = entrezToSymTax.get(int(entrezId), ("UNKNOWN_SYMBOL", 0))
+                row = [pmid, entrezId, sym, protOntId, upId, spannedText, start, end]
+                row = [str(x) for x in row]
+                print "\t".join(row)
+    
+def parseEntrez(fname):
+    # parse entrez gene info: taxon and symbol for each gene
+    logging.info("Parsing entrez genes")
+    entrezToSymTax = {}
+    for line in open(fname):
+        if line.startswith("#"):
+            continue
+        tax, gene, sym = line.rstrip("\n").split("\t")
+        entrezToSymTax[int(gene)] = (sym, int(tax))
+    return entrezToSymTax
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+dataType, inDir = args
+
+if dataType=="gene":
+    entrezToSymTax = parseEntrez("geneToSym.tab")
+
+    logging.info("Parsing homologene")
+    # parse homologene info
+    # like this: 
+    # 3       9606    34      ACADM   187960098       NP_001120800.1
+    geneToGroups = dict()
+    groupToGenes = defaultdict(dict)
+    for line in open("homologene.data"):
+        if line.startswith("#"):
+            continue
+        group, taxonId, geneId, symbol, protGi, protAcc = line.rstrip("\n").split("\t")
+        if taxonId not in ['9606', '10090']:
+            continue
+        group, geneId, taxonId = int(group), int(geneId), int(taxonId)
+        geneToGroups[geneId] = group
+        groupToGenes[group].setdefault(taxonId, []).append(geneId)
+
+
+    headers = ["pmid", "geneId", "sym", "taxonId", "humanGenes", "humanSyms", "text", "start", "end"]
+
+elif dataType=="prot":
+    # example lines:
+    # PR:000000049    UniProtKB:Q62312-1
+    # PR:000000050    UniProtKB_VAR:VAR_022351
+    entrezToSymTax = parseEntrez("geneToSym.9606.tab")
+
+    protToUp = defaultdict(list)
+    logging.info("Parsing protein ontology -> uniprot mapping")
+    for line in open("uniprotmapping.txt"):
+        protId, upId = line.rstrip("\n").split("\t")
+        if "_VAR" in upId:
+            continue
+        #protId = protId.split(":")[1]
+        upId = upId.split(":")[1]
+        protToUp[protId].append(upId)
+    # parse up -> entrez gene
+    _pubsDir = "/hive/data/inside/pubs"
+    geneDataDir = _pubsDir+"/geneData"
+    GENEDATADIR=geneDataDir
+    fname = join(GENEDATADIR, "uniprot.tab.marshal")
+    logging.info("Loading %s" % fname)
+    data = marshal.load(open(fname))[9606]
+    upToEntrezList = data["upToEntrez"]
+    headers = ["pmid", "geneId", "sym", "protOntId", "uniprotId", "text", "start", "end"]
+
+print "\t".join(headers)
+
+if isfile(inDir):
+    fnames = [inDir]
+else:
+    fnames = glob.glob(join(inDir, "*.xml"))
+
+for fname in fnames:
+    pmid = basename(fname).split(".")[0]
+    tree = et.parse(fname)
+    root = tree.getroot()
+    logging.debug("processing %s" % pmid)
+    if dataType=="gene":
+        convertEntrez(tree, entrezToSymTax, groupToGenes, geneToGroups)
+    elif dataType=="prot":
+        convertProt(tree, protToUp, upToEntrezList, entrezToSymTax)

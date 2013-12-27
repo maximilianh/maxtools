@@ -1,0 +1,65 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import logging
+import tabfile, maxTables
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] replaceFile columnIndexOrName tableFile - replace values in a column with values from a 2nd <oldVal>tab<newVal>-file") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("", "--headers", dest="headers", action="store_true", help="use headers in tabfile", default=False) 
+parser.add_option("", "--inverse", dest="inverse", action="store_true", help="inverse key, value columns order") 
+#parser.add_option("", "--integers", dest="integers", action="store_true", help="assume that replacement values are all integers and use an array for the replacement (a lot faster)") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+headers = options.headers
+inverse = options.inverse
+
+replaceFilename, field, tableFilename = args
+logging.info("Reading replace values...\n")
+replaceValues = maxTables.parseDict(replaceFilename, inverse=options.inverse)
+
+tableFile = maxTables.openFile(tableFilename)
+if not headers:
+    fileType="numColumns"
+else:
+    fileType=None
+tp = maxTables.TableParser(fileObj=tableFile, fileType=fileType)
+
+
+if field.isdigit():
+    field="col"+field
+
+lineNo = 0
+for row in tp.generateRows():
+    key = row._asdict().get(field, None)
+    if key==None:
+        logging.error("field named %s not found in headers %s" % (field, row))
+        exit(1)
+
+    if key in replaceValues:
+        replaceValue = replaceValues[key]
+    else:
+        logging.warn("line %d: %s not found in replaceFile" % (lineNo, key))
+        continue
+
+    replDict = {}
+    replDict[field]=replaceValue
+    row = row._replace(**replDict)
+    print "\t".join(row)
+    lineNo+=1

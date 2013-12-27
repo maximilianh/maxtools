@@ -1,0 +1,47 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import tabfile
+import random
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] input AVG COUNT output - monte-carle trials to determine how probable an average is when randomly selecting COUNT objects, repeated n times (see options)") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+parser.add_option("-n", "--count", dest="count", action="store", type="int", help="how many trials to run", default=100) 
+parser.add_option("-f", "--field", dest="field", action="store", type="int", help="if tab-seperated: which field (zero-based)", default=0) 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename, minAvg, selectCount, output = args
+minAvg = int(minAvg)
+selectCount = int(selectCount)
+field = options.field
+count = options.count
+
+stderr.write("Reading lst file...\n")
+values = tabfile.slurplist(filename, check=True, field=field )
+values = [int(x) for x in values]
+success = 0
+
+stderr.write("running randomizations...\n")
+for i in range(0, count):
+    rndList = random.sample(values, selectCount)
+    avg = sum(rndList) / selectCount
+    print avg
+    if avg >= minAvg:
+	success+=1
+
+if output!="stdout":
+    out = open(output, "w")
+else:
+    out = stdout
+
+

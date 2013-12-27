@@ -1,0 +1,6 @@
+#!/bin/bash
+wget --user=datamining --password='$8Xguppy' ftp://ftp.biomedcentral.com/articles.zip
+mv articles.zip files
+cd files
+unzip articles.zip
+cd ..

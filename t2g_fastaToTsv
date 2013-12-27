@@ -1,0 +1,53 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] infile outfile - convert fasta file to tsv file with fields pmcId,seqId,seq,raw") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+infile, outfile = args
+
+infh = open(infile)
+outfh = open(outfile, "w")
+
+
+i=0
+maxSeqLen =0
+pmcId=None
+for l in infh:
+    l = l.strip()
+    if l.startswith(">"):
+        if pmcId!=None:
+            i+=1
+            seq = "".join(seqLines)
+            data = [pmcId, seqId, seq, raw]
+            maxSeqLen = max(maxSeqLen, len(seq))
+            outfh.write("%s\n" % "\t".join(data))
+        
+        seqLines = []
+        fs = l.strip(">").split("=")
+        raw = fs[-1]
+        pmcFs = fs[0].split(" ")[0].split("|")
+        if "PMC" not in pmcFs[0]:
+            pmcId=None # ignore this entry
+            continue
+        pmcId = pmcFs[0].strip("PMC")
+        seqId = pmcFs[1]
+    else:
+        seqLines.append(l)
+
+stderr.write("wrote %d records\n" % i)
+stderr.write("maximum sequence length = %d\n" % maxSeqLen)

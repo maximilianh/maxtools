@@ -1,0 +1,110 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import wordParser
+import tabfile
+import html
+import cgi
+import cgitb
+import bed
+from regionView import RegionView
+
+CGI=False
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] wordFile - convert word to bed file using some filters") 
+
+parser.add_option("-t", "--targetGenes", dest="targetGenes", action="store", help="targetGenes", default=None) 
+parser.add_option("-d", "--flankType", dest="flankType", action="store", type="int", help="get genes for a match: 0=only downstream gene, 1=closest gene, 2=both flanking genes, default %default", default=2) 
+parser.add_option("", "--maxDist", dest="maxDist", action="store", type="int", help="only use genes that are located closer than a certain distance to the conserved block", default=3000000000) 
+#parser.add_option("", "--singleBeds", dest="singleBeds", action="store_true", help="output one feature per individual motif match") 
+parser.add_option("-r", "--rsat", dest="rsatFormat", action="store_true", help="output in format for rsat feature-map") 
+parser.add_option("", "--rsatFilter", dest="rsatFilter", action="store", help="output only certain words for rsat-filter, comma separated list of motifs") 
+(options, args) = parser.parse_args()
+
+# ==== SUBMODULE =====
+# ==== FUNCTIONs =====
+def debug(msg):
+    if not CGI:
+        stderr.write(msg)
+    return
+
+# ----------- MAIN --------------
+# parse options
+targetGeneFile = options.targetGenes
+flankType=options.flankType
+maxDist = options.maxDist
+wordFile=args[0]
+rsatFormat = options.rsatFormat
+rsatFilter = options.rsatFilter
+
+targetGenes=tabfile.slurplist(targetGeneFile)
+
+debug("Reading words...\n")
+if wordFile!="stdin":
+    f = open(wordFile, "r")
+else:
+    f = stdin
+
+motifs = wordParser.readMotifs(f)
+
+count=0
+totalScore =0
+totalLen = 0
+for b in wordParser.readBlocks(f):
+    flankGenes, intronic = b.getGenes(flankType, maxDist)
+    totalScore += b.score
+    totalLen += (int(b.end)-int(b.start))
+
+    if targetGenes:
+        found=False
+        for g in flankGenes:
+            if g in targetGenes:
+                found=True
+        if not found:
+            continue
+
+    count +=1
+    if not rsatFormat:
+        feat = b.getBedFeature()
+        feat.name+="|"+"|".join(flankGenes)
+        print feat
+        
+
+    else:
+        # header
+        data = [b.chrom, "", "SEQ_END", "DR", str(0), str(0),"-", str(0.0)]
+        print "\t".join(data)
+        size = int(b.end) - int(b.start)
+        #data = [b.chrom, "", "SEQ_START", "DR", str(-1*size), str(-1*size),"-", str(0.0)]
+        data = [b.chrom, "", "SEQ_START", "DR", str(size), str(size),"-", str(0.0)]
+        print "\t".join(data)
+
+        # features
+        for w in b.words:
+            for ft in b.getBeds(w):
+                if ft.strand=="+":
+                    strand="D"
+                else:
+                    strand="R"
+                #data = [ft.chrom, "", ft.name, strand, str(-1*ft.start), str(-1*ft.end), ft.name, str(ft.score)]
+                data = [ft.chrom, "", ft.name, strand, str(ft.start), str(ft.end), ft.name, str(ft.score)]
+                print "\t".join(data)
+
+    #fts.append(b.getBedFeature())
+    #if b.wordsFound(words, winSize):
+        #feat = b.getCoverFeature()
+        #feat.block = b
+        #feat.flankGenes = flankGenes
+        #beds.append(feat)
+        #for w in words:
+            #for f in b.getBeds(w):
+                #motifBeds.append(f)
+    
+#print fts
+
+debug("Total length of blocks: %s\n" % (totalLen))
+debug("Total score of blocks: %s\n" % (totalScore))
+debug("Created %d features.\n" % (count))
+

@@ -1,0 +1,111 @@
+#!/usr/bin/python
+
+from sys import *
+from optparse import OptionParser
+import glob
+import os.path
+import tabfile
+import util
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] inBlastFileDir inGenomeToTaxId outFile - convert blast m8 output to format for text2genome/mysql, transforming genome names to taxon ids on the way, BlastHit output table format is (pmcId, genomeId, seqId, chrom, start, end, score)") 
+
+#parser.add_option("", "--useExisting", dest="useExisting", action="store_true", help="do not overwrite existing genomeToTaxFile, but parse it instead and use the genome ids from it") 
+(options, args) = parser.parse_args()
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+blastDirs = args[0:2]
+genomeToTaxFile = args[-2]
+outFile = args[-1]
+
+# prep output file
+outfh = open(outFile, "w")
+orgToNum = {}
+#descToNum = {}
+
+print "Reading genome -> number table from %s" % genomeToTaxFile
+print "expected input fields are is: (GenomeAsText, genomeId)"
+print 
+
+# read genome -> taxid map (use description as alternative link, originally needed for NCBI genomes that have two names)
+for l in open(genomeToTaxFile):
+    if l.startswith("#"):
+        continue
+    fs = l.strip().split("\t")
+    genome, num = fs[0:3]
+    num = int(num)
+    genome=genome.lower().replace(" ", "_")
+    orgToNum[genome]=num
+
+dropFileCount=0
+lineCount=0
+finishedTaxons = set()
+lastDir = None
+
+for blastDir in blastDirs:
+    files = util.findSubdirFiles(blastDir, ".blast")
+
+    # convert blast files
+    for fname in files:
+        # convert organism to taxid, skip if not possible
+        dirname = os.path.dirname(fname)
+        org = os.path.basename(dirname)
+        org = org.lower()
+
+        if org in orgToNum:
+            orgNum = orgToNum[org]
+        else:
+            # try to find any organism from genome list in filename
+            found = False
+            for dbOrg in orgToNum:
+                if dbOrg.replace(" ", "_").lower() in fname.lower():
+                    orgNum = orgToNum[dbOrg]
+                    print "Found orgName %s in filename %s, using organism id %s" % (dbOrg, fname, str(orgNum))
+                    found=True
+                    break
+
+            if not found:
+                print("warning: could not resolve filename %s to taxid, dropping this file (recognized organism %s)" % (fname, org))
+                dropFileCount+=1
+                continue
+
+        # check if not already processed AND in different directory (blast creates several indices per directory), skip if yes
+        if orgNum in finishedTaxons and dirname!=lastDir:
+            print("warning: already processed this taxon id %d, skipping input file %s)" % (orgNum, fname))
+            continue
+        finishedTaxons.add(orgNum)
+        lastDir = dirname
+
+        # convert lines
+        f = open(fname, "r")
+        # example
+        # 11495631        chr1    100.00  23      0       0       1       23      25500772        25500750        2e-05   46.1
+        print "Reading %s, writing hits to %s"%(fname,outFile)
+        for l in f:
+            lineCount+=1
+            # parse blast line
+            fs = l.strip().split("\t")
+            srcId, trgId, perc, len, dummy, dummy, dummy, len, trgStart, trgEnd, eVal, score = fs
+            trgEnd = int(trgEnd)
+            trgStart = int(trgStart)
+            if trgEnd < trgStart:
+                trgStart, trgEnd = trgEnd, trgStart
+
+
+            fs = srcId.split("|")
+            srcId = fs[0]
+            srcSeq = fs[1]
+            pmcId = srcId.replace("PMC", "")
+            pmcId = pmcId.replace(".txt", "")
+            pmcId = pmcId.replace(".pdf", "")
+            data = [pmcId, str(orgNum), srcSeq, trgId, str(trgStart), str(trgEnd), score, perc]
+            outfh.write("\t".join(data)+"\n")
+
+print "BlastHit output table format is (pmcId, genomeId, seqId, chrom, start, end, score, percentId)"
+print "blastConvert %s: blast files dropped because of unresolvable species name %d, filesDropped=%d" % (outFile, dropFileCount, dropFileCount)
+print "blastConvert %s: processed %d blast matches, blastMatches=%d" % (outFile, lineCount, lineCount)
+

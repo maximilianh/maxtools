@@ -1,0 +1,27 @@
+#!/usr/bin/env python2.4
+
+import os, shutil, zipfile, sys
+from optparse import OptionParser
+import Fasta
+
+parser = OptionParser("usage: %prog [options] filename - extract gatc zipfile, reformat id lines and concat to stdout ") 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+(options, args) = parser.parse_args()
+if args==[]: 
+    parser.print_help()
+    sys.exit(1)
+
+# ----------- MAIN --------------
+
+zipname = args[0]
+zip = zipfile.ZipFile(zipname)
+for filename in zip.namelist():
+    if filename.endswith(".fas"):
+        fa = Fasta.readFastaLines(zip.read(filename).split("\n"))
+        seq0 = fa.values()[0]
+        id = seq0.fullid.split()[3]
+        nucl = seq0.nucl
+        print ">"+id
+        print nucl
+
+    

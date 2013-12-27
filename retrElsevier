@@ -1,0 +1,133 @@
+#!/usr/bin/env python
+
+# http://kds.elsevier.com/content/journal/v1/opensearch?searchTerms=0305-4403&searchOffset=1101&count=100&apikey=13069199417075387188
+
+from sys import *
+from optparse import OptionParser
+import maxTables
+import logging, urllib, namedtuple
+
+logger = logging.getLogger("retrElsevier")
+logging.basicConfig(level=logging.INFO)
+
+import maxXml
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] key databaseConnectionString - download all of Elsevier and store in database") 
+
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+def getMetadataUrl(key, journal=None, volume=None, issue=None):
+    """ meta page url from KDS (journals, volumes, issues, articles) with the given ID, return as string """
+    url = "http://kds.elsevier.com/metadata/journal/v1"
+    if journal:
+        url += "/"+journal
+    if volume:
+        url += "/"+volume
+    if issue:
+        url += "/"+issue
+    url += "?apikey="+key
+    return url
+
+fields = ["title", "url", "issn", "id"]
+JournalRec = namedtuple.namedtuple("ElsevierMetadata", fields)
+
+def parseMetadata(key, url, dataType, addKey=True):
+    if addKey:
+        url = url+"&apikey="+key
+    logger.info("Retrieving %s data from %s" % (dataType, url))
+    tagsToExtract = ["title", "id", "issn", "id"]
+    root = maxXml.openXml(url, clean=True, stopWords=["EWS_PERSISTENCE_ERROR"])
+    if root==None:
+        logger.warn("Got error message, skipping this entry")
+        return []
+
+    records = []
+    for entry in root.findall("entry"):
+        data = []
+        for tag in tagsToExtract:
+            value = entry.find(tag).text
+            #if tag=="id":
+                #value = value.split("/")[-1]
+            data.append(value)
+        records.append(JournalRec(*data))
+    return records
+
+def saveArticle(db, doi, xml):
+    maxTables.writeRow(db, "elsevier", {"doi":doi, "xml":xml})
+
+def doiExists(db, doi):
+    cur = db.cursor()
+    rows = cur.execute("select count(*) from elsevier where doi=%s;", doi);
+    rows = cur.fetchall()
+    result = rows[0][0]
+    exists = (result!=0)
+    return exists
+
+def issnExists(db, doi):
+    cur = db.cursor()
+    rows = cur.execute("select count(*) from issnDone where issn=%s;", doi);
+    rows = cur.fetchall()
+    result = rows[0][0]
+    exists = (result!=0)
+    return exists
+
+def markIssnDone(db, issn):
+    cur = db.cursor()
+    rows = cur.execute("insert into issnDone values(%s)", issn);
+
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+key = "13069199417075387188"
+db = maxTables.sqlConnection("localhost,max,testqwe,Articles")
+
+inputFile =  args[0]
+
+for line in open(inputFile):
+    issn = line.strip()
+    if issnExists(db, issn):
+        logger.info("issn %s already in database, skipping" % issn)
+        continue
+
+    issnStripped = issn.replace("-","")
+    searchUrl = "http://kds.elsevier.com/content/journal/v1/opensearch?searchTerms=%s&searchOffset=1&count=100000" % (issnStripped)
+    articleData = parseMetadata(key, searchUrl, "fulltextSearch")
+    for article in articleData:
+        # http://kds.elsevier.com/content/journal/v1/doi;10.1016/j.actbio.2009.10.006/format.full.xml
+        doi = article.id.replace("http://kds.elsevier.com/content/journal/v1/", "").replace(";",":").replace("/format.full.xml","")
+        if doiExists(db, doi):
+            logger.info("article %s already in database, skipping" % doi)
+            continue
+        url = article.id+"?apikey="+key
+        logger.info("Retrieving article %s" % doi)
+        articleXml = urllib.urlopen(url).read()
+        logger.info("Saving to db")
+        saveArticle(db, doi, articleXml)
+    markIssnDone(db, issn)
+
+# not possible, KDS alpha is broken
+#key, dbConnStr = args
+#url = "file:/tmp/journals.xml"
+#print lines
+#journalsXml = getMetadataUrl(key)
+#url = "file:/tmp/issues.xml"
+#journals = parseMetadata(key, url, "journals", addKey=False)
+#url = getMetadataUrl(key)
+#url = "http://kds.elsevier.com/metadata/journal/v1"
+#url = "file:./testData/journals.xml"
+
+#for journalData in journals:
+    #volumes = parseMetadata(key, journalData.url, "volumes")
+    #for volData in reversed(volumes):
+        #issues = parseMetadata(key, volData.url, "issues")
+        #for issueData in issues:
+            #articles = parseMetadata(key, issueData.url, "articles")
+            #for articleData in articles:
+                #article = urllib.urlopen(articleData.url).read()
+                #print article
+        

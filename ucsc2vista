@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+
+
+from sys import *
+import sys
+from re import *
+
+if len(argv)==1:
+  print "converts ucsc bed extract to vista-acceptable gff file, everything between start-stop"
+  print " syntax: "
+  print " ucsc2vista <filename> <startpos> <endpos>"
+  exit() 
+
+f = open(argv[1], 'r')
+startpos = int(argv[2])
+endpos = int(argv[3])
+
+lines = f.readlines()
+
+# remove header
+stop=0
+while not stop:
+  stop=lines.pop(0).startswith("track")
+
+#convert lines
+for line in lines:
+     if line.strip()=="":
+       continue
+     fields = line.split()
+     bedstart = int(fields[1])
+     bedend =  int(fields[2])
+     name = fields[3]
+     strand = fields[5]
+     if bedstart-startpos < 0:
+       continue
+     if bedend > endpos:
+       continue
+     if strand.strip() == "+":
+       vistastrand=">"
+     else:
+       vistastrand="<"
+
+     print vistastrand,(bedstart-startpos)," ",(bedend-startpos)," ",name
+

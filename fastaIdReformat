@@ -1,0 +1,35 @@
+#!/usr/bin/env python
+
+from sys import *
+from optparse import OptionParser
+import os
+
+import Fasta # Max's libs
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = OptionParser("usage: %prog [options] format faFiles - reformat ids of fasta file, stdin ok, format is one of: ensTrans (will put gene identifier into id, separated by |") 
+
+# used by: t2g
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+#parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+parser.add_option("-i", "--inplace", dest="inplace", action="store_true", help="do conversion in place, move to tmp-file first, then rename") 
+(options, args) = parser.parse_args()
+
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+inplace = options.inplace
+
+outFormat = args[0]
+faFiles = args[1:]
+
+of = stdout
+
+for f in faFiles:
+    Fasta.fastaIdReformat(outFormat, f, of, inplace)

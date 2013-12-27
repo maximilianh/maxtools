@@ -1,0 +1,26 @@
+#!/bin/bash
+
+if [ "$1" = "-h" -o "$#" = "0" ]; then 
+    echo 'mafDownloadFlanking: uses fastaGetUCSC to download the sequences contained in a maf file and (default) 500 basepairs up and downstream so you can realign the sequences with something else.'
+    echo 'usage: cat test.maf | mafDownloadFlanking 500'
+    exit 1
+fi
+
+flank=${1-500}
+
+tr -s ' ' | tr '.' ' ' | grep -v = | cut -d' ' -f 2- | gawk '{
+clen=$6;
+fraglen=$4;
+relstart=$3;
+if ($5=="+") {
+    start=relstart;
+    end=relstart+fraglen;
+    }
+else {
+    start=clen-relstart-fraglen+1;
+    end=clen-relstart;
+} 
+
+print "Getting seq for "$1,$2,start"-"end > "/dev/stderr"; 
+system ("fastaFromUCSC "$2" "start-'$flank'" "end+'$flank'" "$1" "$5)}'
+
