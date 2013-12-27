@@ -1,0 +1,104 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.6	//
+Block	MultiAlign2Block.py	/^class Block(list):$/;"	c
+FastaSeq	Fasta.py	/^class FastaSeq:$/;"	c
+Feature	bed.py	/^class Feature:$/;"	c
+Features	bed.py	/^class Features(list):$/;"	c
+SeqWindow	SeqWindow.py	/^class SeqWindow:$/;"	c
+SubSeq	SubSeq.py	/^class SubSeq:$/;"	c
+WindowIterator	MultiAlign2Block.py	/^class WindowIterator:$/;"	c
+__init__	Fasta.py	/^    def __init__(self, id, seq):$/;"	m	class:FastaSeq
+__init__	MultiAlign2Block.py	/^    def __init__(self, seq, winsize):$/;"	m	class:WindowIterator
+__init__	PWM.py	/^   def __init__(self):$/;"	m	class:pwm
+__init__	PWMslow.py	/^   def __init__(self):$/;"	m	class:pwm
+__init__	SeqWindow.py	/^    def __init__(self, seq, windowSize):$/;"	m	class:SeqWindow
+__init__	SubSeq.py	/^    def __init__(self, seq, start, end, strand):$/;"	m	class:SubSeq
+__init__	bed.py	/^    def __init__(self, line):$/;"	m	class:Feature
+__init__	bed.py	/^    def __init__(self,seqid="",start=0,end=0,name="",score=0.0,strand="+"):$/;"	m	class:Feature
+__iter__	MultiAlign2Block.py	/^    def __iter__(self):$/;"	m	class:WindowIterator	file:
+__len__	Fasta.py	/^    def __len__(self):$/;"	m	class:FastaSeq	file:
+__len__	PWM.py	/^   def __len__(self):$/;"	m	class:pwm	file:
+__len__	PWMslow.py	/^   def __len__(self):$/;"	m	class:pwm	file:
+__len__	SubSeq.py	/^    def __len__(self):$/;"	m	class:SubSeq	file:
+__repr__	Fasta.py	/^    def __repr__(self):$/;"	m	class:FastaSeq	file:
+__repr__	MultiAlign2Block.py	/^    def __repr__(self):$/;"	m	class:Block	file:
+__repr__	PWM.py	/^    def __repr__(self):$/;"	m	class:pwms	file:
+__repr__	PWM.py	/^   def __repr__(self):$/;"	m	class:pwm	file:
+__repr__	PWMslow.py	/^    def __repr__(self):$/;"	m	class:pwms	file:
+__repr__	PWMslow.py	/^   def __repr__(self):$/;"	m	class:pwm	file:
+__repr__	SubSeq.py	/^    def __repr__(self):$/;"	m	class:SubSeq	file:
+__repr__	bed.py	/^    def __repr__(self):$/;"	m	class:Feature	file:
+__repr__	bed.py	/^    def __repr__(self):$/;"	m	class:Features	file:
+__sort__	bed.py	/^    def __sort__(self):$/;"	m	class:Features	file:
+_calcCoreScore	PWM.py	/^   def _calcCoreScore(self,nucl):$/;"	m	class:pwm
+_calcCoreScoreLookup	PWM.py	/^   def _calcCoreScoreLookup(self):$/;"	m	class:pwm
+_calcMatchIC	PWM.py	/^   def _calcMatchIC(self):$/;"	m	class:pwm
+_calcMatchIC	PWMslow.py	/^   def _calcMatchIC(self):$/;"	m	class:pwm
+_match_calcminmax	PWM.py	/^   def _match_calcminmax(self, positions,cons):$/;"	m	class:pwm
+_match_calcminmax	PWMslow.py	/^   def _match_calcminmax(self, positions,cons):$/;"	m	class:pwm
+_mostConserved	PWM.py	/^   def _mostConserved(self, x):$/;"	m	class:pwm
+_mostConserved	PWMslow.py	/^   def _mostConserved(self, x):$/;"	m	class:pwm
+_pseudocounts	PWM.py	/^   def _pseudocounts(self):$/;"	m	class:pwm
+_pseudocounts	PWMslow.py	/^   def _pseudocounts(self):$/;"	m	class:pwm
+_regularize	PWM.py	/^   def _regularize(self):$/;"	m	class:pwm
+_regularize	PWMslow.py	/^   def _regularize(self):$/;"	m	class:pwm
+cmpFeatures	bed.py	/^def cmpFeatures(f1, f2):$/;"	f
+conservedPos	SubSeq.py	/^    def conservedPos(self):$/;"	m	class:SubSeq
+coordOverlap	bed.py	/^def coordOverlap(start1, end1, start2, end2):$/;"	f
+getAbsEnd	SubSeq.py	/^    def getAbsEnd(self):$/;"	m	class:SubSeq
+getAbsStart	SubSeq.py	/^    def getAbsStart(self):$/;"	m	class:SubSeq
+getAbsUngapEnd	SubSeq.py	/^    def getAbsUngapEnd(self):$/;"	m	class:SubSeq
+getAbsUngapStart	SubSeq.py	/^    def getAbsUngapStart(self):$/;"	m	class:SubSeq
+getBedLine	MultiAlign2Block.py	/^    def getBedLine(self, org):$/;"	m	class:Block
+getBedLine	SubSeq.py	/^    def getBedLine(self, genomeCoords):$/;"	m	class:SubSeq
+getBlockPos	MultiAlign2Block.py	/^    def getBlockPos(self, seqid):$/;"	m	class:Block
+getChrom	Fasta.py	/^    def getChrom(self):$/;"	m	class:FastaSeq
+getChrom	SubSeq.py	/^    def getChrom(self):$/;"	m	class:SubSeq
+getEnd	Fasta.py	/^    def getEnd(self):$/;"	m	class:FastaSeq
+getID	Fasta.py	/^    def getID(self):$/;"	m	class:FastaSeq
+getNucl	Fasta.py	/^    def getNucl(self):$/;"	m	class:FastaSeq
+getNucl	SubSeq.py	/^    def getNucl(self):$/;"	m	class:SubSeq
+getRealIC	PWM.py	/^   def getRealIC(self):$/;"	m	class:pwm
+getStart	Fasta.py	/^    def getStart(self):$/;"	m	class:FastaSeq
+getUngapLength	SubSeq.py	/^    def getUngapLength(self):$/;"	m	class:SubSeq
+getUngapNucl	Fasta.py	/^    def getUngapNucl(self):$/;"	m	class:FastaSeq
+getUngapNucl	SubSeq.py	/^    def getUngapNucl(self):$/;"	m	class:SubSeq
+includes	bed.py	/^    def includes(self, f):$/;"	m	class:Feature
+includes	bed.py	/^    def includes(self, f, tol):$/;"	m	class:Feature
+initWindow	SeqWindow.py	/^    def initWindow(self, w):$/;"	m	class:SeqWindow
+isInCore	PWM.py	/^   def isInCore(self, pos):$/;"	m	class:pwm
+isInCore	PWMslow.py	/^   def isInCore(self, pos):$/;"	m	class:pwm
+log2	PWM.py	/^   def log2(self, x):$/;"	m	class:pwm
+match	PWM.py	/^   def match(self, subseq, corecutoff, cutoff):$/;"	m	class:pwm
+match	PWMslow.py	/^   def match(self, subseq, corecutoff, cutoff):$/;"	m	class:pwm
+next	MultiAlign2Block.py	/^    def next(self):$/;"	m	class:WindowIterator
+nucl	SeqWindow.py	/^    def nucl(self):$/;"	m	class:SeqWindow
+overlap	bed.py	/^def overlap(f1, f2):$/;"	f
+parseBedFile	bed.py	/^def parseBedFile(lines):$/;"	f
+parseBedFilename	bed.py	/^def parseBedFilename(fname):$/;"	f
+parseBedLine	bed.py	/^def parseBedLine(line):$/;"	f
+prepareScoring	PWM.py	/^   def prepareScoring(self):$/;"	m	class:pwm
+prepareScoring	PWMslow.py	/^   def prepareScoring(self):$/;"	m	class:pwm
+pwm	PWM.py	/^class pwm:$/;"	c
+pwm	PWMslow.py	/^class pwm:$/;"	c
+pwms	PWM.py	/^class pwms(dict):$/;"	c
+pwms	PWMslow.py	/^class pwms(dict):$/;"	c
+readFasta	Fasta.py	/^def readFasta(filename):$/;"	f
+readFastaAsList	Fasta.py	/^def readFastaAsList(filename):$/;"	f
+readMaf	Fasta.py	/^def readMaf(filename):$/;"	f
+readMafNext	Fasta.py	/^def readMafNext(file):$/;"	f
+readMatrices	PWM.py	/^def readMatrices(filename):$/;"	f
+readMatrices	PWMslow.py	/^def readMatrices(filename):$/;"	f
+revcomp	SubSeq.py	/^def revcomp(seq):$/;"	f
+score	PWM.py	/^   def score(self, nucl, corecutoff):$/;"	m	class:pwm
+score	PWMslow.py	/^   def score(self, nucl, corecutoff):$/;"	m	class:pwm
+searchNonGap	SeqWindow.py	/^    def searchNonGap(self, pos):$/;"	m	class:SeqWindow
+searchSeq	MultiAlign2Block.py	/^    def searchSeq(self, seqid):$/;"	m	class:Block
+shiftRight	SeqWindow.py	/^    def shiftRight(self):$/;"	m	class:SeqWindow
+sort	bed.py	/^def sort(f1, f2):$/;"	f
+stepUntilXChars	SeqWindow.py	/^    def stepUntilXChars(self, pos, w):$/;"	m	class:SeqWindow
+subseq_generator	WindowIterator.py	/^def subseq_generator(seq, winsize):$/;"	f

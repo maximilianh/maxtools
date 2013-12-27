@@ -1,0 +1,59 @@
+<!--: spam
+Content-Type: text/html
+
+<body bgcolor="#f0f0f8"><font color="#f0f0f8" size="-5"> -->
+<body bgcolor="#f0f0f8"><font color="#f0f0f8" size="-5"> --> -->
+</font> </font> </font> </script> </object> </blockquote> </pre>
+</table> </table> </table> </table> </table> </font> </font> </font><body bgcolor="#f0f0f8">
+<table width="100%" cellspacing=0 cellpadding=2 border=0 summary="heading">
+<tr bgcolor="#6622aa">
+<td valign=bottom>&nbsp;<br>
+<font color="#ffffff" face="helvetica, arial">&nbsp;<br><big><big><strong>NameError</strong></big></big></font></td
+><td align=right valign=bottom
+><font color="#ffffff" face="helvetica, arial">Python 2.4.4: /usr/bin/python<br>Tue May  6 15:33:18 2008</font></td></tr></table>
+    
+<p>A problem occurred in a Python script.  Here is the sequence of
+function calls leading up to the error, in the order they occurred.</p>
+<table width="100%" cellspacing=0 cellpadding=0 border=0>
+<tr><td bgcolor="#d8bbff"><big>&nbsp;</big><a href="file:///home/max/usr/src/pythonlib/test.py">/home/max/usr/src/pythonlib/test.py</a> </td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;&nbsp;&nbsp;2</small>&nbsp;<br>
+</tt></font></td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;&nbsp;&nbsp;3</small>&nbsp;ip&nbsp;=&nbsp;inputProcessor.InputProcessor("ImageSorter",&nbsp;"Generate&nbsp;sorted&nbsp;reference&nbsp;sheets&nbsp;from&nbsp;Ghost/Aniseed&nbsp;in-situ&nbsp;pictures")<br>
+</tt></font></td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;&nbsp;&nbsp;4</small>&nbsp;ip.add_parameter("textdata",&nbsp;"genes",&nbsp;"-g")<br>
+</tt></font></td></tr>
+<tr><td bgcolor="#ffccee"><tt><small>&nbsp;&nbsp;&nbsp;&nbsp;5</small>&nbsp;ip.proc_input()<br>
+</tt></td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;&nbsp;&nbsp;6</small>&nbsp;<br>
+</tt></font></td></tr>
+<tr><td><small><font color="#909090"><strong>ip</strong>&nbsp;= &lt;inputProcessor.InputProcessor instance&gt;, ip.<strong>proc_input</strong>&nbsp;= &lt;bound method InputProcessor.proc_input of &lt;inputProcessor.InputProcessor instance&gt;&gt;</font></small></td></tr></table>
+<table width="100%" cellspacing=0 cellpadding=0 border=0>
+<tr><td bgcolor="#d8bbff"><big>&nbsp;</big><a href="file:///home/max/usr/src/pythonlib/inputProcessor.py">/home/max/usr/src/pythonlib/inputProcessor.py</a> in <strong>proc_input</strong>(self=&lt;inputProcessor.InputProcessor instance&gt;)</td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;129</small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.print_html()<br>
+</tt></font></td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;130</small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else:<br>
+</tt></font></td></tr>
+<tr><td bgcolor="#ffccee"><tt><small>&nbsp;&nbsp;131</small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;len(sys.argv)==0:<br>
+</tt></td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;132</small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parser&nbsp;=&nbsp;self.generate_parser()<br>
+</tt></font></td></tr>
+<tr><td><font color="#909090"><tt><small>&nbsp;&nbsp;133</small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parser.print_help()<br>
+</tt></font></td></tr>
+<tr><td><small><font color="#909090"><em>builtin</em> <strong>len</strong>&nbsp;= &lt;built-in function len&gt;, sys <em>undefined</em></font></small></td></tr></table><p><strong>NameError</strong>: global name 'sys' is not defined
+<br><tt><small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small>&nbsp;</tt>args&nbsp;=
+("global name 'sys' is not defined",)
+
+
+<!-- The above is a description of an error in a Python program, formatted
+     for a Web browser because the 'cgitb' module was enabled.  In case you
+     are not reading this in a Web browser, here is the original traceback:
+
+Traceback (most recent call last):
+  File "test.py", line 5, in ?
+    ip.proc_input()
+  File "/home/max/usr/src/pythonlib/inputProcessor.py", line 131, in proc_input
+    if len(sys.argv)==0:
+NameError: global name 'sys' is not defined
+
+-->
+
