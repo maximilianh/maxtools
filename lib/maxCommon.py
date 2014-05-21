@@ -4,9 +4,11 @@ from types import *
 from os.path import isfile, isdir
 from collections import defaultdict
 
-tmpDirs = []
+tmpDirs = None
 
 def delTemp():
+    if tmpDirs is None:
+        return
     for tmpDir in tmpDirs:
         if tmpDir!=None and isdir(tmpDir):
             logging.info("Deleting dir+subdirs %s" % tmpDir)
@@ -21,6 +23,8 @@ def delTemp():
 def delOnExit(path):
     "make sure that path or file gets deleted upon program exit"
     global tmpDirs
+    if tmpDirs is None:
+        tmpDirs = []
     atexit.register(delTemp)
     tmpDirs.append(path)
 
@@ -430,6 +434,8 @@ class ProgressMeter:
         self.tasksPerMsg = taskCount/stepCount
         self.i=0
         self.quiet = quiet
+        if not sys.stdout.isatty():
+            self.quiet = True
         #print "".join(9*["."])
 
     def taskCompleted(self, count=1):

@@ -1,0 +1,161 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re
+
+sys.path.insert(0, "/cluster/home/max/projects/pubs/tools/lib")
+import geneFinder
+import varFinder
+import maxCommon
+
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - convert the cancer immunity database")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+parser.add_option("-f", "--fasta", dest="fasta", action="store", help="output fasta to this") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+tagRe = re.compile("<[^>]+>")
+supRe = re.compile("<sup>.*</sup>")
+hrefRe = re.compile('href="([^"]+)')
+parenRe = re.compile('\([0-9]+\)')
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+#geneFinder.initData()
+geneFinder.loadMappings()
+#varFinder.loadDb()
+seqs = {}
+for row in maxCommon.iterTsvRows("/hive/data/inside/pubs/parsedDbs/uniprot.9606.tab"):
+    seqs[row.acc] = row.mainSeq
+
+# hla, freq, pep, pos, stimMeth, ref = row
+headers = ["id", "section", "gene", "tumor", "hla", "freq", "pep", "origPep", "pos", "stimMeth", "pmid"]
+print "\t".join(headers)
+
+faFh = None
+if options.fasta:
+    faFh = open(options.fasta, "w")
+
+fnames = args
+
+rows = []
+id = 0
+for fn in fnames:
+    section = fn.split(".")[0]
+    startParse = False
+    row = []
+    for l in open(fn):
+        if "References" in l and "<td" in l:
+            startParse = True
+            continue
+        if "<tr>" in l:
+            if len(row)==0:
+                continue
+            if len(row)==8 or len(row)==7:
+                if len(row)==8:
+                    gene, tumor, hla, freq, pep, pos, stimMeth, ref = row
+                else:
+                    gene, hla, freq, pep, pos, stimMeth, ref = row
+                    tumor = "shared"
+
+                gene = gene.strip()
+                if gene=="":
+                    gene = "UNKNOWN"
+                elif "BCR" in l and "ABL" in l:
+                    gene = "BCR-ABL"
+                elif "MUM-2" in gene:
+                    gene = "MUM2"
+                elif "MUM-1" in gene:
+                    gene = "MUM1"
+                elif geneRef!=None:
+                    gene = geneRef[0].split("=")[1]
+                gene = gene.split("&")[0]
+                #else:
+                    #print row
+                    #assert(False)
+                    #gene = gene.split(">")[2].split("<")[0]
+            elif len(row)==6:
+                hla, freq, pep, pos, stimMeth, ref = row
+            else:
+                print row
+                print len(row)
+                assert(False)
+            hla = hla.replace('---',"")
+            hla = hla.replace('===','')
+            pep = pep.replace('---',"<b>")
+            pep = pep.replace('===',"</b>")
+            pep = pep.replace('<span style="color: #000000;">','')
+
+            #pmid = ref.split()[1].split("/")[-1].replace('"', "")
+            pmid = ""
+            if pmRef!=None:
+                pmid =  pmRef[0].split("/")[-1]
+            if "term" in pmid:
+                pmid = pmid.split("=")[1]
+            faId = "pep%d" % id
+            supRe = re.compile("<sup>.*</sup>")
+            row = [supRe.sub("", r) for r in row]
+            brRe = re.compile("<br />")
+
+            # translate gene to uniprot
+            entrez = geneFinder.symToEntrez.get(gene, None)
+            protIds = geneFinder.entrezToUp.get(entrez, None)
+            origPep = pep
+            if protIds!=None:
+                #print "entrez", entrez, "prot", protIds[0]
+                if protIds!=None:
+                    seq = seqs[protIds[0]]
+                    if pos.strip()!="" and "alt" not in pos and "ORF" not in pos and "intron" not in pos and not "repeated" in pos and not "antisense" in pos and not pos.startswith("-"):
+                        pos = parenRe.sub("", pos)
+                        pos = pos.decode('unicode_escape').encode('ascii','ignore').split()[0].split("(")[0]
+                        #print "pos", repr(pos)
+                        start, end = pos.split("-")
+                        start = int(start)-1
+                        end = int(end)
+                        origPep = seq[start:end]
+
+            hla = hla.strip("-")
+            row = [faId, section, gene, tumor, hla, freq, pep, origPep, pos, stimMeth, pmid]
+            row = [brRe.sub("", r) for r in row]
+            row = [r.strip() for r in row]
+
+            row = [r.decode("utf8", "ignore") for r in row]
+            print ('\t'.join(row))
+            if faFh:
+                seq = origPep.replace("-","").strip().replace("(", "").replace(")", "")
+                if len(seq)!=0:
+                    faFh.write(">%s\n%s\n" % (faId, seq))
+            row = []
+            geneRef = None
+            pmRef = None
+            id += 1
+
+        if startParse:
+            if l.startswith("<td>") or l.startswith("<td "):
+                #row.append(l.strip().replace("<td>", "").replace("</td>",""))
+                l = l.replace('<span style="color: #ff0000;">', '---')
+                l = l.replace('</span>', '===')
+                l = supRe.sub("", l)
+
+                row.append( tagRe.sub("", l) )
+                if "genecards" in l:
+                    m = hrefRe.search(l)
+                    if m != None:
+                        geneRef = m.groups(0)
+                if "pubmed" in l:
+                    m = hrefRe.search(l)
+                    if m != None:
+                        pmRef = m.groups(0)
+
+
+        

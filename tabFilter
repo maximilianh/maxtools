@@ -1,0 +1,54 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] file1(big) column1 file2(small) [column2] - show only lines from file1 that have a value in column1 which appears in column2 in file2. column2 defaults to 0") 
+
+#parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
+#parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
+parser.add_option("", "--noHead", dest="noHead", action="store_true", help="input file1 has no headers") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+def openFile(fname):
+    if fname=="stdin":
+        return sys.stdin
+    else:
+        return open(fname)
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+filename1, column1, filename2 = args
+
+column1 = int(column1)
+
+column2 = 0
+if len(args)>3:
+    column2 = int(args[4])
+
+filterVals = set()
+# parse file2 
+for line in openFile(filename2):
+    val = line.strip("\n").split('\t')[column2]
+    filterVals.add(val)
+
+# iterate over lines in file1
+fh = openFile(filename1)
+if not options.noHead:
+    print fh.readline(),
+
+for line in fh:
+    line = line.strip("\n")
+    fs = line.strip("\n").split('\t')
+    val = fs[column1]
+    if val in filterVals:
+        print line

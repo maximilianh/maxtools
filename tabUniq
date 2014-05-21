@@ -72,8 +72,12 @@ for key, count in values:
         row.append(str(count))
         if options.ratio:
             row.append("%0.3f%%" % (100*float(count)/lineCount))
-        if colIndexLst and options.appendLines:
-            row.append("|".join(fullLines[key]))
+        elif colIndexLst and options.appendLines:
+            row = row.append("|".join(fullLines[key]))
+
+    elif colIndexLst:
+        row = fullLines[key]
+
     if (options.maxCount==None or count < options.maxCount) \
         and (options.minCount==None or count > options.minCount):
         print "\t".join(row)

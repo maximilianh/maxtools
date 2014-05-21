@@ -10,7 +10,7 @@ parser = OptionParser("usage: %prog [options] filename filename ... - sort tab-s
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
-parser.add_option("-k", "--colIndex", dest="colIndex", action="store", type="int", help="index of column to use, default %default", default=0)
+#parser.add_option("-k", "--colIndex", dest="colIndex", action="store", type="int", help="index of column to use, default %default", default=0)
 parser.add_option("-n", "--colName", dest="colName", action="store", help="name of column to use, this implies that the first line of the tab file contains headers", default=None)
 parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="inverse sort order")
 (options, args) = parser.parse_args()
@@ -26,13 +26,14 @@ if args==[]:
     parser.print_help()
     exit(1)
 
-colIndex = options.colIndex
+#colIndex = options.colIndex
 colName = options.colName
 reverse = options.reverse
 
 filenames = args
 values = set()
 
+#headers = open(filenames[0]).readline().rstrip("\n").split("\t")
 
 for filename in filenames:
     if filename == "stdin":
@@ -61,7 +62,8 @@ for filename in filenames:
         line = line.strip("\n")
         line = line.split("\t")
         if len(line)>colIndex:
-            line[colIndex] = float(line[colIndex])
+            #line[colIndex] = float(line[colIndex]) ??
+            line[colIndex] = int(line[colIndex])
             lines.append(line)
         else:
             logging.debug("cannot get column %d from line %s" % (colIndex, line[0]))
