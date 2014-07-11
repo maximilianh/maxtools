@@ -11,7 +11,7 @@ import optparse, logging, sys
 baseLogDir = "/hive/data/inside/wwwstats/RR"
 
 #years = ["2012", "2013"]
-years = ["2013"]
+years = ["2013", "2014"]
 
 # change these for debugging or if need to focus on single servers
 servNames = ["hgw1", "hgw2", "hgw3", "hgw4", "hgw5", "hgw6", "hgw7", "hgw8"]
@@ -364,7 +364,7 @@ parser = optparse.OptionParser("usage: %prog [options] map|reduce - parse apache
 
 # define options
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
-parser.add_option("-c", "--cluster", dest="cluster", action="store", help="cluster to use for mapping step, default %default", default="swarm")
+parser.add_option("-c", "--cluster", dest="cluster", action="store", help="cluster to use for mapping step, default %default", default="ku")
 parser.add_option("", "--runOne", dest="runOne", action="store_true", help="run only one single map job, for debugging")
 (options, args) = parser.parse_args()
 if len(args)==0:

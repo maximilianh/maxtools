@@ -285,6 +285,9 @@ def fastaIdReformat(outFormat, inFileName, of, inplace):
                 # remove Ensembl-Genes prefix
                 trans = trans.replace("EG:", "")
                 id = trans+"|"+gene
+            if outFormat=="strip":
+                id = id.split()[0]
+                id = id.split("#")[0]
             else:
                 stderr.write("error: outFormat %s not recognized\n")
                 exit(1)

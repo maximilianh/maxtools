@@ -3,6 +3,7 @@
 from sys import *
 from optparse import OptionParser
 import Fasta
+from os.path import basename
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = OptionParser("%prog [options] fastafile maf-file : Convert fasta-alignments to maf") 
@@ -11,6 +12,7 @@ parser.add_option("-t", "--type", dest="type", action="store", help='how to pars
 parser.add_option("-d", "--databases", dest="databases", action="store", help='comma-separated list (no spaces!) of genome assemblies or species names, e.g. "ci1,cs1", one for every line in every alignment', metavar="LIST", default="UndefDB1,UndefDB2", type="string") 
 parser.add_option("-s", "--sizeFiles", dest="sizeFiles", action="store", help='comma-separated list (no spaces!) of files that contain sizes of chromosomes, "undef" if you do not have a file for the respective species', metavar="LIST", default="undef,undef", type="string") 
 parser.add_option("", "--oneDb", dest="oneDb", action="store", help='assume that all sequences are from the same genome, this will lead to an invalid .maf file with identical db entries', type="string") 
+parser.add_option("", "--html", dest="html", action="store_true", help='output as html instead of maf') 
 
 # ==== FUNCTIONs =====
 def errorAbort(text):
@@ -94,7 +96,12 @@ def faToMaf(infile, sizefiles, outfile, type, genomes, options):
         of = open(outfile, "w")
     else:
         of = stdout
-    of.write("##maf version=1\n")
+    
+    if options.html:
+        of.write("<html><body><pre>\n")
+    else:
+        of.write("##maf version=1\n")
+
     #of.write("# maf2fasta -t %s -g %s\n" % (type, genomes))
     maxAln = len(genomes)
     if options.oneDb:
@@ -103,8 +110,12 @@ def faToMaf(infile, sizefiles, outfile, type, genomes, options):
     # convert
     while lastline!="":
       i = 0
+
+      if options.html:
+          of.write("<h2>%s</h2>" % basename(infile).split(".")[0])
+      else:
+          of.write("a score=0\n")
       lastline, aln = Fasta.parseFastaUntil(ifh, maxAln, lastline)
-      of.write("a score=0\n")
       for seq in aln:
           chrom, start, end, strand = convFunc(seq.fullid)
           if (not end > start) and i == 0:
@@ -122,10 +133,19 @@ def faToMaf(infile, sizefiles, outfile, type, genomes, options):
           else:
             genome = genomes[i % len(genomes)] + "." + chrom
           
-          of.write("s %8s %10s %7s %13s %10s %s\n" % (genome, start, int(end)-int(start), strand, size, seq.nucl ))
+          if options.html:
+              posStr = "%s:%d-%d (%s)" % (genome,start,end,strand)
+              if genome=="consensus":
+                  of.write("<b>%35s %s</b>\n" % (posStr, seq.nucl))
+              else:
+                  of.write("%30s %s\n" % (posStr, seq.nucl))
+          else:
+              of.write("s %14s %10s %7s %13s %10s %s\n" % (genome, start, int(end)-int(start), strand, size, seq.nucl ))
+
           if not options.oneDb:
               i += 1 
       of.write("\n")
+      of.write("</body></html>\n")
 
 # ----------- MAIN --------------
 

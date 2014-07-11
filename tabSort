@@ -13,6 +13,7 @@ parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show
 #parser.add_option("-k", "--colIndex", dest="colIndex", action="store", type="int", help="index of column to use, default %default", default=0)
 parser.add_option("-n", "--colName", dest="colName", action="store", help="name of column to use, this implies that the first line of the tab file contains headers", default=None)
 parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="inverse sort order")
+parser.add_option("", "--int", dest="int", action="store_true", help="use numerical (integer) sort")
 (options, args) = parser.parse_args()
 
 if options.debug:
@@ -63,7 +64,13 @@ for filename in filenames:
         line = line.split("\t")
         if len(line)>colIndex:
             #line[colIndex] = float(line[colIndex]) ??
-            line[colIndex] = int(line[colIndex])
+            val = line[colIndex]
+            if options.int:
+                if val=="None":
+                    val = 0
+                else:
+                    val = int(val)
+            line[colIndex] = val
             lines.append(line)
         else:
             logging.debug("cannot get column %d from line %s" % (colIndex, line[0]))

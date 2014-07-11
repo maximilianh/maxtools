@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-# Max Haeussler, 6/2007
+# Max Haeussler, 6/2007, 6/2014
 
 from sys import *
 import sys
@@ -13,20 +13,20 @@ parser = OptionParser("usage: %prog [options] inSortedBedFile outfile (stdout ok
 
 parser.add_option("-d", "", dest="debug", action="store_true", \
         help="show debug messages")
-parser.add_option("-o", "--overlaps", dest="overlaps", action="store", \
-        help="write overlapping gene models to given textfile")
 parser.add_option("-s", "--chromSizes", dest="chromSizes", action="store", \
         help="use this file with chrom <tab> size - lines to get chrom sizes") 
 parser.add_option("-u", "--upstream", dest="upstream", action="store_true", \
         help="only report intergenic regions that are upstream (if between -/+ neighbors, two features are created)", default=False)
-parser.add_option("", "--split", dest="split", action="store_true", \
-        help="split the space between genes into two halfs", default=False)
 parser.add_option("-l", "--limit", dest="limit", action="store", \
         help="if -u is set: limit the length of upstream regions to this size", default=0, type="int")
 parser.add_option("", "--uniqueNames", dest="uniqueNames", action="store_true", \
         help="keep only the first feature, if identical names")
+parser.add_option("-a", "--all", dest="all", action="store_true", \
+        help="output all features (input and spacers between them) and annotate with 'ex:', 'in:', 'ig:' (exon, intron, intergenic)")
 
 (options, args) = parser.parse_args()
+
+doAll = False
 
 # ==== FUNCTIONs =====
 
@@ -39,16 +39,18 @@ def truncSize(start, end, limit, onLeft):
                 return (end-limit, end)
     return start, end
 
-def writeBeds(outf, chrom, posList, names):
+def writeBeds(outf, chrom, posList, names, type):
     for i in range(0, len(names)):
         name = names[i]
         start, end = posList[i]
-        #print repr([chrom, start, end, name])
         outf.write("%s\t%d\t%d\t%s\n" % (chrom, start, end, name))
 
-def output(fh, left, right, upstream, limit, chromSizes=None):
+def output(fh, left, right, upstream, limit, type, chromSizes=None):
     """ given two flanking beds, create lists of names for the regions between and write to fh"""
-    """ this can return 0, 1 or 2 different names """
+    """ this can return 0, 1 or 2 different names.
+    type can be "ig", "ex" or "in" = intergenic, exon, intron
+    """
+
     global outCount
     global dublCount
     names = []
@@ -76,7 +78,14 @@ def output(fh, left, right, upstream, limit, chromSizes=None):
 
     if not upstream:
         posList = [ (start, end) ]
-        names = [leftname+"|"+rightname]
+        if doAll:
+            if type=="ig":
+                names = ["ig:"+leftname+"|"+rightname]
+            elif type=="in":
+                assert(leftname==rightname)
+                names = ["in:"+leftname]
+        else:
+            names = [leftname+"|"+rightname]
     else:
         # + everything that depends on strands (-u option)
         if left!=None and right!=None and left.strand=="-" and right.strand=="+":
@@ -96,7 +105,7 @@ def output(fh, left, right, upstream, limit, chromSizes=None):
         else:
             return 
 
-    writeBeds(fh, chrom, posList, names)
+    writeBeds(fh, chrom, posList, names, type)
     outCount += len(names)
     lastLeft = left
 
@@ -261,6 +270,9 @@ if args==[]:
 
 if options.debug:
     logging.basicConfig(level=logging.DEBUG)
+if options.all:
+    doAll = True
+
 # parse input arguments
 infile = args[0]
 outfile = args[1]
@@ -291,21 +303,14 @@ if outfile=="stdout":
 else:
     outf = open(outfile, "w")
 
-# overlap-output file
-if options.overlaps!=None:
-    overlFh = open(options.overlaps, "w")
-else:
-    overlFh = None
-
 # init stats counters
-overlap=0
 sizeMissing=0
 outCount = 0
 dublCount = 0
 lastLeft=None
 included = 0
-# init output
-output(outf, None, beds[0], upstream, limit)
+# output flank around first feature
+output(outf, None, beds[0], upstream, limit, "ig", chromSize)
 # these are the main iterator variables for the following loop
 left = None
 right = None
@@ -318,38 +323,14 @@ for i in range(0, len(beds)-1):
     # generate features "on the edges" and break where chrom ends or starts
     if left.chrom != right.chrom:
         if chromSize!=None:
-            # writeBeds(outf, left.chrom, left.start, chromSize[left.chrom], makeNames(left, None, upstream))
-            output(outf, left, None, upstream, limit, chromSize)
+            output(outf, left, None, upstream, limit, "ig", chromSize)
         else:
             sizeMissing+=1
-        #writeBeds(outf, right.chrom, 0, right.start, makeNames(None, right, upstream))
-        output(outf, None, right, upstream, limit)
+        output(outf, None, right, upstream, limit, "ig", chromSize)
         lastLeft = left
         continue
 
-    # skip if included
-    if left.includes(right):
-        included+=1
-        beds[i+1]=left # we need to make sure that right is not touched anymore
-        logging.debug("%s includes %s, dropping right" % (left, right))
-        if overlFh!=None:
-            if left!=lastLeft:
-                overlFh.write(str(left)+"\n")
-            overlFh.write(str(right)+"\n")
-        lastLeft = left
-        continue
-
-    # if overlap: remove overlap by splitting space in between
-    if left.overlaps(right):
-        overlap+=1
-        logging.debug("%s overlaps %s, splitting both" % (left, right))
-        if overlFh!=None:
-            if left!=lastLeft:
-                overlFh.write(str(left)+"\n")
-            overlFh.write(str(right)+"\n")
-        overlapLen = (left.end - right.start)
-        left.end = left.end - (overlapLen/2) - 1
-        right.start = right.start + (overlapLen/2) 
+    assert(not left.overlaps(right)) # features cannot overlap
 
     # sanity check
     if left.start > right.start:
@@ -357,15 +338,20 @@ for i in range(0, len(beds)-1):
         stderr.write("check these features: %s \n<->\n %s\n" % (left, right))
         exit(1)
 
-    #names = makeNames(left, right, upstream)
-    #writeBeds(outf, left.chrom, left.end, right.start, names)
-    output(outf, left, right, upstream, limit)
+    if left.name==right.name:
+        rangeType = "in"
+    else:
+        rangeType = "ig"
+    output(outf, left, right, upstream, limit, rangeType, chromSize)
+
+    if doAll:
+        outf.write("%s\t%d\t%d\tex:%s\n" % (left.chrom, left.start, left.end, left.name))
+
     lastLeft = left
     
 # write some overall statistics to stderr
 stderr.write("%d features written\n" % outCount)
 stderr.write("%d genes/exons were dropped because one includes the other\n" % included)
-stderr.write("%d genes/exons were split because of overlap\n" % overlap)
 if chromSize==None:
     stderr.write("%d features are missing because of missing chromSizes file\n" % sizeMissing)
 if upstream:

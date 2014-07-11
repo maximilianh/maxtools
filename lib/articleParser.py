@@ -180,43 +180,6 @@ def downloadFile(url, filename):
         fh = opener.open(req)
         open(filename, "wb").write(fh.read())
 
-def setupLogging(logFilename, options):
-    """ direct logging to a file PROGNAME.log and also to stdout, depending on options (debug, verbose, nodeId, etc) """
-    if options.verbose:
-        stdoutLevel=5
-        fileLevel=5
-    elif options.debug:
-        stdoutLevel=logging.DEBUG
-        fileLevel=logging.DEBUG
-    else:
-        stdoutLevel=logging.INFO
-        fileLevel=logging.DEBUG
-
-    if options.nodeId!=None:
-        logFilename+= "."+str(options.nodeId)
-
-    rootLog = logging.getLogger('')
-    rootLog.setLevel(fileLevel)
-
-    logging.root.handlers = []
-    logging.basicConfig(level=fileLevel,
-                        format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
-                        datefmt='%m-%d %H:%M',
-                        filename= logFilename,
-                        filemode='w', stream=None)
-
-    #print logging.getLogger('').getEffectiveLevel()
-
-    # define a handler which writes INFO messages or higher to the sys.stderr
-    console = logging.StreamHandler()
-    # set a format which is simpler for console use
-    formatter = logging.Formatter('%(levelname)-8s-%(message)s')
-    # tell the handler to use this format
-    console.setFormatter(formatter)
-    console.setLevel(stdoutLevel)
-    # add the handler to the root logger
-    logging.getLogger('').addHandler(console)
-
 class FtToolsError(Exception):
     pass
 

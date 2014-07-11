@@ -5,11 +5,11 @@ from optparse import OptionParser
 import tabfile, Fasta, iupacSearch
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = OptionParser("usage: %prog [options] motifFile fafile fafile fafile... - scan fasta files for matches to motifs
+parser = OptionParser("""usage: %prog [options] motifFile fafile fafile fafile... - scan fasta files for matches to motifs
 
 motifFile is one motif per line
 output will go to stdout and is in bed format
-") 
+""") 
 
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 

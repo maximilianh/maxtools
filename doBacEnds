@@ -668,8 +668,12 @@ def parseIds(bedFname):
     " parse clone end ids from bac ends bedfname. returns set of ints "
     inFh = open(bedFname)
     idSet = set()
+    print bedFname
     for line in inFh:
-        endIdStr = line.rstrip("\n").split()[10] # 11 if using a bin column
+        fields = line.rstrip("\n").split()
+        if len(fields)<10:
+            print fields
+        endIdStr = fields[10] # 11 if using a bin column
         endIds = endIdStr.split(",")
         # this could be removed if non-NCBI ends are mapped:
         # convert all strings to ints in the list

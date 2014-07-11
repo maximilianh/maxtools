@@ -13,7 +13,7 @@ parser = OptionParser("usage: %prog [options] fastafile idfile - only display se
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 parser.add_option("-v", "--invert", dest="invert", action="store_true", help="invert selection: only display NON-matching sequences", default=False) 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="debug", default=False) 
-#parser.add_option("", "--splitOnPipe", dest="splitOnPipe", action="store_true", help="compare only the part before the pipe sign, but output the whole line", default=False) 
+parser.add_option("-f", "--pipeField", dest="pipeField", action="store", type="int", help="split the field by | and compare only a given field, 0-based counting (unlike unix cut)") 
 (options, args) = parser.parse_args()
 
 # ==== FUNCTIONs =====
@@ -37,11 +37,13 @@ filterids = set(tabfile.slurplist(idfname, field=0))
 logging.info("Filtering")
 for seqid, seq in maxbio.FastaReader(fastafname).parse():
     idstem = seqid.split(" ")[0]
-    idstem = seqid.split("|")[0]
+    if options.pipeField!=None:
+        idstem = idstem.split("|")[options.pipeField]
     logger.debug("checking %s" % idstem)
     if (not invert and idstem in filterids) or (invert and idstem not in filterids):
         logger.debug("printing %s" % idstem)
-        print ">"+seqid
+        #print ">"+seqid
+        print ">"+idstem
         print seq
     else:
         logger.debug("filtering out %s" % idstem)

@@ -28,8 +28,11 @@ def parseGp(inFname):
 
     data = defaultdict(list)
     for line in ifh:
+        if line.startswith("name"):
+            continue
         row = line.rstrip("\n").split("\t")
         row = [r.strip(",") for r in row]
+        row = row[:10]
         #name = row[0].split(".")[0]
         name = row[0]
         data[name].append(tuple(row[1:]))
@@ -74,6 +77,8 @@ def genePredComp(fname1, fname2, gp1, gp2):
     cdsMatch = 0
 
     ofh = open("noOverlap.gp", "w")
+    diffOfh = open("different.gp", "w")
+
     for id in commonIds:
         tList1 = gp1[id]
         tList2 = gp2[id]
@@ -95,6 +100,8 @@ def genePredComp(fname1, fname2, gp1, gp2):
                 txMatch += 1
             else:
                 txNonMatch +=1
+                diffOfh.write(id+"\t"+"\t".join(t1)+"\n")
+                diffOfh.write(id+"\t"+"\t".join(t2)+"\n")
 
                 cdsStart1, cdsEnd1 = int(t1[2]), int(t1[3])
                 cdsStart2, cdsEnd2 = int(t2[2]), int(t2[3])
@@ -120,7 +127,7 @@ def genePredComp(fname1, fname2, gp1, gp2):
     print "  - %d transcripts (%0.00f%%) are exactly identical" % (exactMatch, exactMatchShare)
     print "For those %d that are not exactly identical:" % (len(commonIds)-exactMatch)
     print "  - %d transcripts have identical txStart,txEnd" % txMatch
-    print "  - %d transcripts have a different txStart,txEnd" % txNonMatch
+    print "  - %d transcripts have a different txStart,txEnd (written to different.gp)" % txNonMatch
     print "For those %d that don't have identical txStart,txEnd:" % txNonMatch
     print "  - %d transcripts have identical cdsStart,cdsEnd" % cdsMatch
     print "  - %d transcripts have txStart or txEnd off by <%dbp" % (txClose, CLOSE)

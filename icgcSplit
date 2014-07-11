@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, gzip
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - split ICGC somatic VCF file by tumor (=project), writes to subdirectory 'split/'") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+outFhs = {} # cache of output file handles
+
+if filename.endswith(".gz"):
+    ifh = gzip.open(filename)
+else:
+    ifh = open(filename)
+
+headerLines = """##fileformat=VCFv4.1
+##INFO=<ID=AC,Number=1,Type=Integer,Description="Number of donors with the current mutation">
+##INFO=<ID=AN,Number=1,Type=Integer,Description="Number of donors with SSM data available">
+##INFO=<ID=AF,Number=1,Type=Integer,Description="Frequency of mutation">
+##comment=ICGC open access Simple Somatic Mutations (SSM) data dump in VCF format
+##fileDate=Thu Jul 06 17:24:06 EDT 2014
+##geneModel=ENSEMBL75
+##reference=GRCh37
+##source=ICGC16
+#CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO
+"""
+
+for line in ifh:
+    line = line.rstrip("\n")
+    if line.startswith("#"):
+        continue
+    else:
+        fields = line.split("\t")
+
+        mainFields = fields[:7]
+
+        infoField = fields[7]
+        infoParts = infoField.split(";")
+        for ip in infoParts:
+            # search 
+            if ip.startswith("OCCURRENCE"):
+                # OCCURRENCE=LIRI-JP|48|208|0.23077,RECA-EU|1|95|0.01053,LINC-JP|1|244|0.00410
+                occ, occValStr = ip.split("=")
+                occParts = occValStr.split(",")
+                for occPart in occParts:
+                    occFields = occPart.split("|")
+                    projCode, affDonors, testDonors, freq = occFields
+                    infoField = "AC=%s;AN=%s;AF=%s" % (affDonors, testDonors, freq)
+
+                    # pull out the right file handle
+                    if projCode not in outFhs:
+                        ofh = open("icgcMut/"+projCode+".vcf", "w")
+                        ofh.write(headerLines)
+                        outFhs[projCode] = ofh
+                    else:
+                        ofh = outFhs[projCode]
+
+                    ofh.write("\t".join(mainFields)+"\t"+infoField+"\n")
