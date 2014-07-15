@@ -32,8 +32,8 @@ else:
 
 headerLines = """##fileformat=VCFv4.1
 ##INFO=<ID=AC,Number=1,Type=Integer,Description="Number of donors with the current mutation">
-##INFO=<ID=AN,Number=1,Type=Integer,Description="Number of donors with SSM data available">
-##INFO=<ID=AF,Number=1,Type=Integer,Description="Frequency of mutation">
+##INFO=<ID=NS,Number=1,Type=Integer,Description="Number of donors with SSM data available">
+##INFO=<ID=AF,Number=.,Type=Float,Description="Frequency of mutation">
 ##comment=ICGC open access Simple Somatic Mutations (SSM) data dump in VCF format
 ##fileDate=Thu Jul 06 17:24:06 EDT 2014
 ##geneModel=ENSEMBL75
@@ -62,7 +62,7 @@ for line in ifh:
                 for occPart in occParts:
                     occFields = occPart.split("|")
                     projCode, affDonors, testDonors, freq = occFields
-                    infoField = "AC=%s;AN=%s;AF=%s" % (affDonors, testDonors, freq)
+                    infoField = "AC=%s;NS=%s;AF=%s" % (affDonors, testDonors, freq)
 
                     # pull out the right file handle
                     if projCode not in outFhs:
