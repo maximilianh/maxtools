@@ -1,0 +1,102 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+brackRe = re.compile("\([A-Za-z0-9 .;/_-]*\)")
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-g", "--geneDesc", dest="geneDesc", action="store_true", help="only output gene symbol and one-sentence description") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+#*RECORD*
+#*FIELD* NO
+#601542
+#*FIELD* TI
+#*601542 PAIRED-LIKE HOMEODOMAIN TRANSCRIPTION FACTOR 2; PITX2
+#;;PITUITARY HOMEOBOX 2; PTX2;;
+#RIEG BICOID-RELATED HOMEOBOX TRANSCRIPTION FACTOR 1; RIEG1;;
+#RIEG;;
+#SOLURSHIN;;
+#ALL1-RESPONSIVE GENE 1; ARP1
+#*FIELD* TX
+#
+#DESCRIPTION
+#
+#PITX2 belongs to the bicoid class of homeodomain transcription factors,
+#which play essential roles in embryonic development. Various PITX2
+#isoforms are involved in a wide variety of developmental programs,
+#including left-right signaling (summary by Cox et al., 2002).
+
+tx = False
+ti = False
+tiLines = []
+txLines = []
+for line in open(filename):
+    line = line.rstrip("\n")
+    # handle field start marks
+    if line.startswith("*FIELD* TI"):
+        ti = True
+        tx = False
+        continue
+    elif line.startswith("*FIELD* TX"):
+        tx = True
+        ti = False
+        continue
+    elif line.startswith("*RECORD*"):
+        if len(tiLines)!=0:
+            tiLine = " ".join(tiLines)
+            tiParts = tiLine.split(";")
+            tiParts = [s.strip() for s in tiParts]
+            #print tiParts
+            sym = ""
+            if len(tiParts)>1:
+                sym = tiParts[1]
+            acc = tiParts[0].split()[0]
+            part0 = " ".join(tiParts[0].split()[1:])
+            tiParts[0] = part0
+            #tiParts = [s for s in tiParts if len(s)!=0]
+            tiFull = "|".join(tiParts)
+            desc = " ".join(txLines).replace("\n", "").replace("\t", "").strip().replace("DESCRIPTION  ", "").strip().replace("CLONING  ", "")
+            desc = desc.replace("et al.", "et al")
+            if options.geneDesc:
+                if acc.startswith("*"):
+                    shortDesc = desc.split(". ")[0]
+                    shortDesc = brackRe.sub("", shortDesc)
+                    row =[sym, shortDesc]
+                    print "\t".join(row)
+            else:
+                row = [acc, sym, tiFull, desc]
+                print "\t".join(row)
+        tiLines = []
+        txLines = []
+        continue
+    elif line.startswith("*FIELD*"):
+        ti = False
+        tx = False
+        continue
+
+    if ti:
+        tiLines.append(line)
+    if tx:
+        txLines.append(line)
+
+    
+        
