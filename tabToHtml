@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - convert tab table to html file0") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+print "<table>"
+for line in open(filename):
+    fields = line.rstrip("\n").split("\t")
+    if line.startswith("#"):
+        rowTag = "th"
+    else:
+        rowTag = "tr"
+    print "<%s>" % rowTag
+    for f in fields:
+        print "<td>%s</td>" % f
+    print "</%s>" % rowTag
+print "</table>"
+
+

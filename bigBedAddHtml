@@ -1,0 +1,42 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] bigBedFname htmlDir - for each bed line, search for a file <name>.html in htmlDir and append it as a field to the bed file") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+htmlDir = args[1]
+
+for line in open(filename):
+    fields = line.rstrip("\n").split("\t")
+    name = fields[3]
+    fname = join(htmlDir, name+".html")
+    if not isfile(fname):
+        logging.warn("%s does not exist" % fname)
+        html = ""
+    else:
+        html = open(fname).read().replace("\n","").replace("\t"," ")
+    fields.append(html)
+    print "\t".join(fields)
+
+
+    
