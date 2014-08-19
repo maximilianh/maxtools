@@ -164,19 +164,12 @@ def parseKegg(filename, keggToSym):
                     eType = "gene"
                 else:
                     eType = "family"
-                entryNames[entryId] = eType, "/".join(syms), "|".join(syms)
+                entryNames[entryId] = eType, "", "|".join(syms)
 
             elif entryType in ["ortholog", "compound"]:
-                entryNames[entryId] = (entryType, "/".join(entryNames), "/".join(entryNames))
+                entryNames[entryId] = (entryType, "/".join(keggAccIds), "-")
 
             elif entryType=="group":
-                # some entries are complexes of genes
-                #<entry id="64" name="undefined" type="group">
-                #<graphics fgcolor="#000000" bgcolor="#FFFFFF"
-                     #type="rectangle" x="517" y="142" width="46" height="34"/>
-                #<component id="44"/>
-                #<component id="45"/>
-                #</entry>
                 compIds = []
                 compEls = c.findall("component")
                 for ce in compEls:
@@ -184,12 +177,17 @@ def parseKegg(filename, keggToSym):
                 assert(len(compIds)!=0)
 
                 compGenes = set()
-                for i in compIds:
-                    sym = keggToSym.get(e, None)
-                    if sym==None:
-                        logging.warn("No symbol for %s" % e)
+                for e in compIds:
+                    genes = []
+
+                    # convert id to list of genes
+                    syms = entryNames.get(e, (None, None))[-1]
+                    if syms==None:
+                        #logging.warn("No symbol for %s" % e)
+                        assert(False)
                         continue
-                    compGenes.add(sym)
+                    syms = syms.split("|")
+                    compGenes.update(syms)
                 compGenes = sorted(compGenes)
                 #compName = "/".join(compGenes)
                 #entryName = "/".join([geneNames[i] for i in compIds])
@@ -197,7 +195,7 @@ def parseKegg(filename, keggToSym):
                 #complexIds[entryId] = (compIds, compName)
 
                 #geneNames[entryId] = (entryName, entryType, compName)
-                entryNames[entryId] = ("complex", "/".join(compGenes), "|".join(compGenes))
+                entryNames[entryId] = ("complex", "", "|".join(compGenes))
             else:
                 logging.error("Unkown entry type %s" % entryType)
                 assert(False)

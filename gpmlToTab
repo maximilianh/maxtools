@@ -272,6 +272,7 @@ def parseUniprot(uniprotTable):
         accToSym[sym] = sym # some entries have the HGNC symbol in the xref
         pipeSplitAddAll(row.entrezGene, accToSym, sym)
         pipeSplitAddAll(row.mainIsoAcc, accToSym, sym)
+        pipeSplitAddAll(row.accList, accToSym, sym)
         pipeSplitAddAll(row.acc, accToSym, sym)
         pipeSplitAddAll(row.ensemblGene, accToSym, sym)
     return accToSym

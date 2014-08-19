@@ -4,9 +4,13 @@ import logging, sys, optparse, re
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
 
-brackRe = re.compile("\([A-Za-z0-9 .;/_-]*\)")
+brackRe = re.compile("\([A-Za-z0-9 .,;/_-]*\)")
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = optparse.OptionParser("usage: %prog [options] filename") 
+parser = optparse.OptionParser("""usage: %prog [options] filename - parse omim text to tab format
+
+geneDesc can be loaded with:
+create table geneDesc (gene varchar(255), text varchar(30000), INDEX geneIdx(gene));
+""")
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 parser.add_option("-g", "--geneDesc", dest="geneDesc", action="store_true", help="only output gene symbol and one-sentence description") 
@@ -74,7 +78,7 @@ for line in open(filename):
             tiParts[0] = part0
             #tiParts = [s for s in tiParts if len(s)!=0]
             tiFull = "|".join(tiParts)
-            desc = " ".join(txLines).replace("\n", "").replace("\t", "").strip().replace("DESCRIPTION  ", "").strip().replace("CLONING  ", "")
+            desc = " ".join(txLines).replace("\n", "").replace("\t", "").strip().replace("DESCRIPTION  ", "").strip().replace("CLONING  ", "").replace("GENE FUNCTION  ", "")
             desc = desc.replace("et al.", "et al")
             if options.geneDesc:
                 if acc.startswith("*"):
