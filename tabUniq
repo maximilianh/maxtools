@@ -15,7 +15,7 @@ parser.add_option("-s", "--sort", dest="sort", action="store_true", help="add co
 parser.add_option("-r", "--ratio", dest="ratio", action="store_true", help="add count and ratio and sort")
 parser.add_option("", "--minCount", dest="minCount", action="store", type="int", help="output only with at least these many counts", default=None)
 parser.add_option("", "--maxCount", dest="maxCount", action="store", type="int", help="output only with no more than these many counts", default=None)
-parser.add_option("-k", "--colIndex", dest="colIndex", action="append", help="index of column(s) to use, can be used multiple times, default %default", default=None) 
+parser.add_option("-k", "--colIndex", dest="colIndex", action="append", help="index of column(s) to use, zero-based, can be used multiple times, default %default", default=None) 
 parser.add_option("-a", "--appendLines", dest="appendLines", action="store_true", help="if both -s and -k are set: do not only show fields from -k, and counts from -s, but also append complete lines separated by |", default=None) 
 (options, args) = parser.parse_args()
 

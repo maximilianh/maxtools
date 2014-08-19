@@ -69,6 +69,16 @@ hardMax=1000000
 # 99.9999...%% conf interval -> 4
 # NCBI seems to allow anything, so default 10 as some sort of compromise
 stDevFact=10
+
+# for the optional step "genbank":
+
+# a fasta file with a parsed version of genbank GSS, see help message
+#gssFile=/hive/users/max/bacEnds/oldBacImport/Homo_sapiens/gss.fa
+
+# a directory with a NCBI clone db ftp site mirror, only the files *.endinfo_9606.out are needed.
+# They are used to figure out which clone is forward and which one reversed.
+# 
+#cloneFtpDir=/hive/data/outside/ncbi/clone/reports/Homo_sapiens
 """
 
 # global var that indicates if user wants dirs deleted (= --force )
@@ -531,7 +541,7 @@ def convCat(convDir, convCatDir):
         cmd = "cat %s > %s" % (fMask, outFname)
         runCmd(cmd)
 
-def pairPsl(convDir, pslFname, pairDir):
+def pairPsl(convDir, pslFname, pairDir, onlyInsSize):
     " concat blat output files, and run one pslPair process per insert size "
     mustBeEmptyDir(pairDir, makeDir=True)
 
@@ -543,6 +553,9 @@ def pairPsl(convDir, pslFname, pairDir):
     pslTable = cfgMustGet("pslTable")
 
     for insSize, stDev in insSizes:
+        if onlyInsSize!=None and insSize!=onlyInsSize:
+            logging.info("skipping size, because insSize option was set")
+            continue
         logging.info("Running pslPairs for insert size %d" % (insSize))
         stDevFact = int(cfgMustGet("stDevFact"))
         minSize = max(0, insSize-(stDevFact*stDev))
@@ -677,7 +690,7 @@ def parseIds(bedFname):
         endIds = endIdStr.split(",")
         # this could be removed if non-NCBI ends are mapped:
         # convert all strings to ints in the list
-        endIds = [int(x) for x in endIds]  
+        #endIds = [x for x in endIds]  
         idSet.update(endIds)
     return idSet
 
@@ -703,7 +716,7 @@ def filterEndsPsl(bigPslFname, goodBedFname, badBedFname, goodPslFname, badPslFn
     # read into dict
     for line in open(bigPslFname):
         fields = line.rstrip("\n").split()
-        qId = int(fields[9])
+        qId = fields[9]
         if qId in goodIds:
             outFname = goodPslFname
         elif qId in badIds:
@@ -738,6 +751,90 @@ def filterEndsPsl(bigPslFname, goodBedFname, badBedFname, goodPslFname, badPslFn
         #runCmd(cmd)
 
 
+def parseEndInfos(dirName):
+    " parse ncbi end info file, return as dict and set of accessions"
+    # write into dict cloneId -> (list of forw accs, list of rev accs)
+    ##taxid  accession       gi      ti      clone_name      clone_end       libabbr
+    #9606    AZ081549.1      9587555         RP6-100O11      F       RP6
+    cloneSeqs = {}
+    accs = set()
+    for cloneFname in glob.glob(join(dirName, "*.endinfo_*.out")):
+        logging.info("parsing "+cloneFname)
+        accCount = 0
+        lCount = 0
+        skipCount = 0
+
+        # parse the accession and the strand
+        for row in iterTsvRows(cloneFname):
+            acc = row.accession
+            lCount+=1
+            if acc=="":
+                continue
+            acc = acc.split(".")[0]
+            accCount += 1
+            clone = row.clone_name
+
+            if row.clone_end=="F":
+                idx = 0
+            elif row.clone_end=="R":
+                idx = 1
+            else:
+                #logging.warn("Illegal clone end strand for %s, %s" % (acc, repr(row.clone_end)))
+                skipCount +=1
+                continue
+                #assert(False) # illegal clone_end value
+            
+            cloneSeqs.setdefault(clone, ([], []))[idx].append(acc)
+            accs.add(acc)
+        logging.debug("%d genbank accessions, %d rows skipped out of %d rows" % (accCount, skipCount, lCount))
+        #logging.info("accs:"+str( list(accs)[:10]))
+    logging.info("Found %d clones, %d end sequences in dir %s" % (len(cloneSeqs), len(accs), dirName))
+    return cloneSeqs, accs
+
+def parseFaFilter(fname, accs):
+    " return dict with acc -> seq for all acc in accs "
+    seqs = {}
+    faIter = parseFasta(fname)
+    for acc, seq in faIter:
+        acc = acc.split(".")[0]
+        if acc in accs:
+            seqs[acc] = seq
+    logging.info("Read %d sequences from file %s" % (len(seqs), fname))
+    return seqs
+
+def convGb(outDir):
+    " create .pairs and .fa files for clones in cloneDb with sequences in genbank "
+    if "cloneFtpDir" not in runConf or "gssFile" not in runConf:
+        raise Exception("To use the convGb step, you need to define cloneFtpDir and gssFile in doBacEnds.conf")
+    cloneDir = runConf["cloneFtpDir"]
+    gssFname = runConf["gssFile"]
+
+    cloneToAccs, accs = parseEndInfos(cloneDir)
+    cloneSeqs = parseFaFilter(gssFname, accs)
+
+    # write a pair file
+    baseName = "gb.0-500000.all"
+    pairFname = join(outDir, baseName+".pairs")
+    logging.info("Writing pairs to %s" % pairFname)
+    pairFh = open(pairFname, "w")
+    for clone, seqTuple in cloneToAccs.iteritems():
+        fwAccs, revAccs = seqTuple
+        if len(fwAccs)==0 or len(revAccs)==0:
+            continue
+        pairFh.write("%s\t%s\t%s\n" % (",".join(fwAccs), ",".join(revAccs), clone))
+    pairFh.close()
+
+    # write the sequenes 
+    faFname = join(outDir, baseName+".fa")
+    logging.info("Writing seqs to %s" % faFname)
+    faFh = open(faFname, "w")
+    for seqId, seq in cloneSeqs.iteritems():
+        if len(seq)>5000:
+            logging.warn("Ignoring seq %s, longer than 5kb" % seqId)
+            continue
+        faFh.write(">%s\n%s\n" % (seqId, seq.upper()))
+    faFh.close()
+        
 def loadPairPsl(convDir, pslFname, pairDir, loadDir):
     " filter pslFname with names in pairDir and load into db "
 
@@ -783,7 +880,7 @@ def loadPairPsl(convDir, pslFname, pairDir, loadDir):
 # ----------- MAIN --------------
 if __name__=="__main__": # = run only if called from command line
 
-    parser = optparse.OptionParser("""usage: doBacEnds [options] [steps] - map BAC/fosmid/cosmid ends from NCBI trace archive
+    parser = optparse.OptionParser("""usage: doBacEnds [options] [steps] - map BAC/fosmid/cosmid ends from NCBI trace archive. Optionally add clones that are in Genbank GSS.
 
     steps is "init" or any part of or a comma-sep set of:
     download,conv,convCat,aln,alnCat,pair,load
@@ -794,6 +891,7 @@ if __name__=="__main__": # = run only if called from command line
       step is not needed if the files have been downloaded before. The download tries to
       skip files that have been downloaded before.
     - conv: convert NCBI format to fasta and UCSC .pairs file, on cluster, creates 01-conv
+    - convGb: optional, see below. Adds files to 01-conv
     - convCat: concatenate pairs files from conv step into 01-conv
     - aln: run blat on cluster, creates 02-aln
     - alnCat: concatenate alignment results into 02-aln/bigBlat.psl
@@ -802,6 +900,13 @@ if __name__=="__main__": # = run only if called from command line
 
     - debugging only - bigBed: create a single bigBed file from the pair files
 
+    - optional step "convGb": pull in genbank-only sequences. Necessary because not all ends are in NCBI Trace DB.
+      - Requires a fasta file with parsed organism Genbank GSS sequences. Create one like this:
+        gbToFaRa /dev/null gss.fa gss.ra gss.stat /cluster/data/genbank/data/download/genbank.202.0/*gss* -byOrganism=./
+      - Requires a directory with a NCBI cloneDb ftp mirror. Create one like this:
+        lftp ftp.ncbi.nih.gov/repository/clone/reports/Homo_sapiens/ -e 'mget *.out'
+      - Set the gssFile and cloneFtpDir statements in doBacEnds.conf
+
     example:
     doBacEnds init gorGor3
     doBacEnds all
@@ -809,6 +914,7 @@ if __name__=="__main__": # = run only if called from command line
 
     parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
     parser.add_option("-f", "--force", dest="force", action="store_true", help="delete output dirs at each step, will make sure that the pipeline does not stop mid-way")
+    parser.add_option("", "--insSize", dest="insSize", action="store", help="to debug the pairs step: run on only one insert size", type="int", default=None)
     #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
     (options, args) = parser.parse_args()
 
@@ -838,7 +944,7 @@ if __name__=="__main__": # = run only if called from command line
 
     # define possible steps in pipeline
     mainSteps  = ["conv","convCat","aln","alnCat","pair","load"]
-    otherSteps = ["init", "download", "testConvJob", "bigbed"]
+    otherSteps = ["init", "download", "testConvJob", "bigbed", "convGb"]
 
     steps = parseRange(steps, mainSteps, otherSteps)
     
@@ -854,6 +960,8 @@ if __name__=="__main__": # = run only if called from command line
 
     if "conv" in steps:
         submitConvJobs(convDir)
+    if "convGb" in steps:
+        convGb(convDir)
     if "convCat" in steps:
         convCat(convDir, convCatDir)
 
@@ -863,7 +971,7 @@ if __name__=="__main__": # = run only if called from command line
         alnCat(bigBlatDir, pslFname)
 
     if "pair" in steps:
-        pairPsl(convDir, pslFname, pairDir)
+        pairPsl(convDir, pslFname, pairDir, options.insSize)
         #makeBb(pairDir)
 
     if "load" in steps:

@@ -26,16 +26,40 @@ if args==[]:
 filename = args[0]
 htmlDir = args[1]
 
+css = """
+<style>
+table { 
+color: #333; /* Lighten up font color */
+font-family: Helvetica, Arial, sans-serif; /* Nicer font */
+width: 640px; 
+border-collapse: 
+collapse; border-spacing: 0; 
+}
+
+td, th { border: 1px solid #CCC; height: 30px; } /* Make cells a bit taller */
+
+th {
+background: #F3F3F3; /* Light grey background */
+font-weight: bold; /* Make sure they're bold */
+}
+
+td {
+text-align: left; 
+}
+</style>
+""".replace("\n","").replace("\t"," ")
+
 for line in open(filename):
     fields = line.rstrip("\n").split("\t")
     name = fields[3]
-    fname = join(htmlDir, name+".html")
+    #fname = join(htmlDir, name+".html")
+    fname = join(htmlDir, name)
     if not isfile(fname):
         logging.warn("%s does not exist" % fname)
         html = ""
     else:
         html = open(fname).read().replace("\n","").replace("\t"," ")
-    fields.append(html)
+    fields.append(css+html)
     print "\t".join(fields)
 
 
