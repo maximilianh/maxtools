@@ -5,18 +5,25 @@ from collections import defaultdict, namedtuple
 from os.path import join, basename, dirname, isfile
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = optparse.OptionParser("""usage: %prog [options] filename - convert the panther classification PTHR9.0_human to the format symbol-main class
+parser = optparse.OptionParser("""usage: %prog [options] filename - merge the panther classification PTHR9.0_human and the HPRD classification into the format symbol-main class
 
-uses the most specific class (col2) and also outputs the others (col3)
-ignores the TREMBL proteins currently
+HPRD:
+uses the most specific class
+just ignores the TREMBL proteins (a few hundred)
 
-input data is in /hive/data/inside/pubs/pathways/pantherDb/3.3
+panther data is in /hive/data/outside/panther/3.3
+hprd data is in /hive/data/outside/hprd/081814/
+hprd data received from Arun Patil by email, arun@ibioinformatics.org
 
+output:
+symbol,description
 """)
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-k", "--keggDir", dest="keggDir", action="store", help="the KEGG ftp mirror directory on disk, default %default", default="/hive/data/outside/kegg/06032011/ftp.genome.jp/pub/kegg") 
 parser.add_option("-s", "--hgncFname", dest="hgncFname", action="store", help="the HGNC tab file on disk, default %default", default="/hive/data/outside/hgnc/111413/hgnc_complete_set.txt") 
+parser.add_option("-p", "--pantherFname", dest="pantherFname", action="store", help="the panther tab file on disk, default %default", default="/hive/data/outside/panther/3.3/PTHR9.0_human") 
+parser.add_option("", "--hprdFname", dest="hprdFname", action="store", help="the HPRD tab file on disk, default %default", default="/hive/data/outside/hprd/081814/HPRD_molecular_class_081914.txt") 
 #parser.add_option("-u", "--uniprotFname", dest="uniprotFname", action="store", help="the uniprot file from the pubs parser, default %default", default="/hive/data/inside/pubs/parsedDbs/uniprot.9606.tab")
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
 #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
@@ -27,7 +34,7 @@ if options.debug:
 else:
     logging.basicConfig(level=logging.INFO)
 # ==== FUNCTIONs =====
-def lineFileNext(fh):
+def lineFileNext(fh, headers=None):
     """ 
         parses tab-sep file with headers as field names 
         yields collection.namedtuples
@@ -35,10 +42,11 @@ def lineFileNext(fh):
     """
     line1 = fh.readline()
     line1 = line1.strip("\n").strip("#")
-    headers = line1.split("\t")
-    headers = [h.replace(" ", "_") for h in headers]
-    headers = [h.replace("(", "") for h in headers]
-    headers = [h.replace(")", "") for h in headers]
+    if headers==None:
+        headers = line1.split("\t")
+        headers = [h.replace(" ", "_") for h in headers]
+        headers = [h.replace("(", "") for h in headers]
+        headers = [h.replace(")", "") for h in headers]
     Record = namedtuple('tsvRec', headers)
 
     for line in fh:
@@ -330,6 +338,7 @@ def parseUniprot(uniprotTable, accToSym):
         
 def parseHgnc(fname, addEntrez=False):
     " return a uniprotAcc -> hgnc symbol dict from the HGNC tab-sep file "
+    logging.info("Parsing HGNC table")
     upToSym = {}
     skipSyms = set()
     for row in lineFileNext(open(fname)):
@@ -351,11 +360,11 @@ def parseHgnc(fname, addEntrez=False):
     return upToSym
 
 # ----------- MAIN --------------
-if args==[]:
-    parser.print_help()
-    exit(1)
+#if args==[]:
+    #parser.print_help()
+    #exit(1)
 
-filename = args[0]
+pantherFilename = options.pantherFname
 
 #uniprotTable = "/hive/data/inside/pubs/parsedDbs/uniprot.9606.tab"
 accToSym = parseHgnc(options.hgncFname)
@@ -364,7 +373,7 @@ catCounts = defaultdict(int)
 
 symToCats = defaultdict(list)
 
-for line in open(filename):
+for line in open(pantherFilename):
     fs = line.rstrip("\n").split('\t')
     idStr = fs[0]
     idStr = idStr.split("|")[-1]
@@ -385,6 +394,7 @@ for line in open(filename):
 #for cat, count in catCounts.iteritems():
     #print count, cat
 
+pantherClasses = {}
 for sym, cats in symToCats.iteritems():
     scoredCats = []
     for c in cats:
@@ -400,6 +410,50 @@ for sym, cats in symToCats.iteritems():
         otherCats = scoredCats[1:]
         otherCats = [c[-1] for c in otherCats]
         otherStr = ",".join(otherCats)
-    row = [sym, bestCat, otherStr]
-    print "\t".join(row)
+    #row = [sym, bestCat, otherStr]
+    #print "\t".join(row)
+    bestCat = bestCat.replace(" molecule", "")
+    bestCat = bestCat.replace("G protein", "G-protein")
+    pantherClasses[sym] = bestCat
     
+# process hprd and write to dict sym -> text
+headers = "sym,entrez,desc,refseq,classStr,empty".split(",")
+hprdClasses = {}
+for row in lineFileNext(open(options.hprdFname), headers=headers):
+    if row.classStr.startswith("Unclass"):
+        continue
+    if row.classStr=="-":
+        continue
+    classStr = row.classStr
+    classStr = classStr.replace("G protein", "G-protein") 
+    hprdClasses[row.sym] = classStr
+
+# join both dicts
+allSyms = set(pantherClasses).union(hprdClasses)
+for sym in allSyms:
+    parts = []
+    if sym in pantherClasses:
+        parts.append(pantherClasses.get(sym, ""))
+    if sym in hprdClasses:
+        parts.append(hprdClasses.get(sym, ""))
+    #row = [sym, ", ".join(parts)]
+    hprd = hprdClasses.get(sym, "")
+    panther = pantherClasses.get(sym, "")
+    parts = [hprd, panther]
+
+    # take longer desc if overlap by one word
+    if len(set(hprd.lower().split()).intersection(panther.lower().split()))!=0:
+        if len(hprd)>len(panther):
+            parts=[hprd]
+        else:
+            parts=[panther]
+
+    parts = [p for p in parts if p!=""]
+    #row = [sym, hprd, panther, ", ".join(parts)]
+    desc = ", ".join(parts)
+    if len(desc)>1:
+        desc = desc[0].upper()+"".join(desc[1:])
+    if desc=="":
+        continue
+    row = [sym, desc]
+    print "\t".join(row)
