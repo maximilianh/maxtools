@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import maxCommon
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] bedFname tabFname tabNameFieldIdx outBed outAs - merge a bed file with a tab sep file on the name column and generate a auto sql file for it.") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+bedAs = """
+table bed12
+"Browser extensible data (12 fields) "
+    (
+    string chrom;      "Chromosome (or contig, scaffold, etc.)"
+    uint   chromStart; "Start position in chromosome"
+    uint   chromEnd;   "End position in chromosome"
+    string name;       "Name of item"
+    uint   score;      "Score from 0-1000"
+    char[1] strand;    "+ or -"
+    uint thickStart;   "Start of where display should be thick (start codon)"
+    uint thickEnd;     "End of where display should be thick (stop codon)"
+    uint reserved;     "Used as itemRgb as of 2004-11-22"
+    int blockCount;    "Number of blocks"
+    int[blockCount] blockSizes; "Comma separated list of block sizes"
+    int[blockCount] chromStarts; "Start positions relative to chromStart"
+"""
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+bedFname, tabFname, tabFieldIdx, outBedFname, outAsFname = args
+
+tabFieldIdx = int(tabFieldIdx)
+
+fields = open(tabFname).readline().strip().strip("#").split("\t")
+
+# read tab file
+data = {}
+colCount = 0
+for row in maxCommon.iterTsvRows(tabFname, encoding="latin1"):
+    data[row[tabFieldIdx]]= row
+    colCount = len(row)
+    
+# join and output merged bed
+fh = open(outBedFname, "w")
+for line in open(bedFname):
+    row = line.strip("\n").split("\t")
+    name = row[3]
+    row.extend(data.get(name, [""]*colCount))
+    fh.write( ("\t".join(row)).encode("utf8"))
+    fh.write("\n")
+fh.close()
+
+# generate autosql
+fh = open(outAsFname, "w")
+fh.write(bedAs)
+for field in fields:
+    name = field.replace(" ","")
+    name = re.sub("[^a-zA-Z0-9]", "", name)
+    name = name[0].lower()+name[1:]
+    fh.write('      string %s; " %s " \n' % (name, field))
+fh.write(")\n")
+fh.close()

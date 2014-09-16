@@ -1,0 +1,55 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import maxCommon
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename fieldName - collapse tab sep file to make a single field unique, append all other values with separator to all other fields") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+sep = ","
+filename, fieldName = args
+#if options.test:
+    #logging.debug("test is set")
+    #f = open(options.file, "r")
+data = dict()
+for row in maxCommon.iterTsvRows(filename, encoding="latin1"):
+    colCount = len(row)
+    key = row._asdict()[fieldName]
+    if key not in data:
+        valRow = []
+        for i in range(0, colCount):
+            valRow.append([])
+    else:
+        valRow = data[key]
+    for i in range(0, colCount):
+        val = row[i]
+        if val not in valRow[i]:
+            valRow[i].append(row[i])
+    data[key] = valRow
+
+headerLine = open(filename).readline()
+print headerLine,
+
+for key, fields in data.iteritems():
+    newRow = []
+    for fieldList in fields:
+        newRow.append(sep.join(fieldList))
+    print (u'\t'.join(newRow)).encode("latin1")
