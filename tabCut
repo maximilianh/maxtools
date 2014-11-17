@@ -60,7 +60,10 @@ for filename in filenames:
         else:
             data = []
             for colIndex in colIndexList:
-                data.append(l.strip("\n").split("\t")[colIndex])
+                lineFields = l.strip("\n").split("\t")
+                if len(lineFields)<colIndex:
+                    raise Exception("only %d fields in line, but need %d, line: %s" % (len(lineFields), colIndex, l))
+                data.append(lineFields[colIndex])
             if options.emptyCols:
                 emptyCols = [f for f in data if len(f)==0]
                 if len(emptyCols)>0:

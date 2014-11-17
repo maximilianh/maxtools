@@ -15,9 +15,9 @@ UNIPROTFILE="/hive/data/inside/pubs/parsedDbs/uniprot.9606.tab"
 # assay: string to describe the evidence, only relevant for Imex databases like biogrid
 # pmids: |-sep list of PMIDs that support the interaction
 
-outFields = "ppiId,geneA,geneB,relType,sourceDbs,sourceIds,assay,pmids".split(",")
-#outFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
-    #",relType,relSubtype,sourceDbs,sourceIds,sourceDescs,assay,pmids".split(",")
+#outFields = "ppiId,geneA,geneB,relType,sourceDbs,sourceIds,assay,pmids".split(",")
+outFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
+    ",relType,relSubtype,sourceDbs,sourceIds,sourceDescs,pmids".split(",")
 # eventId: short form of database where download occured + number, like pwc1234 or mentha1234
 # causeType: gene or complex
 # causeName: name string in database
@@ -27,7 +27,7 @@ outFields = "ppiId,geneA,geneB,relType,sourceDbs,sourceIds,assay,pmids".split(",
 
 #longFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
     #",relType,relSubtype,sourceDbs,sourceIds,sourceDescs,assay,pmids".split(",")
-LongRec = namedtuple("IntRec", outFields)
+IntRec = namedtuple("IntRec", outFields)
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = optparse.OptionParser("""usage: %prog [options] db fileOrDir - convert a pathway database to a tab-sep file
@@ -135,7 +135,7 @@ def convReactome(inPath, hgncFname):
     upToSym = readUniprotToSym(hgncFname)
     ifh = open(inPath)
     ifh.readline()
-    #headers = ["srcSpId", "srcEnsId", "srcEntrez", "trgSpId", "trgEnsId", "trgEntrez", "relType", "reactIds", "pmids"]
+    headers = ["srcSpId", "srcEnsId", "srcEntrez", "trgSpId", "trgEnsId", "trgEntrez", "relType", "reactIds", "pmids"]
     eventId = 0
 
     allPmids = defaultdict(set)
@@ -155,6 +155,8 @@ def convReactome(inPath, hgncFname):
         srcIds = row.reactIds.split("<->")
 
         pmids = row.pmids.split(",")
+        pmids = [p for p in pmids if p!="-"]
+        pmids = [p for p in pmids if p!=""]
         pmidStr = "|".join(pmids)
         srcStr = "|".join(srcIds)
         allPmids[key].update(pmids)
@@ -166,7 +168,7 @@ def convReactome(inPath, hgncFname):
             pmidStr = "|".join(allPmids.get(geneTuple, []))
             eventId+=1
             assayDesc = ""
-            row = (causeSym, themeSym, relType, "reactome", srcStr, assayDesc, pmidStr)
+            row = ("reactome%d"%eventId, "gene", "", causeSym, "gene", "", themeSym, relType, "", "reactome", srcStr, assayDesc, pmidStr)
             yield IntRec(*row)
 
 def convBiogrid(inPath):
@@ -329,6 +331,8 @@ def convIRef(inPath, hgncFname, upFname):
     skipComplexCount = 0
     wrongOrgCount = 0
     ppiId = 1
+    data = OrderedDict()
+    irigSuffix = defaultdict(int)
     for row in lineFileNext(ifh):
         uidA = row.uidA
         if ("Homo sapiens" not in row.taxa and not row.taxa=="-") or "Homo sapiens" not in row.taxb:
@@ -352,9 +356,11 @@ def convIRef(inPath, hgncFname, upFname):
             if relType.startswith("psi-mi"):
                 relType = "unknown"
         pmids = [x.replace("pubmed:", "") for x in row.pmids.split("|")]
+        pmids = [x for x in pmids if x!="-"]
         pmidStr = "|".join(pmids)
 
-        intId = row.irigid
+        #intId = row.irigid # IRIGID does NOT work with irefweb! 
+        intId = row.icrigid
 
         # parse gene2
         gene2 = resolveToSym(row.uidB, accToSym)
@@ -374,7 +380,7 @@ def convIRef(inPath, hgncFname, upFname):
             else:
                 uidA = uidA.split(":")[1]
                 complexes[uidA].append(gene2)
-                complexMeta[uidA] = (relType, sourceDb, intId, assay, pmidStr)
+                complexMeta[uidA] = (relType, assay, sourceDb, intId, "", pmidStr)
             continue
 
         # we have two proteins A and B
@@ -392,25 +398,31 @@ def convIRef(inPath, hgncFname, upFname):
             logging.debug("Could not resolve one of the two genes, row %s" % str(row))
             continue
 
-        #intIdDesc = row.interactionIdentifier
-        #for dbIdStr in intIdDesc.split("|"):
-            #db, dbId = dbIdStr.split(":")
-            #print db, dbId
-            #if db=="irigid":
-                #intId = dbId
-                #break
+        # make sure we dont' have duplicate lines
+        data[("gene", "", gene1, "gene", "", gene2, relType, assay, sourceDb, intId, "", pmidStr)]=None
 
-        yield ("ppi%d" % ppiId, gene1, gene2, relType, sourceDb, intId, assay, pmidStr)
+    for row in data.keys():
+        row = list(row)
+        irig = row[-3]
+        irigSuffix[irig]+=1
+        eventId = "iref%s_%d" % (irig, irigSuffix[irig])
+        row.insert(0, eventId)
+        #yield ("iref%d" % ppiId, "gene", "", gene1, "gene", "", gene2, relType, assay, sourceDb, intId, "", pmidStr)
         ppiId += 1
+        yield row
+
 
         #relType = row.
         #sourceDb = row.sourceDb
 
     for uid, geneList in complexes.iteritems():
-        fields = ["ppi%d" % ppiId, "complex", "|".join(geneList)]
-        fields.extend( complexMeta[uid] )
+        metaRow = complexMeta[uid] 
+        irig = metaRow[-3]
+        irigSuffix[irig]+=1
+        eventId = "iref%s_%d" % (irig, irigSuffix[irig])
+        fields = [eventId, "complex", "", "|".join(geneList), "", "", ""]
+        fields.extend( metaRow )
         yield fields
-        ppiId += 1
 
     logging.info( "skipGeneRows %d"% skipGeneCount)
     logging.info( "skipComplexRows %d"% skipComplexCount)
@@ -427,6 +439,9 @@ def main(args, options):
     ofh = sys.stdout
 
     if db=="reactome":
+        # reactom has to look like a pathway database
+        outFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
+            ",relType,relSubtype,sourceDb,sourceId,sourceDesc,pmids".split(",")
         reader = convReactome(inPath, options.hgncFile)
     elif db=="biogrid":
         reader = convBiogrid(inPath)

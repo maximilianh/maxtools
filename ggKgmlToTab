@@ -17,7 +17,7 @@ intTypeNames = {
 keggId = 0
 
 # output file headers
-headers = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes,relType,relSubtype,sourceDb,sourceId,sourceDesc".split(",")
+headers = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes,relType,relSubtype,sourceDb,sourceId,sourceDesc,pmids".split(",")
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = optparse.OptionParser("""usage: %prog [options] filename - parse KEGG kgml files to tab-sep format of gene/family/complex + gene/family/complex + interaction type + subtype 
@@ -225,7 +225,11 @@ def parseKegg(filename, keggToSym):
             #for id1Name in id1Names:
                 #for id2Name in id2Names:
             #row = [keggIdStr, id1Name, complex1Name, id2Name, complex2Name, relType, relSubtype, pathway]
-            row = [keggIdStr, id1Type, id1Name, id1Genes, id2Type, id2Name, id2Genes, relType, relSubtype, "kegg", pathway, title]
+            if id1Name=="-":
+                continue
+            if id2Name=="-":
+                continue
+            row = [keggIdStr, id1Type, id1Name, id1Genes, id2Type, id2Name, id2Genes, relType, relSubtype, "kegg", pathway, title, ""]
             #print row
             rows.append(row)
 

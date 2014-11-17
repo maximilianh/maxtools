@@ -30,9 +30,19 @@ filename, fieldName = args
     #logging.debug("test is set")
     #f = open(options.file, "r")
 data = dict()
-for row in maxCommon.iterTsvRows(filename, encoding="latin1"):
+
+headers = None
+
+for row in maxCommon.iterTsvRows(filename, encoding="latin1", makeHeadersUnique=True):
+    headers = row._fields
     colCount = len(row)
-    key = row._asdict()[fieldName]
+    if fieldName.isdigit():
+        key = row[int(fieldName)]
+    else:
+        #print repr(row)
+        key = row._asdict()[fieldName]
+    if key=="":
+        continue
     if key not in data:
         valRow = []
         for i in range(0, colCount):
@@ -45,8 +55,8 @@ for row in maxCommon.iterTsvRows(filename, encoding="latin1"):
             valRow[i].append(row[i])
     data[key] = valRow
 
-headerLine = open(filename).readline()
-print headerLine,
+headerLine = "\t".join(headers)
+print headerLine
 
 for key, fields in data.iteritems():
     newRow = []

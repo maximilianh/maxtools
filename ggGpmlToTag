@@ -19,6 +19,7 @@ headers = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = optparse.OptionParser("""usage: %prog [options] filename - parse Wikipathways GPML files to tab-sep format of gene/family/complex + gene/family/complex + interaction type + subtype 
 
+links to pathways look like this: http://www.wikipathways.org/index.php/Pathway:WP1991
 """)
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
@@ -61,7 +62,7 @@ def lineFileNext(fh):
         yield rec
 
 def symFromPoint(pe, idToGene, idToGroup, groupToSyms):
-    " given a <Point> element, return the symbol for it (can be a group or a gene) "
+    " given a <Point> element with a graphRef, return the symbol for it (can be a group or a gene) "
     gi = pe.attrib["GraphRef"]
     if gi in idToGene:
         return idToGene[gi]
@@ -95,12 +96,21 @@ def parseGpml(filename, accToSym):
     # DNA Damage Response
     title = root.attrib["Name"]
     idToGroup = {}
+    groupToType = {} # graphId -> "complex" or "family"
 
     for g in root.findall("Group"):
         # <Group GroupId="a5395" GraphId="a24bf" Style="Complex" />
         #if g.attrib.get("Style", None)=="Complex" and g.attrib.get("GraphId", None)!=None:
         if g.attrib.get("GraphId", None)!=None:
             idToGroup[g.attrib["GraphId"]] = g.attrib["GroupId"]
+            style = g.attrib.get("Style", "Group")
+            if style=="Complex":
+                groupType = "complex"
+            elif style=="Group":
+                groupType = "family" # XX careful - A. Pico email ?
+            else:
+                assert(False) # unknown group
+            groupToType[g.attrib["GraphId"]] = groupType
 
     # get a mapping from reference id to PMID
     # <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf rdf:id="fba">
@@ -121,10 +131,6 @@ def parseGpml(filename, accToSym):
             logging.debug("PMID is none?")
             continue
         idToPmid[refId] = pmid
-
-    #idToGroupName = {}
-    #for graphId, syms in idToGroup.iteritems():
-        #idToGroupName[graphId] = "/".join(syms)
 
     idToGene = {}
     groupToSyms = defaultdict(list)
@@ -188,11 +194,14 @@ def parseGpml(filename, accToSym):
             # <subtype name="activation" value="--&gt;"/>  
             # </relation>  
 
+            #print c.attrib.get("GraphId", None)
             graphEl = c.find("Graphics")
             themeSyms = []
             causeSyms = []
             relType = "unknown"
             head = None
+            themeTypes = []
+            causeTypes = []
             for pe in graphEl.findall("Point"):
                 if not "GraphRef" in pe.attrib:
                     continue
@@ -200,6 +209,10 @@ def parseGpml(filename, accToSym):
                 if sym==None:
                     logging.debug("Could not resolve %s to symbol" % pe.attrib)
                     continue
+
+                graphRef = pe.attrib["GraphRef"]
+                graphType = groupToType.get(graphRef, "gene")
+
                 if "ArrowHead" in pe.attrib:
                     themeSyms.append(sym)
                     head = pe.attrib["ArrowHead"]
@@ -210,8 +223,10 @@ def parseGpml(filename, accToSym):
                             relType = "inhibition"
                         else:
                             relType = head
+                    themeTypes.append(graphType)
                 else:
                     causeSyms.append(sym)
+                    causeTypes.append(graphType)
 
             if len(themeSyms)==1 and len(causeSyms)==1:
                 theme = themeSyms[0]
@@ -224,23 +239,37 @@ def parseGpml(filename, accToSym):
                 logging.debug("Wrong number of interaction partners %s: %s, %s" % (c.attrib, themeSyms, causeSyms))
                 continue
 
-            causeType = "gene"
             if "/" in cause:
-                causeType = "complex"
+                if len(set(causeTypes))!=1:
+                    logging.warn("more than one type of the causes: %s" % str(causeTypes))
+                causeType  = causeTypes[0]
                 causeGenes = cause.replace("/", "|")
             else:
                 causeGenes = cause
+                causeType = "gene"
 
-            themeType = "gene"
             if "/" in theme:
-                themeType = "complex"
+                if len(set(themeTypes))!=1:
+                    logging.warn("more than one type of the themes: %s" % str(themeTypes))
+                if len(themeTypes)==0:
+                    logging.warn("no type for group %s" % str(theme))
+                    themeType = "family"
+                else:
+                    themeType  = themeTypes[0]
+                #themeType = "complex"
                 themeGenes = theme.replace("/", "|")
             else:
                 themeGenes = theme
+                themeType = "gene"
+
+            if themeGenes=="" or causeGenes=="":
+                continue
+            if themeGenes==causeGenes:
+                continue
 
             relSubtype = ""
             eventId += 1
-            eventIdStr = "wpw%d" % eventId
+            eventIdStr = "wiki%d" % eventId
 
             # get all PMIDs
             pmids = []
@@ -251,7 +280,7 @@ def parseGpml(filename, accToSym):
                     continue
                 pmids.append(idToPmid[refId])
 
-            row = [eventIdStr, causeType, "", causeGenes, relType, themeType, "", themeGenes, relSubtype, "wikipathways", pathway, title, "|".join(pmids)]
+            row = [eventIdStr, causeType, "", causeGenes, themeType, "", themeGenes, relType, relSubtype, "wikipathways", pathway, title, "|".join(pmids)]
             rows.append(row)
 
             #print row

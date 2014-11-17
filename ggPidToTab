@@ -137,11 +137,11 @@ def parseXml(filename, accToSym):
 
 
     source = basename(filename).split(".")[0]
-    idToMember = {} # id -> ("complex" or "family" or "gene", name, |-sep list of genes)
+    idToMember = {} # id -> tuple ("complex" or "family" or "gene", descriptive name, |-sep list of gene symbols)
     idToSym = {} # id -> sym
 
     logging.info("pass1")
-    skipUps = []
+    skipSyms = []
     noSym = set()
     for mEl in root.findall("Model/MoleculeList/Molecule"):
         # <Molecule molecule_type="protein" id="201405">
@@ -164,16 +164,28 @@ def parseXml(filename, accToSym):
         if molType in ["protein", "rna"] or (molType=="complex" and len(complCompEls)==0):
             # weird enough, this can happen: a complex with a protein UP entry... 
             # and no components -> we treat these like a normal protein
-            upAcc = None
             sym = ""
             if "UP" in names:
                 upAcc = names["UP"]
                 upAcc = upAcc.split("-")[0]
-                sym = accToSym.get(upAcc, None)
-                if sym==None:
-                    skipUps.append(upAcc)
-                    continue
-            nameStr = names["PF"]
+                sym = accToSym.get(upAcc, "")
+            elif "OF" in names:
+                sym = names["OF"]
+            elif "LL" in names:
+                entrezId = names["LL"]
+                sym = accToSym.get(entrezId, "")
+
+            if "PF" in names:
+                nameStr = names["PF"]
+            elif "AS" in names:
+                nameStr = names["AS"]
+            else:
+                nameStr = ""
+
+            if sym=="":
+                skipSyms.append("/".join(names.values()))
+                continue
+
 
             if sym=="":
                 sym = trySymFromName(nameStr, accToSym)
@@ -186,16 +198,19 @@ def parseXml(filename, accToSym):
             # <Molecule molecule_type="compound" id="201403">
             # <Name name_type="CA" long_name_type="Chemical Abstracts" value="521-18-6" />
             # <Name name_type="PF" long_name_type="preferred symbol" value="DHT" />
-            for nameEl in mEl.findall("Name"):
-                if nameEl.attrib["name_type"]=="CA":
-                    idStr = "compound:CAS"+nameEl.attrib["value"]
-                elif nameEl.attrib["name_type"]=="PF":
-                    name = nameEl.attrib["value"]
-            idToMember[molId] = ("compound", name, idStr)
+            name = ""
+            sym = ""
+            if "CA" in names:
+                sym = "compound:CAS"+names["CA"]
+            if "PF" in names:
+                name = names["PF"]
+            if "AS" in names:
+                name = names["AS"]
+            idToMember[molId] = ("compound", name, sym)
 
-    logging.info("Could not resolve %d uniprot IDs, out of %d" % (len(skipUps), len(idToMember)))
+    logging.info("Could not resolve %d uniprot IDs, out of %d (debug-mode shows them)" % (len(skipSyms), len(idToMember)))
+    logging.debug("Unresolvable symbols: %s" %  ",".join(noSym))
     logging.info("%d molecules without an official symbol" % (len(noSym)))
-    logging.debug("list: %s" %  ",".join(noSym))
 
     logging.info("pass2 families")
     resolveFamilies(root, idToMember)
@@ -208,10 +223,22 @@ def parseXml(filename, accToSym):
         names = {}
         for nameEl in mEl.findall("Name"):
             names[nameEl.attrib["name_type"]] = nameEl.attrib["value"]
-        if molType=="complex" and not "UP" in names:
+
+        if molType=="complex":
+            complCompEls = mEl.findall("ComplexComponentList/ComplexComponent")
+            # it's only a complex if we have members
+            if len(complCompEls)==0:
+                logging.debug("Complex without members: %s" % "|".join(names.values()))
+                continue
+
             # <Name name_type="PF" long_name_type="preferred symbol" value="FA complex/FANCD2/Ubiquitin" />
+            name = ""
+            if "PF" in names:
+                name = names["PF"]
+            else:
+                name = names["AS"]
+
             symList = []
-            name = names["PF"]
             for compEl in mEl.findall("ComplexComponentList/ComplexComponent"):
                 compId = compEl.attrib["molecule_idref"]
                 if compId not in idToMember:
@@ -263,6 +290,7 @@ def parseXml(filename, accToSym):
         #assert(iType in ["transcription", "modification", "translocation"])
         src = ic.find("Source").text
 
+        # prepr evidence and pmid strings
         evidList = []
         for evidEl in ic.findall("EvidenceList/Evidence"):
             evidList.append(evidToName[evidEl.text])
@@ -291,13 +319,17 @@ def parseXml(filename, accToSym):
         for compType, iList in edges.iteritems():
             memCount+= len(iList)
 
+        # now create the pairs
         for pair in itertools.combinations(allParts,2 ):
-            m1, m2 = pair
-            subRel = "participates"
+            m1, m2 = pair # m1 and m2 are tuples (type, name, symbolList)
+            subRel = "collaborate"
             if m1 in edges["agent"]:
                 subRel = "activates"
             elif m1 in edges["inhibitor"]:
                 subRel = "inhibits"
+            elif m1 in edges["output"] and (m2 in edges["agent"] or m2 in edges["inhibitor"]):
+                # we already have act/inhibitor -> output covered, no need to add the reverse
+                continue
 
             pwName = intIdToName[intId]
 
@@ -316,7 +348,7 @@ def parseXml(filename, accToSym):
             yield row
 
         #print len(edges), memCount, intId, iType, evidStr, pmidStr, edges
-    logging.warn("Could not resolve %d members of interactions (probably non-human species)" % skipCount)
+    logging.warn("Resolved %d members. Could not resolve %d members in interactions" % (len(idToMember), skipCount))
 
 def pipeSplitAddAll(string, dict, key, toLower=False):
     " split on pipe and add all values to dict with key "
@@ -331,7 +363,7 @@ def parseUniprot(uniprotTable, accToSym):
     for row in lineFileNext(open(uniprotTable)):
         sym = row.hgncSym.split("|")[0]
         accToSym[sym] = sym # some entries have the HGNC symbol in the xref
-        #pipeSplitAddAll(row.entrezGene, accToSym, sym)
+        pipeSplitAddAll(row.entrezGene, accToSym, sym)
         pipeSplitAddAll(row.mainIsoAcc, accToSym, sym)
         pipeSplitAddAll(row.accList, accToSym, sym)
         pipeSplitAddAll(row.acc, accToSym, sym)
@@ -374,7 +406,7 @@ if args==[]:
     parser.print_help()
     exit(1)
 
-filename = args[0]
+filenames = args
 
 #uniprotTable = "/hive/data/inside/pubs/parsedDbs/uniprot.9606.tab"
 accToSym = parseHgnc(options.hgncFname)
@@ -382,8 +414,9 @@ accToSym = parseUniprot(options.uniprotFname, accToSym)
 
 print "#"+"\t".join(headers)
 
-logging.debug(filename)
-rows = parseXml(filename, accToSym)
-for row in rows:
-    l = u"\t".join(row)
-    print l.encode("utf8")
+for filename in filenames:
+    logging.debug(filename)
+    rows = parseXml(filename, accToSym)
+    for row in rows:
+        l = u"\t".join(row)
+        print l.encode("utf8")

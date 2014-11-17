@@ -3,12 +3,14 @@
 #for braney. in the future maybe use
 #!/usr/bin/env python
 
-# XX Todo: clear the pslTable field of the bed file to "", not needed anymore
+# XX why is this not found? 
+# grep 2191944440 01-conv/raw/*WUGSC*.pairs
+# http://www.ncbi.nlm.nih.gov/Traces/trace.cgi?&cmd=retrieve&val=2191944440&dopt=info&size=1&seeas=Show
 
-import logging, sys, optparse, gzip, collections, re, types, os, glob, subprocess, time, operator
+import logging, sys, optparse, gzip, collections, re, types, os, glob, subprocess, time, operator, marshal, string
 from itertools import chain
 from collections import defaultdict
-from os.path import basename, dirname, join, expanduser, isdir, isfile, abspath
+from os.path import basename, dirname, join, expanduser, isdir, isfile, abspath, splitext
 
 # for braney
 sys.path.insert(0, "/cluster/home/max/usr/scripts/lib")
@@ -23,6 +25,13 @@ CLUSTER="ku"
 RUNCFG="doBacEnds.conf"
 TEMPDIR="/scratch/tmp"
 QUERYCHUNKSIZE=8000000
+
+estCodes = ["EST", "RT-PCR", "cDNA"]
+filtTypes = ["MEDICAL RESEQUENCING", "Re-Sequencing"]
+#filtTypes = []
+
+# linked feature bed files have no header line, so here they are
+lfHeaders = ["chrom", "start", "end", "cloneId", "score", "strand", "pslTable", "lfCount", "lfStarts", "lfSizes", "lfNames"]
 
 # a template for the pipeline config file that is written with the "init" step
 DEFAULTS = """# the target UCSC genome db
@@ -72,7 +81,9 @@ stDevFact=10
 
 # for the optional step "genbank":
 
-# a fasta file with a parsed version of genbank GSS, see help message
+# a fasta file with a parsed version of genbank GSS
+# create one like this:
+# gbToFaRa /dev/null gss.fa gss.ra gss.stat /cluster/data/genbank/data/download/genbank.202.0/*gss* -byOrganism=./
 #gssFile=/hive/users/max/bacEnds/oldBacImport/Homo_sapiens/gss.fa
 
 # a directory with a NCBI clone db ftp site mirror, only the files *.endinfo_9606.out are needed.
@@ -86,7 +97,7 @@ doDelDirs = False
 
 # ==== FUNCTIONs =====
 def iterTsvRows(inFile, encoding=None, fieldSep="\t", isGzip=False, skipLines=None, \
-        makeHeadersUnique=False, commentPrefix=None):
+        makeHeadersUnique=False, commentPrefix=None, headers=None):
     """ 
         parses tab-sep file with headers as field names 
         yields collection.namedtuples
@@ -101,10 +112,11 @@ def iterTsvRows(inFile, encoding=None, fieldSep="\t", isGzip=False, skipLines=No
     else:
         fh = inFile
 
-    line1 = fh.readline()
-    line1 = line1.strip("\n").strip("#")
-    headers = line1.split(fieldSep)
-    headers = [re.sub("[^a-zA-Z0-9_]","_", h) for h in headers]
+    if headers==None:
+        line1 = fh.readline()
+        line1 = line1.strip("\n").strip("#")
+        headers = line1.split(fieldSep)
+        headers = [re.sub("[^a-zA-Z0-9_]","_", h) for h in headers]
 
     if makeHeadersUnique:
         newHeaders = []
@@ -157,37 +169,37 @@ def mustBeEmptyDir(path, makeDir=False):
     logging.info("Creating directory %s" % path)
     os.makedirs(path)
 
-def parseClips(seqLen, row):
-    """ parse the quality and vector clipping positions and return a tuple with
-    the pair that is furthest inside the sequences . NOT USED DUE TO NCBI BUGS
-    """
-    # vector
-    if row.CLIP_VECTOR_LEFT=="" or row.CLIP_VECTOR_LEFT=="0":
-        clipVLeft = 0 #  no clipping
-    else:
-        clipVLeft  = int(row.CLIP_VECTOR_LEFT)-1
+#def parseClips(seqLen, row):
+    #""" parse the quality and vector clipping positions and return a tuple with
+    #the pair that is furthest inside the sequences . NOT USED DUE TO NCBI BUGS
+    #"""
+    ## vector
+    #if row.CLIP_VECTOR_LEFT=="" or row.CLIP_VECTOR_LEFT=="0":
+        #clipVLeft = 0 #  no clipping
+    #else:
+        #clipVLeft  = int(row.CLIP_VECTOR_LEFT)-1
 
-    if row.CLIP_VECTOR_RIGHT=="" or row.CLIP_VECTOR_RIGHT=="0":
-        clipVRight = seqLen
-    else:
-        clipVRight = int(row.CLIP_VECTOR_RIGHT)
+    #if row.CLIP_VECTOR_RIGHT=="" or row.CLIP_VECTOR_RIGHT=="0":
+        #clipVRight = seqLen
+    #else:
+        #clipVRight = int(row.CLIP_VECTOR_RIGHT)
 
     # quality
-    if row.CLIP_QUALITY_LEFT=="" or row.CLIP_QUALITY_LEFT=="0":
-        clipQLeft = 0
-    else:
-        clipQLeft = int(row.CLIP_QUALITY_LEFT)
-
-    if row.CLIP_QUALITY_RIGHT=="" or row.CLIP_QUALITY_RIGHT=="0":
-        clipQRight = seqLen
-    else:
-        clipQRight = int(row.CLIP_QUALITY_RIGHT)
+    #if row.CLIP_QUALITY_LEFT=="" or row.CLIP_QUALITY_LEFT=="0":
+        #clipQLeft = 0
+    #else:
+        #clipQLeft = int(row.CLIP_QUALITY_LEFT)
+#
+    #if row.CLIP_QUALITY_RIGHT=="" or row.CLIP_QUALITY_RIGHT=="0":
+        #clipQRight = seqLen
+    #else:
+        #clipQRight = int(row.CLIP_QUALITY_RIGHT)
 
     # print locals()
-    clipLeft = max(clipQLeft, clipVLeft)
-    clipRight = min(clipQRight, clipVRight)
-    # correct NCBI 1-based,full coordinates to 0-based,half-open
-    return clipLeft-1, clipRight
+    #clipLeft = max(clipQLeft, clipVLeft)
+    #clipRight = min(clipQRight, clipVRight)
+    ## correct NCBI 1-based,full coordinates to 0-based,half-open
+    #return clipLeft-1, clipRight
 
 def convAnc(inFname, outFlagFile):
     """
@@ -219,149 +231,190 @@ def convAnc(inFname, outFlagFile):
     faIter = parseFasta(faFname)
 
     # fill two hashes with data in file:
-    # 1) insData is a dict of: (insSize, stdev) -> dict of: cloneId -> (forwardTis, revTis)
-    insData = defaultdict(dict)
+    # 1) insData is a dict of: outFname -> dict of: cloneId -> (forwardTis, revTis)
     # 2) seqData: dict ti -> sequence
+    insData = defaultdict(dict)
     seqData = dict()
-    insDataCount=0
-    for row in iterTsvRows(inFname):
-        seqId, seq = faIter.next()
-        ti = int(row.TI)
-        logging.debug("ti %d" % ti)
-        # check if line is really relevant
-        # skip if not a clone end
-        # a strategy can be WGA or FULLLENGTH and the trace type can still be CLONENED
-        # this is the case for clone ends that were used to select BACS for later sequencing.
-        # we then have two CLONEEND ends + all the other ends of the fragmented with a different
-        # trace type code. (We only keep the two CLONEENDS in this case)
-        if not (row.STRATEGY=="CLONEEND" or row.TRACE_TYPE_CODE=="CLONEEND"):
-            logging.debug("not a cloneend, ti %d" % ti)
-            continue
-        # skip if not correct library
-        #if opt.lib is not None and row.LIBRARY_ID!=opt.lib:
-            #logging.debug("not good library, ti %d" % ti)
-            #continue
-        direction = row.TRACE_END[:1] # F,R or U(nknown)
-        # skip if primer has no direction
-        if direction=="U":
-            logging.debug("cloneend and good library, but unknown direction, ti %d" % ti)
-            continue
 
-        # parse relevant fields out of a line
-        if row.INSERT_SIZE=="":
-            print "unknown insert size"
-            insSize=0
-        else:
-            insSize = int(row.INSERT_SIZE)
-
-        # common bug in trace archive
-        if insSize==40:
-            insSize=40000
-
-        cloneId = row.CLONE_ID
-        if cloneId=="":
-            cloneId=row.TEMPLATE_ID
-        if len(cloneId)<6:
-            libId = row.LIBRARY_ID.split()[0]
-            cloneId = "%s_%s_%s" % (libId, row.PLATE_ID, row.WELL_ID)
-
-        tempId  = row.TEMPLATE_ID
-        stdev   = row.INSERT_STDEV
-        if stdev=="":
-            stdev=0
-        else:
-            stdev = int(stdev)
-
-        # if not specified by NCBI, accept any insert size
-        if stdev==0 and insSize==0:
-            insSize=999999
-            stdev=1000000
-
-        libId   = row.LIBRARY_ID
-        if libId=="":
-            libId="UNKNOWN"
-
-        # make sure that fasta iterator still in sync with rows
-        faTi = seqId.split()[0].split("|")[2]
-        faTi = int(faTi)
-        assert(faTi==ti)
-
-        seqLen = len(seq)
-        # this happened one single time on hg19, a trace full of Ns
-        if seqLen>5000:
-            logging.warn("TI %d is longer than 5kbp, ignoring" % faTi)
-            continue
-        #clipLeft, clipRight = parseClips(seqLen, row)
-
-        # make sure we have a useable cloneId
-        assert(len(cloneId)>1)
-
-        #print insSize, tempId, cloneId, ti, direction
-
-        # put info into a nested dictionary = hash:
-        # insertSize&stdev -> cloneId -> (list of forward seq, list of reverse seqs)
-
-        insDesc = (insSize, stdev)
-        cloneDict = insData[insDesc]
-        #insData[insDesc].setdefault(cloneId, ([], []))
-
-        if direction=="F":
-            idx = 0
-        else:
-            idx = 1
-
-        # NCBI seems to have lots of invalid clip fields
-        # ignoring clipping info now
-        #clipSeq = seq[clipLeft:clipRight]
-        clipSeq = seq # XX clipping doesn't work, example Ti 257779667
-        #print faTi, clipLeft, clipRight
-        #print row, clipLeft, clipRight, clipSeq
-
-        # write into dict cloneId -> (list of forw TIs, lift of rev TIs)
-        cloneDict.setdefault(cloneId, ([], []))[idx].append(ti)
-        seqData[faTi]= clipSeq
-        insDataCount+=1
-
-    logging.info("Got %d read info rows and %d reads" % (insDataCount, len(seqData)))
+    # comments:
+    # - the insert size is pretty much nonsense and often not set at all, or set to 0
+    #   So not using it
+    # - clipping values are often wrong, so not using clipping (parseClip above)
+    # - a few traces can be longer than 5000bp, so ignoring these
+    # - the seq strategy can be WGA, trace type WGS, but it can still be a valid end
+    #   so we do not select reads based on trace type or strategy
+    #   example: ABC11-46760600A11
+    # - a strategy can be WGA or FULLLENGTH and the trace type can still be CLONENED
+    #   we handle this by subsegmenting everything by center+project+traceType
+    #   this is the case for clone ends that were used to select BACS for later sequencing.
+    #   we then have two CLONEEND ends + all the other ends of the fragment with a different
+    #   trace type code. (We only keep the two CLONEENDS in this case)
 
     if isdir(outFlagFile):
         outDir = outFlagFile
     else:
         outDir = dirname(outFlagFile)
 
+    # direct all logging to a file
+    logFname = join(outDir, fileId+".log")
+    logging.info("Logging to file %s" % logFname)
+
+    rootLog = logging.getLogger('')
+    logging.root.handlers = []
+    # setup file logger
+    fh = logging.FileHandler(logFname)
+    fh.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    rootLog.addHandler(fh)
+
+    readCount=0
+    skipCount = defaultdict(int)
+    estFname = os.path.join(outDir, "est", "%s.fa" % (fileId))
+    estFh = None # open only when needed
+
+    doNextSeq = True
+
+    for row in iterTsvRows(inFname):
+        isEst = False
+        if doNextSeq:
+            seqId, seq = faIter.next()
+            faTi = int(seqId.split()[0].split("|")[2])
+        doNextSeq = True
+        ti = int(row.TI)
+
+        # make sure that fasta iterator still in sync with rows
+        #logging.debug("ti %d" % ti)
+        if faTi > ti:
+            logging.warn("fasta file at TI %d, but tab file at TI %d, skipping one rec in tab" % \
+                (faTi, ti))
+            doNextSeq = False
+            continue
+
+        while faTi < ti:
+            logging.warn("fasta file at TI %d, but tab file at TI %d, skipping one rec in fasta" % \
+                (faTi, ti))
+            seqId, seq = faIter.next()
+            faTi = int(seqId.split()[0].split("|")[2])
+            # fasta file at TI 164315244, but tab file at TI 164317242, skipping one rec in fasta
+
+        if faTi!=ti:
+            print ti, faTi
+        assert(faTi==ti)
+
+        # now parse the tab sep file TI details
+        if row.TRACE_TYPE_CODE in estCodes or row.STRATEGY in estCodes:
+            skipCount["estType"] += 1
+            if estFh==None:
+                estFh = open(estFname, "w")
+            estFh.write(">%d\n%s\n" % (ti, seq))
+            continue
+
+        if row.TRACE_TYPE_CODE in filtTypes or row.STRATEGY in filtTypes:
+            skipCount["filtTypes"] += 1
+            continue
+            
+        direction = row.TRACE_END[:1] # F,R or U(nknown)
+        # skip if primer has no direction
+        if direction in ["N", "U", ""]:
+            #logging.debug("unknown direction, ti %d" % ti)
+            skipCount["unknownDirection"] += 1
+            continue
+
+        cloneId = row.CLONE_ID
+        if cloneId=="":
+            cloneId=row.TEMPLATE_ID
+        if len(cloneId)<6:
+            cloneId = "%s_%s_%s" % (row.CENTER_NAME, row.CENTER_PROJECT, cloneId)
+
+        # this happened one single time on hg19, a trace full of Ns
+        if len(seq)>5000:
+            logging.warn("trace %d is longer than 5kbp, ignoring" % faTi)
+            skipCount["tooLong"] += 1
+            continue
+
+        # make sure we have a useable cloneId
+        assert(len(cloneId)>1)
+
+        # put info into a nested dictionary = hash:
+        # filename -> cloneId -> (list of forward seq, list of reverse seqs)
+
+        libDesc = [row.CENTER_NAME, row.CENTER_PROJECT, row.LIBRARY_ID, row.INSERT_SIZE, row.TRACE_TYPE_CODE]
+        libDesc = [s.replace(":","-").replace("/", "-").replace(" ", "_").replace(".", "_") for s in libDesc]
+        if libDesc[1].startswith("H_"):
+            # WUGSC has the weird habit of definining a "project" == "tube"
+            libDesc[1] = ""
+        outFname = ":".join(libDesc)
+        cloneDict = insData[outFname]
+
+        # write into dict cloneId -> (list of forw TIs, list of rev TIs)
+        if direction=="F":
+            idx = 0
+        else:
+            idx = 1
+        cloneDict.setdefault(cloneId, ([], []))[idx].append(ti)
+        seqData[faTi]= seq
+        readCount+=1
+
     outFhDict = {}
     # output to file
-    for insTuple, cloneData in insData.iteritems():
-        print "writing data", insTuple, "..."
-        insStr = "-".join([str(x) for x in insTuple])
-        pairOutFname = os.path.join(outDir, "%s.%s.%s.pairs" % (fileId, insStr, libId))
+    for fileName, cloneData in insData.iteritems():
+        origFname = fileName
+        p = fileName.split(":")
+        if p[4]=="EST":
+            fileName="EST"
+        elif len(cloneData)<30:
+            # to avoid opening too many files, remove project ID and library ID
+            # format = center:project:library:insertSize:cloneType
+            # WUGSC:H_HD-0001B02:ABC18:40000:CLONEEND --> WUGSC:OTHER:OTHER:40000:CLONEEND
+            # this is different from the merging of libraries done later
+            fileName = "%s:::%s:%s" % (p[0], p[3], p[4])
 
-        # lazily open files
-        if pairOutFname in outFhDict:
-            pairOutFh, faOutFh = outFhDict[pairOutFname]
-        else:
-            faOutFname = pairOutFname.replace(".pairs", ".fa")
-            pairOutFh = open(pairOutFname, "w")
-            faOutFh = open(faOutFname, "w")
-            outFhDict[pairOutFname] = (pairOutFh, faOutFh)
-        
+        pairOutFname = os.path.join(outDir, "%s.%s.pairs" % (fileId, fileName))
+        print "writing data from", origFname, "to", pairOutFname
+
         # output pairs and fa
         for cloneId, tiTuple in cloneData.iteritems():
             fwList, revList = tiTuple
             # need at least a pair
-            if len(fwList)==0 or len(revList)==0:
+            #if len(fwList)==0 or len(revList)==0:
+                #skipCount["missingOtherEnd"] += len(fwList)
+                #skipCount["missingOtherEnd"] += len(revList)
+                #logging.debug("For traces %s and %s, missing either forward or rev direction" % (fwList, revList))
+                #continue
+            # skip if too many reads, probably WGS reads then
+            if len(fwList)>50 or len(revList)>50:
+                logging.debug("traces like %s,... too many reads per clone %s, %d/%d reads in total" % (str(fwList[:3]), cloneId, len(fwList), len(revList)))
+                skipCount["tooManyReads"] += len(fwList)
+                skipCount["tooManyReads"] += len(revList)
                 continue
             fwStr = ",".join([str(x) for x in fwList])
             revStr = ",".join([str(x) for x in revList])
+
+            # lazily open files
+            if pairOutFname in outFhDict:
+                pairOutFh, faOutFh = outFhDict[pairOutFname]
+            else:
+                faOutFname = pairOutFname.replace(".pairs", ".fa")
+                pairOutFh = open(pairOutFname, "w")
+                faOutFh = open(faOutFname, "w")
+                outFhDict[pairOutFname] = (pairOutFh, faOutFh)
+        
+            # write to output files
             pairOutFh.write("\t".join([fwStr, revStr, cloneId]))
             pairOutFh.write("\n")
-
             for ti in chain(fwList, revList):
                 faOutFh.write(">%d\n%s\n" % (ti, seqData[ti]))
                 
-    # create zero byte flag file
+    # create zero byte flag file for parasol
     flagFname = join(outDir, fileId+".done")
+    if estFh!=None:
+        estFh.close()
+
     open(flagFname, "w")
+    print("Got %d read info rows and %d reads" % (readCount, len(seqData)))
+    print("Skipped reads and reasons: %s" % (str(skipCount)))
+
 
 hgConf = None
 runConf = None
@@ -372,7 +425,7 @@ def parseConf(fname, mustExist=False):
 
     if not isfile(fname):
         if mustExist:
-            raise Exception("File %s is required but does not exist" % fname)
+            raise Exception("File %s is required but does not exist in current dir" % fname)
         return confDict
 
     for line in open(fname):
@@ -443,6 +496,8 @@ def getFromNcbi():
 def submitConvJobs(outDir):
     " submit jobs to convert to outDir "
     mustBeEmptyDir(outDir, makeDir=True)
+    mustBeEmptyDir(join(outDir, "est"), makeDir=True) # for est seqs, separate dir
+
     downDir = cfgMustGet("downDir")
 
     batchDir = join(outDir, "batch")
@@ -470,12 +525,11 @@ def mustExistFiles(convDir, mask):
     if len(fnames)==0:
         raise Exception("There are no clone ends in %s. It seems like this species doesn't have any clone libraries" % convDir)
     
-def catAndSplitSeqs(convDir, alnDir):
+def catAndSplitSeqs(convDir, alnDir, queryDir):
     " cat all .fa files in convDir and write and split to alnDir "
     mustExistFiles(convDir, "*.fa")
     mustBeEmptyDir(alnDir, makeDir=True)
     logging.info("splitting query files")
-    queryDir = join(alnDir, "query")
     mustBeEmptyDir(queryDir, makeDir=True)
     cmd = "cat %s/*.fa | faSplit about stdin %d %s/" % (convDir, QUERYCHUNKSIZE, queryDir)
     runCmd(cmd)
@@ -483,7 +537,8 @@ def catAndSplitSeqs(convDir, alnDir):
 def submitAlnJobs(convDir, alnDir):
     " split fastas and submit blat jobs "
      #pubBigBlat aln hg38 CH277/ bigBlat/ --blatOpt maxIntron=20,fastMap,minScore=100 --pslFilterOpt globalNearBest=0.02 -t
-    catAndSplitSeqs(convDir, alnDir)
+    queryDir = join(alnDir, "query")
+    catAndSplitSeqs(convDir, alnDir, queryDir)
 
     # genome partitioning parameters, using genbank pipeline code
     params={}
@@ -498,7 +553,6 @@ def submitAlnJobs(convDir, alnDir):
     pslFilterOpt = cfgMustGet("pslFilterOpt")
     
     # various configs for the blat jobs
-    queryDir = join(alnDir, "query")
     qFastas = glob.glob(join(queryDir, "*.fa"))
     bigBlatDir = join(alnDir, "bigBlat")
     batchDir = join(alnDir, "batch")
@@ -512,58 +566,330 @@ def submitAlnJobs(convDir, alnDir):
         runner.submit(l)
     runner.finish()
 
-def getInsSizes(convDir):
-    " get list of (insert size, stdev) from .pairs files "
-    sizeList = set()
+def getLibs(convDir):
+    " get names of libs as dict name of lib -> list of filenames"
+    libs = defaultdict(list)
     fnames = glob.glob(join(convDir, "*.pairs"))
     for fname in fnames:
-        # e.g. 018.159000-15900.fa
-        insSize, stDev = basename(fname).split(".")[1].split("-")
-        if insSize != 0:
-            sizeList.add((int(insSize), int(stDev)))
-    return sizeList
+        # e.g. ./01-conv/554.WUGSC:OTHER:OTHER:197000:CLONEEND.pairs
+        logging.debug(fname)
+        count, libName = string.split(basename(fname), ".", maxsplit=1)
+        libName = libName.replace(".pairs", "")
+        libs[libName].append(fname)
+    logging.debug("Got %d libs: %s" % (len(libs), libs))
+    logging.info("Got %d libs" % (len(libs)))
+    return libs
 
-def alnCat(bigBlatDir, pslFname):
-    " filter and concat alignments into one big file "
+def alnSplit(pairDir, pslDir, splitPslDir):
+    " concat and re-split psl files into pieces, one for each pair file "
+    mustBeEmptyDir(splitPslDir, makeDir=True)
+
+    # create a dict with seqId -> trackname from all pair files
+    logging.info("Reading pair files in %s" % pairDir)
+    seqIdToTrack = {}
+    pairFnames = glob.glob(join(pairDir, "*.pairs"))
+    for fname in pairFnames:
+        trackName = splitext(basename(fname))[0]
+        for line in open(fname):
+            fields = line.rstrip("\n").split('\t')
+            leftTiStr, rightTiStr, cloneName = fields
+            leftTis = leftTiStr.split(",")
+            rightTis = rightTiStr.split(",")
+            for ti in leftTis:
+                seqIdToTrack[ti] = trackName
+            for ti in rightTis:
+                seqIdToTrack[ti] = trackName
+    logging.info("Read seq -> track association for %d sequences" % len(seqIdToTrack))
+
+    # now split the big psl files
+    logging.info("Splitting PSL files")
+    fhCache = {}
+    pslFnames = glob.glob(join(pslDir, "*.psl"))
+    notTrack = set()
+    for pslFname in pslFnames:
+        for rawLine in open(pslFname):
+            line = rawLine.rstrip("\n")
+            fields = line.split("\t")
+            queryId = fields[9]
+            track = seqIdToTrack.get(queryId, None)
+            if track==None:
+                notTrack.add(queryId)
+                continue
+            outFname = join(splitPslDir, track+".psl")
+            if outFname not in fhCache:
+                ofh = open(outFname, "w")
+                fhCache[outFname] = ofh
+            else:
+                ofh = fhCache[outFname]
+            ofh.write(rawLine)
+
+    logging.info("Found %d sequence IDs that were not in the .pair files: %s" % (len(notTrack), ",".join(notTrack)))
+    for ofh in fhCache.values():
+        ofh.close()
+    logging.info("split PSLs written to %s" % splitPslDir)
+
+def alnCat(bigBlatDir):
+    " concat alignments into bigger PSL files, one per track "
     targetDb = cfgMustGet("db")
     pslFilterOpt = cfgMustGet("pslFilterOpt")
-    bigBlat.doPslCat(targetDb, bigBlatDir, pslFilterOpt, singleOutFname=pslFname)
+    #bigBlat.doPslCat(targetDb, bigBlatDir, pslFilterOpt, singleOutFname=pslFname)
+    jobLines = bigBlat.getCatJoblines(targetDb, bigBlatDir, pslFilterOpt)
+    batchDir = join(alnDir, "batchCat")
+
+    runner = maxRun.Runner(batchDir=batchDir, headNode=CLUSTER, runNow=True)
+    runner.submitAll(jobLines)
+    runner.finish()
+    logging.info("concated psl files to %s/pslCat" % bigBlatDir)
+
+def mergePairFaFiles(fnames, ofh, faFh, accToBankClone):
+    """ merge pairs files, not only concat, but also put together reads that were 
+        split over several files. Remove clones with no fw or rev reads. Write 
+        paired reads out to faFh.
+        Try to use the cloneDb clone name if possible
+    """
+    # read everything into two dicts first
+    # complex dict: cloneId -> (fwList, revList)
+    cloneDict = {}
+    # simple dict: seqId -> sequence
+    seqDict = {}
+    for pairFname in fnames:
+        logging.info("Reading %s" % pairFname)
+        for line in open(pairFname):
+            fields = line.rstrip("\n").split("\t")
+            forwSeqs, revSeqs, cloneName = fields
+            forwSeqs = forwSeqs.split(",")
+            revSeqs = revSeqs.split(",")
+            if revSeqs==[""]:
+                revSeqs = []
+            if forwSeqs==[""]:
+                forwSeqs= []
+
+            cloneDict.setdefault(cloneName, ([], []))[0].extend(forwSeqs)
+            cloneDict[cloneName][1].extend(revSeqs)
+
+        faFname = splitext(pairFname)[0]+".fa"
+        faIter = parseFasta(faFname)
+        for acc, seq in faIter:
+            seqDict[acc] = seq
+
+    # now iterate over all clones, write out pairs and seqs on the go
+    singleEndClones = 0
+    cloneCount = 0
+    seqCount = 0
+    for cloneName, seqTuple in cloneDict.iteritems():
+        forwSeqs, revSeqs = seqTuple
+        #print cloneName, seqTuple
+        assert("" not in forwSeqs)
+        assert("" not in revSeqs)
+        # skip clones with one missing end
+        if len(forwSeqs)==0 or len(revSeqs)==0:
+            singleEndClones += 1
+            continue
+
+        # try to replace clone name
+        ti1 = forwSeqs[0]
+        bankName, cloneName2 = accToBankClone.get(ti1, (None, None))
+        if cloneName2!=None:
+            cloneName = cloneName2
+
+        # write out the pair
+        cloneCount += 1
+        row = [",".join(forwSeqs), ",".join(revSeqs), cloneName]
+        ofh.write("\t".join(row))
+        ofh.write("\n")
+
+        # write all sequences
+        forwSeqs.extend(revSeqs)
+        allSeqs = forwSeqs
+        for acc in allSeqs:
+            seqCount += 1
+            seq = seqDict[acc]
+            faFh.write(">%s\n%s\n" % (acc, seq))
+    logging.info("Wrote %d clones, %s seqs. Skipped %d single end clones" % \
+        (cloneCount, seqCount, singleEndClones))
+
+def reassignTracks(trackToCountFnames, logFh):
+    """ some libraries are way too small to have them in their own track.
+    Instead of deleting them, we hierarchically merge libraries into bigger tracks,
+    creating first one mixid track per project, then per center, then a MISC track
+    that gets all the remaining clones 
+    """
+    # now reassign all chunks that are <20k to a track center + library + strat
+    tfn = {}
+    for chunk, countFnames in trackToCountFnames.iteritems():
+        count, fnames = countFnames
+        if count < 20000:
+            center, proj, lib, insSize, strat = chunk
+            newChunk = (center, "", lib, insSize, strat)
+            if newChunk not in tfn:
+                tfn[newChunk]= [0, []]
+            tfn[newChunk][1].extend(fnames)
+            tfn[newChunk][0]+=count
+            logFh.write("%s assigned to %s, files %s\n" % (repr(chunk), repr(newChunk), str(fnames)))
+        else:
+            tfn[chunk] = countFnames
+    trackFnames = tfn
+
+    # now reassign all chunks that are <20k to a track with only "center"
+    tfn = {}
+    for chunk, countFnames in trackToCountFnames.iteritems():
+        count, fnames = countFnames
+        if count < 20000:
+            center, proj, lib, insSize, strat = chunk
+            newChunk = (center, "", "", "", "")
+            if newChunk not in tfn:
+                tfn[newChunk]= [0, []]
+            logFh.write("Reassigning %s to %s\n" % (chunk, newChunk))
+            tfn[newChunk][0]+=count
+            tfn[newChunk][1].extend(fnames)
+        else:
+            tfn[chunk] = countFnames
+    trackFnames = tfn
+
+    # finally, put all tracks that still have <20k features into a MISC track
+    tfn = defaultdict(list)
+    otherCount=0
+    otherFnames = set()
+    for chunk, countFnames in trackFnames.iteritems():
+        count, fnames = countFnames
+        if count > 20000:
+            tfn[chunk] = countFnames
+        else:
+            logFh.write("Assigning track %s to MISC, too few features %d\n" % (chunk, count))
+            otherFnames.update(fnames)
+            otherCount += count
+
+    miscChunk = ("MISC", "","", "", "")
+    tfn[miscChunk]=(otherCount, otherFnames)
+    trackFnames = tfn
+
+    return trackFnames
 
 def convCat(convDir, convCatDir):
-    # pair files
+    " concat all *.pair files of a lib into one new pair file, skip file with too short libraries "
     mustBeEmptyDir(convCatDir, makeDir=True)
 
-    for insSize, stDev in getInsSizes(convDir):
-        logging.info("Concatting all pairs of insert size %d, stDev %d" % (insSize, stDev))
-        insStr = "%d-%d" % (insSize, stDev)
-        fMask = join(convDir, "*.%s.*.pairs" % insStr)
-        outFname = join(convCatDir, "%d-%d.pairs" % (insSize, stDev))
-        cmd = "cat %s > %s" % (fMask, outFname)
-        runCmd(cmd)
+    # a chunk is a list of pair files with the same center,proj,lib,insSize,strategy tuple but from
+    # different input files (the input files are split)
 
-def pairPsl(convDir, pslFname, pairDir, onlyInsSize):
-    " concat blat output files, and run one pslPair process per insert size "
-    mustBeEmptyDir(pairDir, makeDir=True)
+    # nasty detail: rev and forward reads can be split over files, e.g. CH17-271E23
+    # has two reads FW 1871673621 and REV 1873213322 in files 385 and 387
+    # see /hive/data/outside/ncbi/TraceDB/homo_sapiens/anc.homo_sapiens.38{5,7}.gz
 
-    insSizes = getInsSizes(convDir)
+    logFh = open("libAssign.log", "w")
+    # first get a dict with chunk -> [lineCount, list of fnames]
+    trackToCountFnames = {}
+    for chunkName, fnames in getLibs(convDir).iteritems():
+        logging.debug(chunkName)
+        chunk = tuple(chunkName.split(":"))
+        if len(chunk)!=5:
+            raise Exception(str(chunk))
+        center, proj, lib, insSize, strat = chunk
+
+        # prettify
+        if proj=="GENOMIC-SEQUENCING-DIPLOID-HUMAN-REFERENCE-GENOME":
+            proj = "huRef"
+        if proj=="NHGRI-HUMAN-CORIELLE-DNA":
+            proj = "Corielle"
+        proj = proj.replace("HUMAN_", "")
+
+        if "GENOMIC-SEQUENCING-DIPLOID-HUMAN-REFERENCE-GENOME_HUREF" in proj:
+            proj = proj.replace("GENOMIC-SEQUENCING-DIPLOID-HUMAN-REFERENCE-GENOME_HUREF", "huRef")
+        if "GENOMIC-SEQUENCING-DIPLOID-HUMAN-REFERENCE-GENOME_HUREF" in lib:
+            lib = lib.replace("GENOMIC-SEQUENCING-DIPLOID-HUMAN-REFERENCE-GENOME_HUREF", "huRef")
+
+        chunk = (center, proj, lib, insSize, strat)
+        chunk = tuple([x.replace("OTHER", "") for x in chunk])
+
+        if insSize!="" and int(insSize) < 6000:
+            logFh.write("Skipping files with %s, insert size too small\n" % chunkName)
+            continue
+
+        lCount = 0
+        for fname in fnames:
+            lCount += int(subprocess.check_output(["wc","-l", fname]).split()[0])
+
+        if chunk not in trackToCountFnames:
+            trackToCountFnames[chunk] = [0, []]
+        trackToCountFnames[chunk][0]+= lCount
+        trackToCountFnames[chunk][1]=fnames
+
+    trackFnames = reassignTracks(trackToCountFnames, logFh)
+
+    # now concatenate all files of each track (=chunk) into two final <track>.pairs/.fa files
+    # where possible, replace the trace DB clone names with the cloneDB clone names
+    accToBankClone = openAccToClone()
+    logging.info("Concatenating the pair and fasta files")
+    rows = []
+    for track, countFnames in trackFnames.iteritems():
+        count, fnames = countFnames
+        track = ":".join(track)
+
+        # merge pair files
+        ofh = open(join(convCatDir, "%s.pairs" % track), "w")
+        faOfh = open(join(convCatDir, "%s.fa" % track), "w")
+        logging.info("track %s" % track)
+        mergePairFaFiles(fnames, ofh, faOfh, accToBankClone)
+        
+        # debug info
+        rows.append(( count, track, str(len(fnames)), str(fnames)))
+    rows.sort()
+
+    # this is nice for debugging, libInfo.log shows all tracks, files, feature counts and file counts
+    ofh = open("libInfo.tab", "w")
+    ofh.write("pairCount\ttrack\tfileCount\tfiles\n")
+    for r in rows:
+        ofh.write("\t".join([str(x) for x in r]))
+        ofh.write("\n")
+    logging.info("Wrote library tracking information to libAssign.log")
+    logging.info("Wrote track sequence information for inspection to libInfo.tab")
+    logging.info("Wrote fasta/pairs to %s" % convCatDir)
+
+def pairPsl(pslDir, pairDir, outDir):
+    " run one pslPair process per pairs/psl filename pair "
+    #libNames = getLibs(convDir)
+    mustBeEmptyDir(outDir)
     targetDb = cfgMustGet("db")
     nearTop = cfgMustGet("nearTop")
 
     bigBlatDir = join(alnDir, "bigBlat")
-    pslTable = cfgMustGet("pslTable")
+    #pslTable = cfgMustGet("pslTable")
+    pslTable = '""'
 
-    for insSize, stDev in insSizes:
-        if onlyInsSize!=None and insSize!=onlyInsSize:
-            logging.info("skipping size, because insSize option was set")
-            continue
-        logging.info("Running pslPairs for insert size %d" % (insSize))
-        stDevFact = int(cfgMustGet("stDevFact"))
-        minSize = max(0, insSize-(stDevFact*stDev))
-        maxSize = insSize+(stDevFact*stDev)
-        pairFname = join(convDir, "catPairs", "%d-%d.pairs" % (insSize, stDev))
-        outFname = join(pairDir, "%d-%d" % (insSize, stDev))
-        tInsert = int(cfgMustGet("tInsert"))
-        hardMax = int(cfgMustGet("hardMax"))
+    #print pslDir
+    pslFnames = sorted(glob.glob(join(pslDir, "*.psl")))
+    pairFnames = sorted(glob.glob(join(pairDir, "*.pairs")))
+    #print set(pslFnames)-set(pairFnames)
+    #print set(pairFnames)-set(pslFnames)
+    #print len(pslFnames)
+    #print len(pairFnames)
+    assert(len(pslFnames)==len(pairFnames))
+
+    tInsert = int(cfgMustGet("tInsert"))
+    hardMax = int(cfgMustGet("hardMax"))
+
+    for pslFname, pairFname in zip(pslFnames, pairFnames):
+        pslBase = basename(pslFname).split(".")[0]
+        pairBase = basename(pairFname).split(".")[0]
+        assert(pslBase==pairBase)
+
+        insSize = basename(pslFname).split(":")[-2]
+        logging.info("Running pslPairs for track %s" % pslBase)
+
+        if insSize=="":
+            # if we have no insert, accept almost any insert size
+            minSize = 1000
+            maxSize = hardMax
+        else:
+            # otherwise accept anything around the insert size
+            insSize = int(insSize)
+            stDevFact = int(cfgMustGet("stDevFact"))
+            stDev = 0.2*insSize # just made up something not too far off
+            minSize = max(0, insSize-(stDevFact*stDev))
+            maxSize = insSize+(stDevFact*stDev)
+
+        #pairFname = join(convDir, "catPairs", "%s.pairs" % (libName))
+        outFname = join(outDir, pslBase)
         cmd = "pslPairs %(pslFname)s -min=%(minSize)d -max=%(maxSize)d %(pairFname)s %(pslTable)s %(outFname)s "\
               "-slop -short -long -orphan -mismatch -noBin " \
               "-tInsert=%(tInsert)d -hardMax=%(hardMax)d -nearTop=%(nearTop)s" % locals()
@@ -677,72 +1003,72 @@ def makeBb(pairDir):
     os.remove(sizeFname)
     logging.info("Results written to %s and %s" % (tempBed, bigBed))
 
-def parseIds(bedFname):
-    " parse clone end ids from bac ends bedfname. returns set of ints "
-    inFh = open(bedFname)
-    idSet = set()
-    print bedFname
-    for line in inFh:
-        fields = line.rstrip("\n").split()
-        if len(fields)<10:
-            print fields
-        endIdStr = fields[10] # 11 if using a bin column
-        endIds = endIdStr.split(",")
-        # this could be removed if non-NCBI ends are mapped:
-        # convert all strings to ints in the list
-        #endIds = [x for x in endIds]  
-        idSet.update(endIds)
-    return idSet
+#def parseIds(bedFname):
+#    " parse clone end ids from bac ends bedfname. returns set of ints "
+#    inFh = open(bedFname)
+#    idSet = set()
+#    print bedFname
+#    for line in inFh:
+#        fields = line.rstrip("\n").split()
+#        if len(fields)<10:
+#            print fields
+#        endIdStr = fields[10] # 11 if using a bin column
+#        endIds = endIdStr.split(",")
+#        # this could be removed if non-NCBI ends are mapped:
+#        # convert all strings to ints in the list
+#        #endIds = [x for x in endIds]  
+#        idSet.update(endIds)
+#    return idSet
 
-def filterEndsPsl(bigPslFname, goodBedFname, badBedFname, goodPslFname, badPslFname):
-    " filter pslFname: grab all end names in inBedFnames and write to outPslFnames "
-    logging.info("Filtering %s to %s and %s" % (bigPslFname, goodPslFname, badPslFname))
-    outFhToIdSet = {}
-
-    goodIds = parseIds(goodBedFname)
-    badIds = parseIds(badBedFname)
-
-    # use IDs to filter PSL
-    pslCount = 0
-    keptCount = 0
-    lostCount = 0
-
-    # unix sort is super slow, so keep in memory and sort with python later
+#def filterEndsPsl(bigPslFname, goodBedFname, badBedFname, goodPslFname, badPslFname):
+    #" filter pslFname: grab all end names in inBedFnames and write to outPslFnames "
+    #logging.info("Filtering %s to %s and %s" % (bigPslFname, goodPslFname, badPslFname))
+    #outFhToIdSet = {}
+#
+    #goodIds = parseIds(goodBedFname)
+    #badIds = parseIds(badBedFname)
+#
+    ## use IDs to filter PSL
+    #pslCount = 0
+    #keptCount = 0
+    #lostCount = 0
+#
+    ## unix sort is super slow for non-first fields, so keep in memory and sort with python later
     # set up dictionary outfilename -> list
-    outLines = {}
-    outLines[goodPslFname] = list()
-    outLines[badPslFname] = list()
-
-    # read into dict
-    for line in open(bigPslFname):
-        fields = line.rstrip("\n").split()
-        qId = fields[9]
-        if qId in goodIds:
-            outFname = goodPslFname
-        elif qId in badIds:
-            outFname = badPslFname
-        else:
-            lostCount += 1
-            continue
-
-        idx = (fields[13], int(fields[16]))
-        outLines[outFname].append((idx, line))
-        pslCount += 1
-        
-    logging.info("%d psls in total, %d good, %d bad, %d dropped" % \
-        (pslCount, len(outLines[goodPslFname]), len(outLines[badPslFname]), lostCount))
-    
-    for fname, lineList in outLines.iteritems():
-        logging.info("sorting for %s" % fname)
-        lineList.sort(key = operator.itemgetter(0))
-
-        logging.info("writing to %s" % fname)
-        outFh = open(fname, "w")
-        for idx, line in lineList:
-            outFh.write(line)
-            outFh.write("\n")
-        outFh.close()
-
+    #outLines = {}
+    #outLines[goodPslFname] = list()
+    #outLines[badPslFname] = list()
+#
+    ## read into dict
+    #for line in open(bigPslFname):
+        #fields = line.rstrip("\n").split()
+        #qId = fields[9]
+        #if qId in goodIds:
+            #outFname = goodPslFname
+        #elif qId in badIds:
+            #outFname = badPslFname
+        #else:
+            #lostCount += 1
+            #continue
+#
+        #idx = (fields[13], int(fields[16]))
+        #outLines[outFname].append((idx, line))
+        #pslCount += 1
+        #
+    #logging.info("%d psls in total, %d good, %d bad, %d dropped" % \
+        #(pslCount, len(outLines[goodPslFname]), len(outLines[badPslFname]), lostCount))
+    #
+    #for fname, lineList in outLines.iteritems():
+        #logging.info("sorting for %s" % fname)
+        #lineList.sort(key = operator.itemgetter(0))
+#
+        #logging.info("writing to %s" % fname)
+        #outFh = open(fname, "w")
+        #for idx, line in lineList:
+            #outFh.write(line)
+            #outFh.write("\n")
+        #outFh.close()
+#
         # unix sort is super slow with multiple keys
         #unsortName = outFh.name
         #sortName = outFh.name.replace(".unsorted", "")
@@ -751,48 +1077,70 @@ def filterEndsPsl(bigPslFname, goodBedFname, badBedFname, goodPslFname, badPslFn
         #runCmd(cmd)
 
 
-def parseEndInfos(dirName):
-    " parse ncbi end info file, return as dict and set of accessions"
+def parseEndToBankClone(dirName, debug=False):
+    " parse ncbi end info file, return as endId (genbank or TI) -> (bankName, cloneName)"
+    endToBankClone = {}
+    for cloneFname in glob.glob(join(dirName, "*.endinfo_*.out")):
+        logging.info("parsing "+cloneFname)
+        bankName = basename(cloneFname).split(".")[0]
+        for row in iterTsvRows(cloneFname):
+            acc = row.accession
+            if acc=="":
+                acc = row.ti
+                if acc=="":
+                    assert(False)
+            assert(row.clone_name!="")
+            endToBankClone[acc] = (bankName, row.clone_name)
+    return endToBankClone
+
+def parseEndInfos(cloneFname, debug=False):
+    """ parse ncbi end info file, keep only genbank accession, 
+    return as dict cloneId -> (fwAccList, revAccList) and also adding all accessions to accs """
     # write into dict cloneId -> (list of forw accs, list of rev accs)
     ##taxid  accession       gi      ti      clone_name      clone_end       libabbr
     #9606    AZ081549.1      9587555         RP6-100O11      F       RP6
     cloneSeqs = {}
+    cloneBanks = {}
     accs = set()
-    for cloneFname in glob.glob(join(dirName, "*.endinfo_*.out")):
-        logging.info("parsing "+cloneFname)
-        accCount = 0
-        lCount = 0
-        skipCount = 0
+    #bankName = basename(cloneFname).split(".")[0]
+    logging.info("parsing "+cloneFname)
+    accCount = 0
+    lCount = 0
+    skipCount = 0
 
-        # parse the accession and the strand
-        for row in iterTsvRows(cloneFname):
-            acc = row.accession
-            lCount+=1
-            if acc=="":
-                continue
-            acc = acc.split(".")[0]
-            accCount += 1
-            clone = row.clone_name
+    # parse the accession and the strand
+    for row in iterTsvRows(cloneFname):
+        acc = row.accession
+        lCount+=1
+        if acc=="":
+            continue
+        acc = acc.split(".")[0]
+        accCount += 1
+        clone = row.clone_name
 
-            if row.clone_end=="F":
-                idx = 0
-            elif row.clone_end=="R":
-                idx = 1
-            else:
-                #logging.warn("Illegal clone end strand for %s, %s" % (acc, repr(row.clone_end)))
-                skipCount +=1
-                continue
-                #assert(False) # illegal clone_end value
-            
-            cloneSeqs.setdefault(clone, ([], []))[idx].append(acc)
-            accs.add(acc)
-        logging.debug("%d genbank accessions, %d rows skipped out of %d rows" % (accCount, skipCount, lCount))
-        #logging.info("accs:"+str( list(accs)[:10]))
-    logging.info("Found %d clones, %d end sequences in dir %s" % (len(cloneSeqs), len(accs), dirName))
+        if row.clone_end=="F":
+            idx = 0
+        elif row.clone_end=="R":
+            idx = 1
+        else:
+            #logging.warn("Illegal clone end strand for %s, %s" % (acc, repr(row.clone_end)))
+            skipCount +=1
+            continue
+            #assert(False) # illegal clone_end value
+        
+        cloneSeqs.setdefault(clone, ([], []))[idx].append(acc)
+        accs.add(acc)
+        #cloneBanks[clone] = bankName
+    logging.debug("%d genbank accessions, %d rows skipped out of %d rows" % (accCount, skipCount, lCount))
+    #logging.info("accs:"+str( list(accs)[:10]))
+    #if debug:
+        #return
+    logging.info("Found %d clones, %d end sequences in file %s" % (len(cloneSeqs), len(accs), cloneFname))
     return cloneSeqs, accs
 
 def parseFaFilter(fname, accs):
     " return dict with acc -> seq for all acc in accs "
+    logging.info("Reading %s, filtering on %d accessions" % (fname, len(accs)))
     seqs = {}
     faIter = parseFasta(fname)
     for acc, seq in faIter:
@@ -805,77 +1153,502 @@ def parseFaFilter(fname, accs):
 def convGb(outDir):
     " create .pairs and .fa files for clones in cloneDb with sequences in genbank "
     if "cloneFtpDir" not in runConf or "gssFile" not in runConf:
-        raise Exception("To use the convGb step, you need to define cloneFtpDir and gssFile in doBacEnds.conf")
+        logging.info("To use the convGb step, you need to define cloneFtpDir and gssFile in doBacEnds.conf")
+        return
     cloneDir = runConf["cloneFtpDir"]
     gssFname = runConf["gssFile"]
 
-    cloneToAccs, accs = parseEndInfos(cloneDir)
-    cloneSeqs = parseFaFilter(gssFname, accs)
-
-    # write a pair file
-    baseName = "gb.0-500000.all"
-    pairFname = join(outDir, baseName+".pairs")
-    logging.info("Writing pairs to %s" % pairFname)
-    pairFh = open(pairFname, "w")
-    for clone, seqTuple in cloneToAccs.iteritems():
-        fwAccs, revAccs = seqTuple
-        if len(fwAccs)==0 or len(revAccs)==0:
+    trackToAccs = dict() # dict with track -> list of accessions
+    allAccs = set() # set of all accessions ever seen
+    skipAccs = [] # list of accessions we had to remove, not paired
+    # parse the pairs, create a pairs file 
+    for cloneFname in glob.glob(join(cloneDir, "*.endinfo_*.out")):
+    #for cloneFname in glob.glob(join(cloneDir, "RP*.endinfo_*.out")):
+        cloneToAccs, trackAccs = parseEndInfos(cloneFname)
+        if len(cloneToAccs)==0:
+            logging.info("No genbank data in this file")
             continue
-        pairFh.write("%s\t%s\t%s\n" % (",".join(fwAccs), ",".join(revAccs), clone))
-    pairFh.close()
 
-    # write the sequenes 
-    faFname = join(outDir, baseName+".fa")
-    logging.info("Writing seqs to %s" % faFname)
-    faFh = open(faFname, "w")
-    for seqId, seq in cloneSeqs.iteritems():
-        if len(seq)>5000:
-            logging.warn("Ignoring seq %s, longer than 5kb" % seqId)
-            continue
-        faFh.write(">%s\n%s\n" % (seqId, seq.upper()))
-    faFh.close()
+        track = "1.GENBANK::%s::" % basename(cloneFname).split(".")[0]
+        # write a pair file
+        pairFname = join(outDir, track+".pairs")
+        logging.info("Writing pairs to %s" % pairFname)
+        pairFh = open(pairFname, "w")
+        for clone, seqTuple in cloneToAccs.iteritems():
+            fwAccs, revAccs = seqTuple
+            if len(fwAccs)==0 or len(revAccs)==0:
+                # remove single ends from our allAccs set
+                # so they don't get converted to fasta
+                accList = fwAccs
+                accList.extend(revAccs)
+                for a in accList:
+                    skipAccs.append(a)
+                    trackAccs.remove(a)
+                continue
+            pairFh.write("%s\t%s\t%s\n" % (",".join(fwAccs), ",".join(revAccs), clone))
+
+        trackToAccs[track] = trackAccs
+        allAccs.update(trackAccs)
+
+        pairFh.close()
+
+    ex = None
+    if len(skipAccs)>0:
+        ex = skipAccs[0]
+    logging.info("Removed %d accessions which were not paired, e.g. %s" % (len(skipAccs), str(ex)))
         
-def loadPairPsl(convDir, pslFname, pairDir, loadDir):
-    " filter pslFname with names in pairDir and load into db "
+    # parse the sequences
+    cloneSeqs = parseFaFilter(gssFname, allAccs)
 
+    # write the sequences to files named 1.GENBANK::<LIB>:::.fa
+    fhCache = dict() # cache file handles
+    notFound = []
+    for track, accs in trackToAccs.iteritems():
+        # write the sequenes 
+        faFname = join(outDir, track+".fa")
+        faFh = open(faFname, "w")
+        for acc in accs:
+            seq = cloneSeqs.get(acc,None)
+            if seq==None:
+                notFound.append(acc)
+                continue
+            if len(seq)>5000:
+                logging.warn("Ignoring seq %s, seq longer than 5kb" % acc)
+                continue
+            faFh.write(">%s\n%s\n" % (acc, seq.upper()))
+
+        logging.info("Wrote %d seqs to %s" % (len(accs), faFname))
+
+def openAccToClone():
+    " using NCBI CloneDB data, returns a dictionary traceId/gbkId -> (bankName, cloneId) "
+    cloneDir = runConf.get("cloneFtpDir", None)
+    if cloneDir==None:
+        return {}
+
+    cacheFname = join(cloneDir, "accToBankClone.temp.marshal")
+
+    if isfile(cacheFname):
+        logging.info("Loading cached acc->clone name table from %s" % (cacheFname))
+        accToBankClone = marshal.load(open(cacheFname))
+    else:
+        accToBankClone = parseEndToBankClone(cloneDir)
+        logging.info("writing acc->bank/clone table to %s" % cacheFname)
+        marshal.dump(accToBankClone, open(cacheFname, "w"))
+
+    return accToBankClone
+
+#def concatRenameClone(pairDir, fileMasks, accToBankClone, outDir, outputFname=None):
+#    """ concat files that match patterns to outDir, renaming them using endToCloneId and 
+#    writing them to a file name found in cloneToBank. Outfilename can be forced with outputFname """
+#    handleCache = {} # cache of file handles
+#    noCloneTraceIds = []
+#
+#    for fileMask in fileMasks:
+#        for fname in glob.glob(join(pairDir, fileMask)):
+#            logging.info("Processing %s" % fname)
+#            for row in iterTsvRows(fname, headers=lfHeaders):
+#                bankNames = set()
+#                cloneIds = set()
+#
+#                lfNames = row.lfNames.split(',')
+#                assert(len(lfNames)!=0)
+#
+#                for endId in lfNames:
+#                    bankName, cloneId = accToBankClone.get(endId, (None, None))
+#                    if cloneId!=None:
+#                        cloneIds.add(cloneId)
+#                        bankNames.add(bankName)
+#
+#                if len(cloneIds)>0:
+#                    assert(len(bankNames)==1) # an end ID must always be in only one bank
+#                    bankName = bankNames.pop()
+#                    oneCloneId = cloneIds.pop()
+#                    row = row._replace(cloneId=oneCloneId, pslTable="")
+#                    if len(cloneIds)>1:
+#                        logging.warn("list of trace ends %s lead to multiple clone end names: %s" % \
+#                            (row.lfNames, ",".join(cloneIds)))
+#                else:
+#                    #logging.warn("No clone name for trace end list %s" % row.lfNames)
+#                    noCloneTraceIds.extend(lfNames)
+#                    bankName = "other"
+#
+#                if outputFname!=None:
+#                    bankName = outputFname
+#
+#                ofh = handleCache.get(bankName, None)
+#                if ofh==None:
+#                    fname = join(outDir, bankName+".bed")
+#                    ofh = open(fname, "w")
+#                    logging.debug("opening %s" % fname)
+#                    handleCache[bankName]=ofh
+#
+#                ofh.write('\t'.join(row))
+#                ofh.write('\n')
+#                
+#    for ofh in handleCache.values():
+#        ofh.close()
+#    
+#    logging.info("Writing unmapped trace IDs...")
+#    errFname = "noCloneNameTraceIds.err.log"
+#    open(errFname, "w").write("\n".join(noCloneTraceIds))
+#    logging.info("trace IDs without clone names written to %s" % errFname)
+
+def parsePairSeqIds(fname):
+    " return a list of the seq IDs in a .pairs file (output of pslPairs) "
+    logging.info("Reading sequence IDs from %s" % fname)
+    ids = []
+    for line in open(fname):
+        fields = line.rstrip("\n").split("\t")
+        seqIds = fields[10].split(",")
+        ids.extend(seqIds)
+    return ids
+        
+
+def filterPsl(pslDir, pairDir, loadDir):
+    " filter all psl files in pslDir into one new pslFile per input file, contains only mapped sequences "
     mustBeEmptyDir(loadDir)
 
-    logging.info("Catting good and bad ends")
-    goodBed = join(loadDir, "goodEnds.bed")
-    badBed = join(loadDir, "badEnds.bed")
-    goodPsl = join(loadDir, "goodEnds.psl")
-    badPsl = join(loadDir, "badEnds.psl")
+    logging.info("Iterating over PSL files, keeping only PSLs with a sequence ID in pair files")
+    badLines = []
+    for pslFname in glob.glob(join(pslDir, "*.psl")):
+        pairFname = join(pairDir, splitext(basename(pslFname))[0]+".pairs")
+        mappedIds = []
+        badIds = []
+        outLines = []
+        # parse all query Ids from all pair files
+        mappedIds.extend(parsePairSeqIds(pairFname))
+        for ext in ["long", "short", "slop"]:
+            otherFname = pairFname.replace(".pairs", "."+ext)
+            mappedIds.extend(parsePairSeqIds(otherFname))
+        for ext in ["mismatch", "orphan"]:
+            otherFname = pairFname.replace(".pairs", "."+ext)
+            badIds.extend(parsePairSeqIds(otherFname))
 
-    cmd = "cat %(pairDir)s/*.mismatch %(pairDir)s/*.orphan %(pairDir)s/*.long %(pairDir)s/*.short "\
-        "%(pairDir)s/*.slop  > %(badBed)s " % locals()
-    runCmd(cmd)
+        logging.info("Converting sequence IDs to set")
+        mappedIds = set(mappedIds)
+        badIds = set(badIds)
+        logging.info("Got %d IDs, %d bad IDs" % (len(mappedIds), len(badIds)))
+        #tmpFname = "/scratch/tmp/pslFilt.tmp"
+        #open(tmpFname, "w").write("\n".join(mappedIds))
 
-    cmd = "cat %(pairDir)s/*.pairs > %(goodBed)s " % locals()
-    runCmd(cmd)
+        # not using UNIX sort, is super slow for this, just sort in memory
+        skipCount = 0
+        logging.info("Filtering %s" % pslFname)
+        for line in open(pslFname):
+            fields = line.rstrip("\n").split("\t")
+            pslQId = fields[9]
+            idx = (fields[13], int(fields[16]))
+            if pslQId in mappedIds:
+                outLines.append((idx, line))
+            elif pslQId in badIds:
+                badLines.append((idx, line))
+            else:
+                skipCount += 1
+        logging.info("Skipped %d lines, not in any pair file" % skipCount)
+
+        # sort in memory and output to file
+        logging.info("Sorting...")
+        outLines.sort(key = operator.itemgetter(0))
+
+        logging.info("Output...")
+        outFname = join(loadDir, basename(pslFname))
+        ofh = open(outFname, "w")
+        for idx, line in outLines:
+            ofh.write(line)
+        ofh.close()
+
+    logging.info("Sorting bad lines...")
+    badLines.sort(key = operator.itemgetter(0))
+    logging.info("Outputing bad lines...")
+    outFname = join(loadDir, "cloneEndsBad.psl")
+    ofh = open(outFname, "w")
+    for idx, line in badLines:
+        ofh.write(line)
+    ofh.close()
+
+
+    #cmd = "pslSomeRecords %s %s %s" % (pslFname, tmpFname, outFname)
+    #runCmd(cmd)
+        
+
+    logging.info("Output written to %s" % loadDir)
+        
+    #accToBankClone = openAccToClone()
+    #logging.info("Catting good and bad ends")
+    #goodBed = join(loadDir, "goodEnds.bed")
+    #goodPsl = join(loadDir, "goodEnds.psl")
+    #badBed = join(loadDir, "badEnds.bed")
+    #badPsl = join(loadDir, "badEnds.psl")
+
+    #concatRenameClone(pairDir, ["*.pairs"], accToBankClone, loadDir)
+
+    #concatRenameClone(pairDir, ["*.mismatch", "*.orphan", "*.long", "*.short", "*.slop"], accToClone, cloneToBank, loadDir, outputFname = "problems")
+    #cmd = "cat %(pairDir)s/*.mismatch %(pairDir)s/*.orphan %(pairDir)s/*.long %(pairDir)s/*.short "\
+        #"%(pairDir)s/*.slop  > %(badBed)s " % locals()
+    #runCmd(cmd)
+
+    #cmd = "cat %(pairDir)s/*.pairs > %(goodBed)s " % locals()
+    #runCmd(cmd)
     
-    filterEndsPsl(pslFname, goodBed, badBed, goodPsl, badPsl)
+    #filterEndsPsl(pslFname, goodBed, badBed, goodPsl, badPsl)
+
+
+def loadPairPsl(pairDir, loadDir):
+    " filter pslFname with names in pairDir and load into db "
+
+    #mustBeEmptyDir(loadDir)
+
+    #logging.info("Catting good and bad ends")
+    #goodBed = join(loadDir, "goodEnds.bed")
+    #badBed = join(loadDir, "badEnds.bed")
+    #goodPsl = join(loadDir, "goodEnds.psl")
+    #badPsl = join(loadDir, "badEnds.psl")
+
+    #cmd = "cat %(pairDir)s/*.mismatch %(pairDir)s/*.orphan %(pairDir)s/*.long %(pairDir)s/*.short "\
+        #"%(pairDir)s/*.slop  > %(badBed)s " % locals()
+    #runCmd(cmd)
+
+    #cmd = "cat %(pairDir)s/*.pairs > %(goodBed)s " % locals()
+    #runCmd(cmd)
+    
+    #filterEndsPsl(pslFname, goodBed, badBed, goodPsl, badPsl)
 
     db = cfgMustGet("db")
-    bedTable = cfgMustGet("bedTable")
-    pslTable = cfgMustGet("pslTable")
+    #bedTable = cfgMustGet("bedTable")
+    #pslTable = cfgMustGet("pslTable")
 
-    logging.info("Now loading BEDs and PSLs")
-    # load beds
-    cmd = "hgLoadBed -notItemRgb %(db)s %(bedTable)s %(goodBed)s " \
-                     "-sqlTable=$HOME/kent/src/hg/lib/bacEndPairs.sql -renameSqlTable" % locals()
+    doneTracks = set()
+
+    logging.info("Now loading BEDs from %s and PSLs from %s" % (pairDir, loadDir))
+    orphanFnames = []
+    mmFnames = []
+    for pairFname in glob.glob(join(pairDir, "*.pairs")):
+        base = splitext(basename(pairFname))[0]
+        track = "cloneEnds"+"".join(ch for ch in base if ch.isalnum())
+        if track in doneTracks:
+            raise Exception("track %s already seen before" % track)
+
+        logging.info("basename %s, track %s" % (base, track))
+
+        # sort into OK-ish ends and the problematic ends
+        goodFnames = []
+        for ext in ["pairs", "long", "short", "slop"]:
+            goodFnames.append(join(pairDir, base+"."+ext))
+
+        orphanFnames.append(join(pairDir, base+".orphan"))
+        mmFnames.append(join(pairDir, base+".mismatch"))
+
+        # load beds
+        logging.info("Loading bed tables %s and %s" % (track, track+"Bed"))
+        goodBed = " ".join(goodFnames)
+        cmd = "hgLoadBed -notItemRgb %(db)s %(track)s %(goodBed)s " \
+                         "-sqlTable=$HOME/kent/src/hg/lib/bacEndPairs.sql -renameSqlTable -tab -noHistory" % locals()
+        runCmd(cmd)
+
+        # load psls
+        goodPsl = join(loadDir, base+".psl")
+        pslTable = track+"Psl"
+        logging.info("Loading psl table %s" % (pslTable))
+        cmd = "hgLoadPsl %(db)s -noSort -table=%(pslTable)s %(goodPsl)s -noSort -fastLoad" % locals()
+        runCmd(cmd)
+
+        doneTracks.add(track)
+
+    logging.info("Loaded these tracks: "+",".join(doneTracks))
+
+    # load the bad ends
+    track = "cloneEndsOrphan"
+    fnameStr = " ".join(orphanFnames)
+    cmd = "hgLoadBed -notItemRgb %(db)s %(track)s %(fnameStr)s " \
+             "-sqlTable=$HOME/kent/src/hg/lib/bacEndPairs.sql -renameSqlTable -tab -noHistory" % locals()
     runCmd(cmd)
 
-    cmd = "hgLoadBed -notItemRgb %(db)s %(bedTable)sBad %(badBed)s " \
-                     "-sqlTable=$HOME/kent/src/hg/lib/bacEndPairs.sql -renameSqlTable" % locals()
+    track = "cloneEndsMismatch"
+    fnameStr = " ".join(mmFnames)
+    cmd = "hgLoadBed -notItemRgb %(db)s %(track)s %(fnameStr)s " \
+             "-sqlTable=$HOME/kent/src/hg/lib/bacEndPairs.sql -renameSqlTable -tab -noHistory" % locals()
     runCmd(cmd)
 
-    # load psls
-    logging.info("Loading psl tables %s and %sBad" % (pslTable, pslTable))
-    cmd = "hgLoadPsl %(db)s -noSort -table=%(pslTable)s %(goodPsl)s" % locals()
+    pslTable = "cloneEndsBadPsl"
+    badPsl = join(loadDir, "cloneEndsBad.psl")
+    logging.info("Loading psl table %s" % (pslTable))
+    cmd = "hgLoadPsl %(db)s -noSort -table=%(pslTable)s %(badPsl)s -noSort -fastLoad" % locals()
     runCmd(cmd)
 
-    cmd = "hgLoadPsl %(db)s -noSort -table=%(pslTable)sBad %(badPsl)s" % locals()
-    runCmd(cmd)
+def averageLen(fname):
+    " given a bed file, return average feature length "
+    lCount = 0
+    sumLen = 0
+    for l in open(fname):
+        start, end = l.split("\t")[1:3]
+        start, end = int(start), int(end)
+        sumLen += (end-start)
+        lCount += 1
+    return sumLen/lCount, lCount
+
+def parseLibDesc():
+    " return a dict with clonePrefix -> libDesc from the NCBI clone db dir "
+    cloneDir = runConf.get("cloneFtpDir", None)
+    if cloneDir==None:
+        return {}
+
+    libMask = join(cloneDir, "library_*.out")
+    libFnames = glob.glob(libMask)
+    assert(len(libFnames)==1) # there must be only one lib info file
+    libInfoFname = libFnames.pop()
+
+    prefToDesc = {}
+    for row in iterTsvRows(libInfoFname):
+        prefToDesc[row.libabbr] = row.lib_name
+    return prefToDesc
+
+def clonePrefixes(pairFname):
+    ' return a set of clone name prefixes (before "-") in a pair file '
+    prefixes = set()
+    for line in open(pairFname):
+        cloneName = line.split("\t")[3]
+        prefix = cloneName.split("-")[0]
+        if prefix=="":
+            continue
+        prefixes.add(prefix)
+    return prefixes
+
+def makeTrackDb(pairDir):
+    " generate a trackDb and write to trackDb.cloneEnd.ra "
+    prefToDesc = parseLibDesc()
+
+    trackDbFname = "trackDb.cloneEnd.ra"
+    ofh = open(trackDbFname, "w")
+    ofh.write("""track cloneEndUcsc
+compositeTrack on
+shortLabel UCSC Clone Ends
+longLabel UCSC mapping of clone libraries end placements
+group map
+visibility hide
+type bed 3
+noInherit on
+dragAndDrop on
+
+""")
+
+    trackList = []
+
+    for pairFname in glob.glob(join(pairDir, "*.pairs")):
+        base = splitext(basename(pairFname))[0]
+        logging.info("Generating trackDb for %s" % pairFname)
+        center, proj, lib, insSize, strat = base.split(":")
+        track = "cloneEnds"+"".join(ch for ch in base if ch.isalnum())
+
+        parts = base.split(":")
+        parts = [p for p in parts if p!=""]
+        shortLabel = " / ".join(parts)
+        if len(parts)==1:
+            shortLabel += "(others)"
+
+        longParts = []
+        if center!="":
+            longParts.append("Center: %s" % center)
+        if proj!="":
+            longParts.append("Project: %s" % proj)
+        if lib!="":
+            longParts.append("Library: %s" % lib)
+        #if insSize!="":
+            #longParts.append("Target Size: %d kbp" % (int(insSize)/1000))
+        if len(longParts)==1:
+            longParts.append("Various libraries")
+
+        # label for good clones
+        avgLen, ftCount = averageLen(pairFname)
+        longParts.append("Avg. Size: %d kbp" % (avgLen/1000))
+        longParts.append("%d Clones" % (ftCount))
+
+        # get all clone prefixes and if there is one annotated by CloneDB, use it
+        # and remove the "Various libraries" description
+        prefixSet = clonePrefixes(pairFname)
+        if len(prefixSet)==1:
+            prefix = prefixSet.pop()
+            libDesc = prefToDesc.get(prefix, None)
+            if libDesc!=None:
+                longParts.insert(0, libDesc)
+                if "Various libraries" in longParts:
+                    delIdx = longParts.index("Various libraries")
+                    del longParts[delIdx]
+        longLabel = ", ".join(longParts)
+
+        # label for bad track
+        avgLen, ftCount1 = averageLen(pairFname.replace(".pairs", ".orphan"))
+        avgLen, ftCount2 = averageLen(pairFname.replace(".pairs", ".mismatch"))
+        badCount = ftCount1+ftCount2
+        longParts.pop()
+        longParts.pop()
+        longParts.insert(0, "Invalid Ends")
+        longParts.append("%d Orphans, %d Wrong Orientation" % (ftCount1, ftCount2))
+        badLongLabel = ", ".join(longParts)
+
+        pslTable = track+"Psl"
+
+        trackData = (avgLen, track, shortLabel, longLabel, badLongLabel, pslTable)
+        trackList.append(trackData)
+
+    trackList.sort()
+
+    spc = "    "
+    i = 0
+    for avgLen, track, shortLabel, longLabel, badLongLabel, pslTable in trackList:
+        ofh.write(spc+"track %s\n" % track)
+        ofh.write(spc+"shortLabel %s\n" % shortLabel)
+        ofh.write(spc+"longLabel %s\n" % longLabel)
+        ofh.write(spc+"visibility dense\n")
+        ofh.write(spc+"type bed 6 +\n")
+        ofh.write(spc+"color 0,0,0\n")
+        ofh.write(spc+"priority %d\n" % i)
+        ofh.write(spc+"trackHandler bacEndPairs\n")
+        ofh.write(spc+"exonArrows off\n")
+        ofh.write(spc+"lfPslTable %s\n" % pslTable)
+        ofh.write(spc+"parent cloneEndUcsc on\n")
+        ofh.write("\n")
+        i+=1
+
+    ofh.write(spc+"track cloneEndsOrphan\n")
+    ofh.write(spc+"shortLabel Orphan Ends\n")
+    ofh.write(spc+"longLabel Single Ends without the other end within 10Mbp in assembly\n")
+    ofh.write(spc+"visibility dense\n")
+    ofh.write(spc+"type bed 6 +\n")
+    ofh.write(spc+"color 0,0,0\n")
+    ofh.write(spc+"priority %d\n" % i)
+    ofh.write(spc+"trackHandler bacEndPairs\n")
+    ofh.write(spc+"exonArrows off\n")
+    ofh.write(spc+"lfPslTable cloneEndsBadPsl\n")
+    ofh.write(spc+"parent cloneEndUcsc off\n")
+    ofh.write("\n")
+    i+=1
+
+    ofh.write(spc+"track cloneEndsMismatch\n")
+    ofh.write(spc+"shortLabel Wrong Orientation\n")
+    ofh.write(spc+"longLabel Ends in the wrong orientation compared to assembly\n")
+    ofh.write(spc+"visibility dense\n")
+    ofh.write(spc+"type bed 6 +\n")
+    ofh.write(spc+"color 0,0,0\n")
+    ofh.write(spc+"priority %d\n" % i)
+    ofh.write(spc+"trackHandler bacEndPairs\n")
+    ofh.write(spc+"exonArrows off\n")
+    ofh.write(spc+"lfPslTable cloneEndsBadPsl\n")
+    ofh.write(spc+"parent cloneEndUcsc off\n")
+    ofh.write("\n")
+    i+=1
+
+    logging.info("trackDb written to %s" % trackDbFname)
+
+#def loadAln(splitPslDir):
+    #" load all .PSL files into a big table "
+    #fnames = glob.glob(join(splitPslDir, "*.psl"))
+    #fnameStr = " ".join(fnames)
+    #goodPsl = join(loadDir, base+".psl")
+    #pslTable = track+"Psl"
+    #db = cfgMustGet("db")
+    #logging.info("Loading %d psl files" % len(fnames)
+    #cmd = "hgLoadPsl %(db)s -noSort -table=cloneEndAli %(fnameStr)s -noSort -fastLoad" % locals()
+    #runCmd(cmd)
 
 # ----------- MAIN --------------
 if __name__=="__main__": # = run only if called from command line
@@ -890,13 +1663,19 @@ if __name__=="__main__": # = run only if called from command line
     - download: download from NCBI ftp into the downloadDir (default: %s). This
       step is not needed if the files have been downloaded before. The download tries to
       skip files that have been downloaded before.
-    - conv: convert NCBI format to fasta and UCSC .pairs file, on cluster, creates 01-conv
-    - convGb: optional, see below. Adds files to 01-conv
-    - convCat: concatenate pairs files from conv step into 01-conv
+
+    - conv: convert NCBI format to fasta and UCSC .pairs file, on cluster, creates 01-conv/raw
+            (EST sequences are kept in 01-conv/raw/est but not processed otherwise)
+    - convGb: optional, see below. Adds files to 01-conv/raw
+    - convCat: filter and concatenate pairs/fasta files from conv step into 01-conv/filter
+
     - aln: run blat on cluster, creates 02-aln
-    - alnCat: concatenate alignment results into 02-aln/bigBlat.psl
-    - pair: run pslPairs on results, creates 03-pair
-    - load: filter bigBlat.psl using all .pairs files and load results into mysql tables
+    - alnCat: concatenate alignment results into 02-aln/bigBlat/pslCat
+    - alnSplit: split the alignments into one file per track into 02-aln/byTrack
+
+    - pair: run pslPairs on 02-aln/byTrack into 03-pair
+    - filter: filter and sort the PSLs into the 04-load directory
+    - load: load results into mysql tables
 
     - debugging only - bigBed: create a single bigBed file from the pair files
 
@@ -905,7 +1684,21 @@ if __name__=="__main__": # = run only if called from command line
         gbToFaRa /dev/null gss.fa gss.ra gss.stat /cluster/data/genbank/data/download/genbank.202.0/*gss* -byOrganism=./
       - Requires a directory with a NCBI cloneDb ftp mirror. Create one like this:
         lftp ftp.ncbi.nih.gov/repository/clone/reports/Homo_sapiens/ -e 'mget *.out'
-      - Set the gssFile and cloneFtpDir statements in doBacEnds.conf
+      - Requires the gssFile and cloneFtpDir statements in doBacEnds.conf
+
+    Note that the ending ".pairs" is unfortunately used twice in this pipeline:
+    - after conv/convCat, for files that have the format <leftSeq>tab<rightSeq>tab<cloneName>
+    - after the "pairs" step, for bed-like tables in the format specified by 
+      ~/kent/src/hg/lib/lfs.as
+
+    Internal pair/psl files have names in this format:
+    SequencingCenter:Project:Library:InsertSize:SequencingStrategy
+    Examples: 
+      ABC:HUMAN_NA19240:ABC10:40000:WGS.psl
+      WIBR:G248::40000:WGS.psl (library has no name, can happen)
+      CSHL::::.psl (various smaller libraries of various insert sizes)
+      :RP11:::.psl (genbank-imported libraries have no center)
+      MISC::::.psl (small libraries get all merged into a catch-all dummy center)
 
     example:
     doBacEnds init gorGor3
@@ -932,19 +1725,24 @@ if __name__=="__main__": # = run only if called from command line
 
     steps = args[0].split(",")
 
+    parseAllConf()
+    targetDb = cfgMustGet("db")
+
     # define all directories and files
-    convDir = "./01-conv"
+    convRawDir = "./01-conv/raw"
+    convCatDir = "./01-conv/cat"
+
     alnDir = "./02-aln"
     pairDir = "./03-pair"
     loadDir = "./04-load"
 
-    convCatDir = join(convDir, "catPairs")
     bigBlatDir = join(alnDir, "bigBlat")
-    pslFname = join(alnDir, "bigBlat.psl")
+    catPslDir = join(bigBlatDir, "pslCat", targetDb)
+    splitPslDir = join(alnDir, "byTrack")
 
     # define possible steps in pipeline
-    mainSteps  = ["conv","convCat","aln","alnCat","pair","load"]
-    otherSteps = ["init", "download", "testConvJob", "bigbed", "convGb"]
+    mainSteps  = ["conv","convGb","convCat","aln","alnCat","alnSplit","pair","filter","load", "trackDb"]
+    otherSteps = ["init", "download", "testConvJob", "bigbed"]
 
     steps = parseRange(steps, mainSteps, otherSteps)
     
@@ -953,32 +1751,41 @@ if __name__=="__main__": # = run only if called from command line
         writeDoBacCfg(db, args[2:], RUNCFG)
         sys.exit(0)
 
-    parseAllConf()
-
     if "download" in steps:
         getFromNcbi()
 
     if "conv" in steps:
-        submitConvJobs(convDir)
+        submitConvJobs(convRawDir)
     if "convGb" in steps:
-        convGb(convDir)
+        convGb(convRawDir)
     if "convCat" in steps:
-        convCat(convDir, convCatDir)
+        convCat(convRawDir, convCatDir)
 
     if "aln" in steps:
-        submitAlnJobs(convDir, alnDir)
+        submitAlnJobs(convCatDir, alnDir)
     if "alnCat" in steps:
-        alnCat(bigBlatDir, pslFname)
+        alnCat(bigBlatDir)
+    if "alnSplit" in steps:
+        alnSplit(convCatDir, catPslDir, splitPslDir)
 
     if "pair" in steps:
-        pairPsl(convDir, pslFname, pairDir, options.insSize)
+        pairPsl(splitPslDir, convCatDir, pairDir)
         #makeBb(pairDir)
 
+    if "filter" in steps:
+        filterPsl(splitPslDir, pairDir, loadDir)
+        
     if "load" in steps:
-        loadPairPsl(convDir, pslFname, pairDir, loadDir)
+        loadPairPsl(pairDir, loadDir)
 
-    if "bigbed" in steps:
-        makeBb(pairDir)
+    #if "loadAln" in steps:
+        #loadAln(splitPslDir)
+
+    if "trackDb" in steps:
+        makeTrackDb(pairDir)
+
+    #if "bigbed" in steps:
+        #makeBb(pairDir)
 
     # for debugging
     if "testConvJob" in steps:

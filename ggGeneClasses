@@ -17,6 +17,10 @@ hprd data received from Arun Patil by email, arun@ibioinformatics.org
 
 output:
 symbol,description
+
+to load:
+create table geneClasses (gene varchar(255), text varchar(30000));
+hgLoadSqlTab publications geneClasses geneClasses.tab
 """)
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
@@ -414,6 +418,7 @@ for sym, cats in symToCats.iteritems():
     #print "\t".join(row)
     bestCat = bestCat.replace(" molecule", "")
     bestCat = bestCat.replace("G protein", "G-protein")
+    bestCat = bestCat.replace(";", ", ")
     pantherClasses[sym] = bestCat
     
 # process hprd and write to dict sym -> text
@@ -426,6 +431,7 @@ for row in lineFileNext(open(options.hprdFname), headers=headers):
         continue
     classStr = row.classStr
     classStr = classStr.replace("G protein", "G-protein") 
+    classStr = classStr.replace(";", ", ") 
     hprdClasses[row.sym] = classStr
 
 # join both dicts

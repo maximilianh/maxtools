@@ -56,7 +56,8 @@ for row in tp.generateRows():
         replaceValue = replaceValues[key]
     else:
         logging.warn("line %d: %s not found in replaceFile" % (lineNo, key))
-        continue
+        replaceValue = key
+        #continue
 
     replDict = {}
     replDict[field]=replaceValue

@@ -13,6 +13,7 @@ parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show
 #parser.add_option("-k", "--colIndex", dest="colIndex", action="store", type="int", help="index of column to use, default %default", default=0)
 parser.add_option("-n", "--colName", dest="colName", action="store", help="name of column to use, this implies that the first line of the tab file contains headers", default=None)
 parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="inverse sort order")
+parser.add_option("-u", "--uniq", dest="uniq", action="store_true", help="remove lines with duplicate fields in the column <colName>")
 parser.add_option("", "--int", dest="int", action="store_true", help="use numerical (integer) sort")
 (options, args) = parser.parse_args()
 
@@ -80,7 +81,13 @@ for filename in filenames:
     #, reverse=reverse
 
     print "\t".join(headers)
+    lastVal = None
     for l in lines:
+        thisVal = l[colIndex]
+        if options.uniq and (lastVal==None or lastVal==thisVal):
+            lastVal = thisVal
+            continue
+        lastVal = thisVal
         print "\t".join(maxbio.allToString(l))
     for l in otherLines:
         print "\t".join(l)
