@@ -1,0 +1,30 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+
+from maxGenome import *
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] chromSizesFile size - split chromosomes in pieces of x bp and output as bed") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]: 
+    parser.print_help()
+    exit(1)
+
+db, step = args
+step = int(step)
+
+for bed in chromSplit(db, step):
+    print listToStr(bed)

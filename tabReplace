@@ -13,6 +13,7 @@ parser = OptionParser("usage: %prog [options] replaceFile columnIndexOrName tabl
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 parser.add_option("", "--headers", dest="headers", action="store_true", help="use headers in tabfile", default=False) 
 parser.add_option("", "--inverse", dest="inverse", action="store_true", help="inverse key, value columns order") 
+parser.add_option("-s", "--skip", dest="skip", action="store_true", help="skip lines without replacement values") 
 #parser.add_option("", "--integers", dest="integers", action="store_true", help="assume that replacement values are all integers and use an array for the replacement (a lot faster)") 
 (options, args) = parser.parse_args()
 
@@ -57,7 +58,8 @@ for row in tp.generateRows():
     else:
         logging.warn("line %d: %s not found in replaceFile" % (lineNo, key))
         replaceValue = key
-        #continue
+        if options.skip:
+            continue
 
     replDict = {}
     replDict[field]=replaceValue

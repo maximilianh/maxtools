@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, gzip
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# when do we consider two features as "close", in bp
+CLOSE=10
+# when do we consider two features as "near", in bp
+NEAR=200
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] fname1 fname2 - compare chrom,start,end,name info of two bed files that have some features with identical names, output some stats about these") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+# ==== FUNCTIONs =====
+def parseBed(inFname):
+    " return as dict name -> list of (chrom, start, end) "
+    logging.info("Parsing %s..." % inFname)
+    if inFname.endswith(".gz"):
+        ofunc = gzip.open
+    else:
+        ofunc = open
+    ifh = ofunc(inFname)
+
+    data = defaultdict(list)
+    for line in ifh:
+        row = line.rstrip("\n").split("\t")
+        chrom, start, end, name = row[:4]
+        start, end = int(start), int(end)
+        data[name].append((chrom, start, end))
+    return data
+
+def coordOverlap(start1, end1, start2, end2):
+    """ returns true if two Features overlap """
+    result = (( start2 <= start1 and end2 > start1) or \
+            (start2 < end1 and end2 >= end1) or \
+            (start1 >= start2 and end1 <= end2) or \
+            (start2 >= start1 and end2 <= end1))
+    return result
+    # modified: end2 > end1
+
+def bedCompare(fname1, fname2):
+    " compare two bed files, output some stats "
+    fts1 = parseBed(fname1)
+    fts2 = parseBed(fname2)
+    commonIds = set(fts1).intersection(fts2)
+
+    if len(commonIds)==0:
+        print "ERROR: no common names in the two input files"
+        sys.exit(0)
+
+    diffHitCount = 0
+    exactMatch = 0
+    overlapCount = 0
+    noOverlap = 0
+    ftClose = 0
+    ftNear = 0
+
+    diffHist = defaultdict(int) # histogram of differences
+
+    #diffOfh = open("different.bed", "w")
+    noOvlFh = open("noOverlap.bed", "w")
+
+    for id in commonIds:
+        tList1 = fts1[id]
+        tList2 = fts2[id]
+        if len(tList1)!=1 or len(tList2)!=1:
+            diffHitCount +=1
+            continue
+        t1 = tList1[0]
+        t2 = tList2[0]
+        if t1==t2:
+            exactMatch += 1
+        else:
+            ft1Start, ft1End = t1[1], t1[2]
+            ft2Start, ft2End = t2[1], t2[2]
+            if coordOverlap(ft1Start, ft1End, ft2Start, ft2End):
+                overlapCount += 1
+                diffCount = abs(ft1Start-ft2Start)+abs(ft1End-ft2End)
+                diffHist[diffCount]+=1
+                if diffCount < CLOSE:
+                    ftClose += 1
+                if diffCount < NEAR:
+                    ftNear += 1
+            else:
+                noOvlFh.write("\t".join(str(x) for x in t1)+"\t"+id+"\n")
+                noOvlFh.write("\t".join(str(x) for x in t2)+"\t"+id+"\n")
+                noOverlap+=1
+
+    exactMatchShare = 100*float(exactMatch)/float(len(commonIds))
+    diffHitShare = 100*float(diffHitCount)/float(len(commonIds))
+    overlapShare = 100*float(overlapCount)/float(len(commonIds))
+    closeShare = 100*float(ftClose)/float(overlapCount)
+    nearShare = 100*float(ftNear)/float(overlapCount)
+
+    print "%d IDs in %s" % (len(fts1), fname1)
+    print "%d IDs in %s" % (len(fts2), fname2)
+    print "%d common IDs" % (len(commonIds))
+    print "For the common IDs:"
+    print "  - %d IDs (%0.00f%%) have more than one location and were skipped" % (diffHitCount, diffHitShare)
+    print "  - %d IDs (%0.00f%%) are at exactly identical locations" % (exactMatch, exactMatchShare)
+    print "For those %d that are not exactly identical:" % (len(commonIds)-exactMatch)
+    print "  - %d features have no overlap at all (written to noOverlap.bed)" % noOverlap
+    print "  - %d features (%0.00f%%) overlap" % (overlapCount, overlapShare)
+    print "  - %d features (%0.00f%%) have start or end off by <%dbp" % (ftClose, closeShare,CLOSE)
+    print "  - %d features (%0.00f%%) have start or end off by <%dbp" % (ftNear, nearShare, NEAR)
+    print "Distribution of total (start,end) distances for the %d that overlap:" % overlapCount
+
+    bins = [1,2,3,4,5,10,20,50,100,200,300,400,500,1000,5000,10000,9999999999]
+
+    diffHist = diffHist.items()
+    diffHist.sort()
+    binIdx = 0
+    binCounts = defaultdict(int)
+    for dist, count in diffHist:
+        while dist>bins[binIdx]:
+            binIdx += 1
+        binCounts[bins[binIdx]]+=count
+
+    binCounts = sorted(binCounts.items())
+    for bin, count in binCounts:
+        print "-%s" % bin, count
+
+            
+        
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+fname1, fname2 = args
+bedCompare(fname1, fname2)

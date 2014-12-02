@@ -9,7 +9,7 @@ import maxCommon
 parser = optparse.OptionParser("usage: %prog [options] filename fieldName - collapse tab sep file to make a single field unique, append all other values with separator to all other fields") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
-#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+parser.add_option("-s", "--sep", dest="sep", action="store", help="separator, default %default", default=",") 
 #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
 (options, args) = parser.parse_args()
 
@@ -24,7 +24,7 @@ if args==[]:
     parser.print_help()
     exit(1)
 
-sep = ","
+sep = options.sep
 filename, fieldName = args
 #if options.test:
     #logging.debug("test is set")
@@ -33,7 +33,12 @@ data = dict()
 
 headers = None
 
-for row in maxCommon.iterTsvRows(filename, encoding="latin1", makeHeadersUnique=True):
+if filename!="stdin":
+    ifh = open(filename)
+else:
+    ifh= sys.stdin
+
+for row in maxCommon.iterTsvRows(ifh, encoding="latin1", makeHeadersUnique=True):
     headers = row._fields
     colCount = len(row)
     if fieldName.isdigit():

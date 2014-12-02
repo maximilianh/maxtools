@@ -1,0 +1,89 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, string
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] swissprotTab refseqTab [symbolAnnotations allSymbols] - merge gene descriptions into one, output to stdout") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+def parseTab(fname):
+    """ parse file with key -> value pair on each line, key/value has 1:1 relationship"""
+    """ last field: set valField==-1, return as a dictionary key -> value """
+    if fname==None or fname=="":
+        return {}
+    dict = {}
+    f = open(fname)
+
+    for l in f:
+        fs = l.strip().split("\t")
+        if not len(fs)>1:
+            sys.stderr.write("info: not enough fields, ignoring line %s\n" % l)
+            continue
+        keyStr = fs[0]
+        keys = keyStr.split("|")
+        val = fs[1]
+        for key in keys:
+            if key not in dict:
+                dict[key] = val
+            else:
+                sys.stderr.write("info: file %s, hit key %s two times: %s -> %s\n" %(fname, key, key, val))
+    return dict
+
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+spFname, refseqFname = args[:2]
+spDict = parseTab(spFname)
+refseqDict = parseTab(refseqFname)
+allSyms = set(spDict).union(refseqDict)
+org = ""
+
+havanaAnnot = {}
+
+if len(args)>2:
+    hgncSet = set(open(args[-1]).read().splitlines())
+    allSyms = allSyms.union(hgncSet)
+    havanaAnnot = parseTab("humanHavana.tab")
+    org = "human"
+
+noSymFh = open("noSym.txt", "w")
+
+for sym in allSyms:
+    desc = ""
+    if sym in spDict:
+        desc = spDict[sym]
+        if desc!="":
+            desc += " [provided by UniProt]"
+        src = "uniprot"
+    elif sym in refseqDict:
+        desc = refseqDict[sym]
+        if "[" in desc:
+            desc, end = string.split(desc, "[", 1)
+            src, footer = string.split(end, "]", 1)
+            desc = desc+"[%s]" % src
+        src = "refseq"
+    if desc=="":
+        row = [sym, havanaAnnot.get(sym, "")]
+        noSymFh.write("\t".join(row)+"\n")
+        continue
+
+    row = [sym, src, desc]
+    if org=="human":
+        row.insert(1, havanaAnnot.get(sym, ""))
+    print "\t".join(row)
+
+logging.info("symbols without descriptions written to noSym.txt")

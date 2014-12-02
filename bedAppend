@@ -109,4 +109,5 @@ for field in fields:
 fh.write(")\n")
 fh.close()
 
+print ("run this command to convert to bigBed")
 print "bedToBigBed %s /hive/data/genomes/DB/chrom.sizes %s -tab -type=bed12+ -as=%s" % (outBedFname, outBedFname.replace(".bed", ".bb"), outAsFname)

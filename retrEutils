@@ -12,6 +12,8 @@ parser = optparse.OptionParser("usage: %prog [options] accList - download access
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 parser.add_option("-o", "--oneByOne", dest="oneByOne", action="store_true", help="do not try to batch searches but rather search accessions one by one. This is necessary is you're looking for accessions with version numbers (e.g. NM_000325.5).")
 parser.add_option("-f", "--format", dest="format", action="store", help="output format, default %default, can be fasta, gb or xml")
+parser.add_option("", "--db", dest="db", action="store", help="NCBI database to query, default is %default", default="nuccore")
+parser.add_option("", "--field", dest="field", action="store", type="int", help="only output field X (zero based) for the fasta ID line")
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
 #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
 (options, args) = parser.parse_args()
@@ -26,6 +28,9 @@ BASEURL = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 MAXRATE = 3 # number of requests per second
 DELAY   = 1/MAXRATE
 
+database = "nuccore"
+field = None
+
 def chunkedDownloadFromEutils(accs, outFh, format="fasta"):
     " download in chunks of 5000 accs from eutils "
     chunkMax = 5000
@@ -36,7 +41,7 @@ def chunkedDownloadFromEutils(accs, outFh, format="fasta"):
 def eSearch(query):
     " run an esearch and return list of GIs "
     url = BASEURL+'/esearch.fcgi';
-    params = {"db":"nuccore", "term":query}
+    params = {"db":database, "term":query}
     logging.debug("Running esearch with %s" % params)
     data = urllib.urlencode(params)
     req  = urllib2.Request(url, data)
@@ -89,7 +94,7 @@ def accsToGis(accs):
     accFull = [acc+"[accn]" for acc in accs]
     query = " OR ".join(accFull)
     query += ""
-    gis, count = eSearch(query)
+    gis = eSearch(query)
     return gis
 
 lastCallSec = 0
@@ -126,6 +131,18 @@ def eFetch(gis, outFh, retType="fasta", retMax=500):
         logging.debug("HTTP post Data: %s" % data)
         req  = urllib2.Request(url, data)
         resp = urllib2.urlopen(req).read()
+        if field!=None:
+            resp = resp.strip()
+            respLines = resp.splitlines()
+            newLines = []
+            for l in respLines:
+                if l=="":
+                    continue
+                if l.startswith(">"):
+                    newLines.append(">"+l.strip(">").split("|")[field])
+                else:
+                    newLines.append(l)
+            resp = "\n".join(newLines)
         outFh.write(resp)
         wait(DELAY)
     
@@ -145,5 +162,7 @@ if args==[]:
 inFname, outFname = args
 outFile = open(outFname, "w")
 
+database = options.db
+field = options.field
 accs = open(inFname).read().splitlines()
 downloadFromEutils(accs, outFile, oneByOne=options.oneByOne, retType=options.format)

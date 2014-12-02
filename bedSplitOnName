@@ -1,0 +1,64 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename outDir - split a bed file by name field and create a trackDb file") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-p", "--parent", dest="parent", action="store", help="name of parent track, default is %s default", default="parent") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename,outDir = args
+outFhs = {}
+names = []
+for line in open(filename):
+    name = line.split("\t")[3]
+    trackName = options.parent+basename(filename).split(".")[0]+re.sub(r'[^a-zA-Z0-9]','', name)
+    namePair = (name, trackName)
+
+    if namePair not in names: # XX SLOW
+        names.append(namePair)
+
+    if trackName in outFhs:
+        ofh = outFhs[trackName]
+    else:
+        fname = join(outDir, trackName+".bed")
+        print "Writing to %s" % fname
+        ofh = open(fname, "w")
+        outFhs[trackName] = ofh
+    ofh.write(line)
+
+fname = "trackDb.split.ra"
+print "Writing %s" % fname
+tfh = open(fname, "w")
+
+tfh.write("track %s\n" % options.parent)
+tfh.write("shortLabel NewLab\n")
+tfh.write("longLabel NewLab\n")
+tfh.write("\n")
+
+names.sort()
+for name, trackName in names:
+    tfh.write("    track %s\n" % trackName)
+    tfh.write("    shortLabel %s\n" % name)
+    tfh.write("    longLabel %s\n" % name)
+    tfh.write("    type bigBed 12 .\n")
+    tfh.write("    visibility dense\n")
+    tfh.write("    parent %s\n" % options.parent)
+    tfh.write("\n")
