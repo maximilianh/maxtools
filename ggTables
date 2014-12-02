@@ -1,0 +1,632 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, glob, itertools, os, tempfile, gzip, operator, re
+from collections import defaultdict, namedtuple, Counter
+from itertools import chain
+from os.path import join, basename, dirname, isfile, expanduser
+
+LTPMAXMEMBERS=5 # maximum number of proteins in a complex for an interaction to quality for low throughput
+LTPMAX=12 # maximum number of interactions a PMID can have to be declared low throughput
+
+outFields = ["gene1", "gene2", "flags", "refs", "fwWeight", "revWeight", "snip"]
+
+# directory with autoSql descriptions of output tables
+autoSqlDir = expanduser("~/kent/src/hg/lib/")
+
+# file with all of medline in short form
+allArtFname = "textInfo.tab"
+# file with just pmids and events
+#pmidEventFname = "temp.pmidToEvent.tab"
+
+# RE to split sentences
+wordRe = re.compile("[a-zA-Z0-9]+")
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("""usage: %prog [options] build|load pathwayDir ppiDir textDir outDir - given various tab sep files with text-mining, gene interaction or pathway information, build the  table ggLink, ggDoc, ggDb and ggText
+
+run it like this:
+
+%prog medline - to reduce the big medline table to something smaller, only needed once
+
+%prog build pathways/ ppi/ text/ out/
+%prog docs out/  # creates the ggDocs.tab file, slow
+%prog load hgFixed out
+""") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-t", "--test", dest="test", action="store_true", help="run tests") 
+parser.add_option("-t", "--textDir", dest="textDir", action="store", help="directory with the parsed copy of medline, default %default", default="/hive/data/inside/pubs/text/medline") 
+parser.add_option("-m", "--meshFile", dest="meshFname", action="store", help="An mtrees<year>.bin file, default %default", default="/cluster/home/max/projects/pubs/tools/scripts/data/rawData/mtrees2013.bin")
+parser.add_option("-j", "--journalInfo", dest="journalInfo", action="store", help="tab-sep file with journal info from the NLM Catalog converted by 'pubPrepCrawl publishers'. Used to shorten the journal names. Optional and not used if file is not found. Default %default", default="/cluster/home/max/projects/pubs/tools/data/journals/journals.tab")
+parser.add_option("-b", "--wordFname", dest="wordFname", action="store", help="a file with common English words", default="/hive/data/outside/pubs/wordFrequency/bnc/bnc.txt")
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+def lineFileNext(fh, headers=None):
+    """ parses tab-sep file with headers as field names , assumes that file starts with headers
+        yields collection.namedtuples
+    """
+    line1 = fh.readline()
+    line1 = line1.strip("\n").strip("#")
+    if headers==None:
+        headers = line1.split("\t")
+        headers = [h.replace(" ", "_") for h in headers]
+        headers = [h.replace("(", "") for h in headers]
+        headers = [h.replace(")", "") for h in headers]
+    Record = namedtuple('tsvRec', headers)
+
+    for line in fh:
+        line = line.rstrip("\n")
+        fields = line.split("\t")
+        try:
+            rec = Record(*fields)
+        except Exception, msg:
+            logging.error("Exception occured while parsing line, %s" % msg)
+            logging.error("Filename %s" % fh.name)
+            logging.error("Line was: %s" % repr(line))
+            logging.error("Does number of fields match headers?")
+            logging.error("Headers are: %s" % headers)
+            #raise Exception("wrong field count in line %s" % line)
+            continue
+        # convert fields to correct data type
+        yield rec
+
+def loadFiles(inDir):
+    """ load .tab files into dict fType -> list of rows and return tuple (ppiRows, textRows)
+    """
+    #typeRows = defaultdict(list)
+    #jppiRows = list()
+    #jtextRows = list()
+    pairs = defaultdict(list)
+    inFnames = glob.glob(join(inDir, "*.tab"))
+    rows = list()
+    for inFname in inFnames:
+        logging.info("Loading %s" % inFname)
+        #fType = None
+        for row in lineFileNext(open(inFname)):
+            rows.append(row)
+    return rows
+
+def findLtRefs(rows):
+    """ count usage of PMIDs.  set of low-throughput PMIDS (those with less than LTPMAX interactions).
+    Return set of all refs with at least one low-throughput PMID.
+    """
+    pmidToRefs = defaultdict(list)
+    for row in rows:
+        members = row.themeGenes.split("|")
+        members.extend(row.causeGenes.split("|"))
+        # interactions with more than 5 proteins are not low-throughput anymore
+        if len(members)>LTPMAXMEMBERS:
+            continue
+
+        pmids = row.pmids.split("|")
+        for pmid in pmids:
+            if pmid=='':
+               continue
+            pmid = int(pmid)
+            pmidToRefs[pmid].append(row.eventId)
+
+    ltRefs = set()
+    for pmid, refList in pmidToRefs.iteritems():
+        if len(refList) <= LTPMAX:
+            ltRefs.update(refList)
+
+    return ltRefs
+            
+def allSubPairs(pair):
+    """ given a pair of two strings, where each can be a _-separate list of genes (a family), 
+    return all combinations of each member 
+    """
+    x, y = pair
+    xs = x.split("_")
+    ys = y.split("_")
+    for subPair in [(a, b) for a in xs for b in ys]:
+        yield subPair
+    
+def iterAllPairs(row):
+    """ yield all pairs of interacting genes for a given row. Handles families 
+    >>> list(iterAllPairs("gene", ["TP1","TP2"], "complex", ["OMG1","OMG2"]))
+    [('OMG1', 'OMG2'), ('TP1', 'OMG1'), ('TP1', 'OMG2'), ('TP2', 'OMG1'), ('TP2', 'OMG2')]
+    >>> list(iterAllPairs("complex", ["TP1_TEST2","TP2"], "complex", ["OMG1","OMG2"]))
+    """
+
+    type1 = row.causeType
+    type2 = row.themeType
+    genes1 = set(row.causeGenes.split("|"))
+    genes2 = set(row.themeGenes.split("|"))
+    # a gene can have multiple symbols. valid case like this:
+    # uniprot:P01233 has the gene symbols CGB, CGB5, CGB7, CGB8
+    #if type1=="gene" and len(genes1)!=1:
+        #print row
+        #raise Exception("more than one gene?")
+        #assert(len(genes1)==1)
+    #if type2=="gene" and len(genes2)!=1:
+        #print row
+        #raise Exception("more than one gene?")
+        #assert(len(genes2)==1)
+
+    if type1=="complex":
+        for pair in itertools.combinations(genes1, 2):
+            # a complex can contain families
+            for subPair in allSubPairs(pair):
+                yield tuple(subPair)
+    if type2=="complex":
+        for pair in itertools.combinations(genes2, 2):
+            # a complex can contain families
+            for subPair in allSubPairs(pair):
+                yield tuple(subPair)
+
+    # genes2 can be empty if the experiment was a pulldown of complexes
+    if type2!="":
+        pairs = list([(aa, bb) for aa in genes1 for bb in genes2])
+        for pair in pairs:
+            for subPair in allSubPairs(pair):
+                gene1, gene2 = subPair
+                if gene1=="-" or gene1=="" or gene2=="" or gene2=="-":
+                    #skipCount += 1
+                    continue
+                if gene1.startswith("compound") or gene2.startswith("compound"):
+                    continue
+                yield subPair
+    
+def indexPairs(ppiRows, desc):
+    """ given rows with theme and cause genes, return 
+    a dict with sorted (gene1, gene2) -> list of eventIds """
+    logging.info("enumerating all interacting pairs: %s" % desc)
+    pairs = defaultdict(list)
+    skipCount = 0
+    for row in ppiRows:
+        for pair in iterAllPairs(row):
+            gene1, gene2 = pair
+            pairs[tuple(sorted(pair))].append(row.eventId)
+    logging.info("got %d pairs" % len(pairs))
+    logging.info("skipped %d pairs because one gene was empty" % skipCount)
+    return pairs
+
+def mergePairs(dicts):
+    " merge a list of defaultdict(list) into one defaultdict(list) "
+    logging.info("Merging all pairs")
+    data = defaultdict(set)
+    for defDict in dicts:
+        for key, valList in defDict.iteritems():
+            data[key].update(valList)
+    return data
+
+def countDocs(rows):
+    """ get weight of text mining pairs. given rows with cause and theme genes,
+    create a dict (a, b) -> int that indicates how many documents a given pair
+    references
+    """
+    # create a dict with pair -> pmids
+    pairPmids = defaultdict(set)
+    for row in rows:
+        genes1 = set(row.causeGenes.split("|"))
+        genes2 = set(row.themeGenes.split("|"))
+        pairs = list([(aa, bb) for aa in genes1 for bb in genes2])
+        for cause, theme in pairs:
+            pairPmids[(cause, theme)].add(row.pmid)
+    
+    # count and return
+    pairCounts = {}
+    for pair, pmidSet in pairPmids.iteritems():
+        pairCounts[pair] = len(pmidSet)
+
+    return pairCounts
+
+def writeGraphTable(allPairs, textWeights, dbWeights, ltRefs, pwDirPairs, bestSentences, outFname, outFname2):
+    " write the ggLink table "
+    logging.info("writing merged graph to %s" % outFname)
+    rows = []
+    rows2 = []
+    for pair,refs in allPairs.iteritems():
+        gene1, gene2 = pair
+
+        dbs = set()
+        flags = []
+        if pair in dbPairs:
+            flags.append("ppi")
+        if pair in pwPairs:
+            flags.append("pwy")
+        if pair in textPairs:
+            flags.append("text")
+        if len(ltRefs.intersection(refs))!=0:
+            flags.append("low")
+        # direction of interaction - only based on pathways
+        if pair in pwDirPairs:
+            flags.append("fwd")
+        if tuple(reversed(pair)) in pwDirPairs:
+            flags.append("rev")
+            
+        forwWeight = textWeights.get(pair, 0)
+        revWeight = textWeights.get(tuple(reversed(pair)), 0)
+        dbWeight = dbWeights.get(pair, 0)
+        snippet = bestSentences.get(pair, "")
+        row = [gene1, gene2, ",".join(flags), str(forwWeight), str(revWeight), str(dbWeight), snippet]
+        rows.append(row)
+
+        refs = list(refs)
+        refs.sort()
+        for ref in refs:
+            #row2 = [gene1, gene2, ",".join(refs)]
+            row = [gene1, gene2, ref]
+            rows2.append(row)
+
+    ofh = open(outFname, "w")
+    rows.sort()
+    for row in rows:
+        ofh.write("\t".join(row))
+        ofh.write("\n")
+    ofh.close()
+
+    ofh2 = open(outFname2, "w")
+    rows2.sort()
+    for row in rows2:
+        ofh2.write("\t".join(row))
+        ofh2.write("\n")
+    ofh2.close()
+
+def runCmd(cmd):
+    """ run command in shell, exit if not successful """
+    msg = "Running shell command: %s" % cmd
+    logging.debug(msg)
+    ret = os.system(cmd)
+    if ret!=0:
+        raise Exception("Could not run command (Exitcode %d): %s" % (ret, cmd))
+    return ret
+
+def asToSql(table):
+    " given a table name, return the name of a .sql file with CREATE TABLE for it"
+
+    asPath = join(autoSqlDir, table+".as")
+    tempBase = tempfile.mktemp()
+    cmd = "autoSql %s %s" % (asPath, tempBase)
+    runCmd(cmd)
+    sql = open("%s.sql" % tempBase).read()
+
+    # delete the files that are not needed
+    assert(len(tempBase)>5) # paranoia check
+    cmd = "rm -f %s.h %s.c"  % (tempBase, tempBase)
+    runCmd(cmd)
+
+    return tempBase+".sql"
+
+def loadTable(db, tableDir, table):
+    " load table into mysql, using autoSql "
+    tmpSqlFname = asToSql(table)
+    tabFname = join(tableDir, table+".tab")
+
+    cmd = "hgLoadSqlTab %s %s %s %s" % (db, table, tmpSqlFname, tabFname)
+    try:
+        runCmd(cmd)
+    except:
+        # make sure that the temp file gets deleted
+        os.remove(tmpSqlFname)
+        raise
+
+    os.remove(tmpSqlFname)
+
+def loadTables(tableDir):
+    " load graph tables into mysql "
+    db = "publications"
+
+    loadTable(db, tableDir, "ggDoc")
+    loadTable(db, tableDir, "ggDocEvent")
+    loadTable(db, tableDir, "ggEventDb")
+    loadTable(db, tableDir, "ggEventText")
+    loadTable(db, tableDir, "ggLink")
+    loadTable(db, tableDir, "ggLinkEvent")
+
+def indexPmids(rowList, textRows):
+    " return dict pmid -> list of event Ids "
+    pmidToIds = defaultdict(set) 
+    for rows in rowList:
+        for row in rows:
+            pmidStr = row.pmids
+            if pmidStr=="":
+                continue
+            pmids = pmidStr.split("|")
+            rowId = row.eventId
+            for pmid in pmids:
+                pmidToIds[pmid].add(rowId)
+
+    for row in textRows:
+        if row.pmid=="":
+            continue
+        pmidToIds[row.pmid].add(row.eventId)
+
+    return pmidToIds
+
+def writeDocEvents(pmidToId, outFname):
+    " write a table with PMID -> list of event Ids "
+    logging.info("Writing docId-eventId %s" % outFname)
+    ofh = open(outFname, "w")
+    for docId, eventIds in pmidToId.iteritems():
+        eventIds = sorted(list(eventIds))
+        for eventId in eventIds:
+            ofh.write("%s\t%s\n" % (docId, eventId))
+    ofh.close()
+
+def writeEventTable(rowList, outFname, colCount=None):
+    " write the event table with event details "
+    logging.info("Writing events to %s" % outFname)
+    ofh = open(outFname, "w")
+    for rows in rowList:
+        for row in rows:
+            if colCount:
+                row = row[:colCount]
+            ofh.write("%s\n" % ("\t".join(row)))
+    ofh.close()
+
+def countDbs(pairs, pwRows, dbRows):
+    """ given pairs and data rows, return a dict pair -> int 
+    that indicates how many DBs a pair is referenced in 
+    """
+    # first make dict event -> source dbs
+    eventDbs = defaultdict(set)
+    for row in pwRows:
+        eventDbs[row.eventId].add(row.sourceDb)
+    for row in dbRows:
+        sourceDbs = row.sourceDbs.split("|")
+        eventDbs[row.eventId].update(sourceDbs)
+
+    # construct a dict pair -> source dbs
+    pairDbs = defaultdict(set)
+    for pair, eventIds in pairs.iteritems():
+        for eventId in eventIds:
+            if eventId in eventDbs:
+                pairDbs[pair].update(eventDbs[eventId])
+
+    # convert to pair -> int
+    pairCounts = {}
+    for pair, dbs in pairDbs.iteritems():
+        pairCounts[pair] = len(dbs)
+    return pairCounts
+
+def parseDiseases(fname):
+    " given a medline trees file, return the list of disease names in it "
+    # ex. filename is mtrees2013.bin (it's ascii)
+    # WAGR Syndrome;C10.597.606.643.969
+    terms = set()
+    lines = open(fname)
+    for line in lines:
+        line = line.strip()
+        term, code = line.split(";")
+        term = term.strip()
+        if code.startswith("C"):
+            terms.add(term)
+    logging.info("Read %d disease MESH terms from %s" % (len(terms), fname))
+    return terms
+
+
+def getDirectedPairs(pwRows):
+    " get the set of directed gene pairs from the rows, keep the direction "
+    pairs = set()
+    for row in pwRows:
+        for pair in iterAllPairs(row):
+            pairs.add(pair)
+    return pairs
+            
+def writeAllDocInfo(textDir, outFname):
+    " get all author/year/journal/title as tab-sep from a pubtools-style input directory, ~5GB big "
+    mask = join(textDir, "*.articles.gz")
+
+    ofh = open(outFname, "w")
+    fnames = glob.glob(mask)
+    doneDocs = set()
+    for i, fname in enumerate(fnames):
+        if i % 10 == 0:
+            logging.info("%d out of %d files" % (i, len(fnames)))
+
+        for row in lineFileNext(gzip.open(fname)):
+            # skip duplicates
+            if row.pmid in doneDocs:
+                continue
+            doneDocs.add(row.pmid)
+
+            if row.year.isdigit() and int(row.year)>1975:
+                newRow = (row.pmid, row.authors, row.year, row.journal, row.printIssn, \
+                        row.title, row.abstract, row.keywords)
+                ofh.write("\t".join(newRow))
+                ofh.write("\n")
+    ofh.close()
+    logging.info("Article info written to %s" % outFname)
+
+def parseShortNames(journalFname):
+    # get dict ISSN -> short name
+    shortNames = {}
+    if isfile(journalFname):
+        for row in lineFileNext(open(journalFname)):
+            if row.medlineTA!="" and row.pIssn!="":
+                shortNames[row.pIssn] = row.medlineTA
+        logging.info("Read a short journal name for %d ISSNs from  %s" % (len(shortNames), journalFname))
+    else:
+        logging.info("%s not found, not shortening journal names" % journalFname)
+    return shortNames
+
+def writeDocsTable(pmidEventPath, medlinePath, shortNames, diseaseNames, outFname):
+    " join pmid-Event info and our shortened medline version "
+    # parse the PMIDs to export
+    docIds = set()
+    for row in lineFileNext(open(pmidEventPath), headers=["docId", "eventId"]):
+        docIds.add(row.docId)
+    logging.info("read %d document IDs from %s" %  (len(docIds), pmidEventPath))
+
+    logging.info("Writing to %s" % outFname)
+    ofh = open(outFname, "w")
+    #for row in lineFileNext(open(fname), headers=["docId", "authors", "year", "journal", "printIssn", "title"]):
+        #if row.docId in docIds:
+    # fields are: docId, authors, year, journal, printIssn, title, abstract, keywords
+    foundIds = set()
+    for line in open(medlinePath):
+        fields = line.rstrip("\n").split("\t")
+        docId = fields[0]
+        if docId in docIds:
+            issn = fields[4]
+            shortName = shortNames.get(issn)
+            if shortName!=None:
+                fields[3] = shortName
+
+            newKeywords = []
+            for kw in fields[7].split("/"):
+                if kw in diseaseNames:
+                    newKeywords.append(kw)
+            fields[7] = "|".join(newKeywords)
+            line = "\t".join(fields)+"\n"
+
+            ofh.write(line)
+            foundIds.add(docId)
+    ofh.close()
+
+    notFoundIds = docIds - foundIds
+    logging.info("No info for %d documents" % len(notFoundIds))
+    logging.debug("No info for these documents: %s" % notFoundIds)
+
+def sumBasic(sentences, commonWords):
+    """ given probabilities of words, rank sentences by average prob
+    (removing commonWords).
+    Sentences is a list of list of words
+    Algorithm is described in http://ijcai.org/papers07/Papers/IJCAI07-287.pdf
+
+    Returns sentence with highest score and shortest length, if several have a highest score
+    """
+
+    if len(sentences)==0:
+        return ""
+    sentWordsList = [set(wordRe.findall(sentence)) for sentence in sentences]
+    words = list(chain.from_iterable(sentWordsList))
+    wordProbs = {word: float(count)/len(words) for word, count in Counter(words).items()}
+
+    scoredSentences = []
+    for sentWords, sentence in zip(sentWordsList, sentences):
+        mainWords = sentWords - commonWords
+        if len(mainWords)==0:
+            continue
+        avgProb = sum([wordProbs[word] for word in mainWords]) / len(mainWords)
+        scoredSentences.append((avgProb, sentence, sentWords))
+
+    # happens rarely: all words are common English words
+    if len(scoredSentences)==0:
+        return ""
+
+    # get sentences with equally good top score
+    scoredSentences.sort(key=operator.itemgetter(0), reverse=True)
+    topScore = scoredSentences[0][0]
+    topSents = [(sent, words) for score, sent, words in scoredSentences if score >= topScore]
+
+    # sort these by length and pick shortest one
+    topSentLens = [(len(s), s, w) for s, w in topSents]
+    topSentLens.sort(key=operator.itemgetter(0))
+    topLen, topSent, topWords = topSentLens[0]
+
+    # update word frequencies
+    for word in topWords:
+        wordProbs[word] *= wordProbs[word]
+
+    return topSent
+
+
+def runSumBasic(textRows, wordFname):
+    """ Get all sentences for an interaction and use sumBasic to pick the best one 
+    """
+    # get list of very common English words
+    logging.info("Running SumBasic on sentences")
+    bncWords = set([line.split()[0] for line in open(wordFname).read().splitlines()])
+    logging.info("Loaded %d common English words from %s" % (len(bncWords), wordFname))
+
+    pairSentences = defaultdict(set)
+    for row in textRows:
+        for pair in iterAllPairs(row):
+            if row.sentence!="":
+                gene1, gene2 = sorted(pair)
+                pairSentences[(gene1, gene2)].add(row.sentence)
+
+    bestSentences = {}
+    for pair, sentences in pairSentences.iteritems():
+        sentences = list(sentences)
+        bestSentences[pair] = sumBasic(sentences, bncWords)
+    return bestSentences
+
+# ----------- MAIN --------------
+#if options.test:
+    #import doctest
+    #doctest.testmod()
+    #sys.exit(0)
+
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+cmd = args[0]
+if cmd == "build":
+    wordFname = options.wordFname
+
+    pathwayDir, dbDir, textDir, outDir = args[1:]
+    # load the input files into memory
+    dbRows = loadFiles(dbDir) 
+    pwRows = loadFiles(pathwayDir)
+    textRows = loadFiles(textDir)
+    bestSentences = runSumBasic(textRows, wordFname)
+
+    # index and merge them
+    dbPairs   = indexPairs(dbRows, "ppi databases")
+    pwPairs   = indexPairs(pwRows, "pathways")
+    textPairs = indexPairs(textRows, "text mining")
+    pwDirPairs = getDirectedPairs(pwRows)
+
+    allPairs = mergePairs([dbPairs, pwPairs, textPairs])
+
+    ltRefs = findLtRefs(dbRows)
+
+    textWeights = countDocs(textRows)
+    dbWeights = countDbs(allPairs, pwRows, dbRows)
+
+    #docContext = parseDocContext(join(outDir, "ggDoc.tab"))
+
+    outFname = join(outDir, "ggLink.tab")
+    eventFname = join(outDir, "ggLinkEvent.tab")
+    writeGraphTable(allPairs, textWeights, dbWeights, ltRefs, pwDirPairs, bestSentences, outFname, eventFname)
+
+    pmidToId = indexPmids([dbRows,pwRows], textRows)
+    outFname = join(outDir, "ggDocEvent.tab")
+    writeDocEvents(pmidToId, outFname)
+
+    outFname = join(outDir, "ggEventDb.tab")
+    writeEventTable([dbRows, pwRows], outFname, colCount=13)
+
+    outFname = join(outDir, "ggEventText.tab")
+    writeEventTable([textRows], outFname)
+
+elif cmd == "medline":
+    outDir = args[1]
+    textDir = options.textDir
+    medlineFname = join(outDir, allArtFname)
+    writeAllDocInfo(textDir, medlineFname)
+
+elif cmd == "docs":
+    outDir = args[1]
+    outFname = join(outDir, "ggDoc.tab")
+    pmidEventPath = join(outDir, "ggDocEvent.tab")
+    medlineFname = join(outDir, allArtFname)
+    diseaseNames = parseDiseases(options.meshFname)
+    shortNames = parseShortNames(options.journalInfo)
+    writeDocsTable(pmidEventPath, medlineFname, shortNames, diseaseNames, outFname)
+
+if cmd=="test":
+    inFname = args[1]
+    rows = []
+    for row in lineFileNext(open(inFname)):
+        rows.append(row)
+    for pair, sent in runSumBasic(rows, options.wordFname).iteritems():
+        print pair, sent
+    
+elif cmd == "load":
+    inDir = args[1]
+    loadTables(inDir)
+

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import logging, sys, optparse, operator
+import logging, sys, optparse, operator, glob
 from collections import defaultdict, namedtuple, OrderedDict
 from os.path import join, basename, dirname, isfile
 
@@ -37,6 +37,17 @@ possible DBs:
 - biogrid:  filename like BIOGRID-ALL-3.2.114.tab2.txt   URL http://thebiogrid.org/download.php
 - mentha:   filename like 2014-07-27_MITAB-2.5           URL http://mentha.uniroma2.it/download.php
 - iref:     filename like 9606.mitab.08122013.txt        URL http://irefindex.org/download/irefindex/data/archive/release_13.0/psi_mitab/MITAB2.6/
+- quickgo:  filename like association.tsv                URL http://www.ebi.ac.uk/QuickGO/GTerm?id=GO:0043234#info=2 
+- string:   filenames in current dir                     URL http://string-db.org/newstring_cgi/show_download_page.pl
+- corum:    filename like allComplexes.csv               URL http://mips.helmholtz-muenchen.de/genre/proj/corum
+- negatome: filename like manual.txt                     URL http://mips.helmholtz-muenchen.de/proj/ppi/negatome/
+- stringFilt: like string, but with score>400 and only converts "experiment" and "dataset"
+  does not convert co-expression, text-mining, etc.
+
+"string" and "stringFilt" open these files from the input directory:
+9606.protein.actions.detailed.*.txt
+9606.protein.links.detailed.*.txt
+9606.protein.aliases.detailed.*.txt
 """)
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
@@ -52,7 +63,7 @@ if options.debug:
 else:
     logging.basicConfig(level=logging.INFO)
 # ==== FUNCTIONs =====
-def lineFileNext(fh, headers=None, colCount=None):
+def lineFileNext(fh, headers=None, colCount=None, sep="\t"):
     """ 
         parses tab-sep file with headers as field names 
         yields collection.namedtuples, strips "#"-prefix from header line
@@ -60,13 +71,15 @@ def lineFileNext(fh, headers=None, colCount=None):
     if headers==None:
         line1 = fh.readline()
         line1 = line1.strip("\n").strip("#")
-        headers = line1.split("\t")
-        headers = [h.replace(" ","_").replace("(","").replace(")","") for h in headers]
+        headers = line1.split(sep)
+        headers = [h.replace(" ","_").replace("(","").replace(")","").replace('"', "") for h in headers]
+        if headers[-1]=="":
+            del headers[-1]
     Record = namedtuple('tsvRec', headers)
 
     for line in fh:
         line = line.rstrip("\n")
-        fields = line.split("\t")
+        fields = line.split(sep)
         if colCount!=None:
             fields = fields[:colCount]
         try:
@@ -113,8 +126,9 @@ def addListField(sym, listStr, accToSym):
             accToSym[acc] = sym
     return accToSym
 
-def addPdbRefToSym(fname, accToSym):
-    " use the pubs parsed uniprot tables to resolve pdb and refseq to symbol "
+def allUpToSym(fname, accToSym):
+    """ use the pubs parsed uniprot tables to resolve uniprot, pdb, genbank and refseq to symbol 
+    """
     for row in lineFileNext(open(fname)):
         sym = row.hgncSym
         if sym=="":
@@ -320,7 +334,7 @@ def resolveToSym(descStr, accToSym):
 def convIRef(inPath, hgncFname, upFname):
     " convert iref to our format and yield tuples "
     accToSym = readUniprotToSym(hgncFname, addEntrez=True)
-    accToSym = addPdbRefToSym(upFname, accToSym)
+    accToSym = allUpToSym(upFname, accToSym)
     ifh = open(inPath)
 
     complexes = defaultdict(list) # id -> list of symbols
@@ -348,6 +362,8 @@ def convIRef(inPath, hgncFname, upFname):
                 assay = "unknown"
 
         sourceDb = row.sourcedb.split("(")[1].strip(")")
+        if sourceDb=="corum":
+            continue
         relType = row.interactionType
         if relType =="-":
             relType = ""
@@ -428,6 +444,191 @@ def convIRef(inPath, hgncFname, upFname):
     logging.info( "skipComplexRows %d"% skipComplexCount)
     logging.info( "wrongOrg %d"% wrongOrgCount)
 
+def findFile(inDir, mask):
+    " open the single file in inDir that matches a glob mask "
+    mask = join(inDir, mask)
+    inFnames = glob.glob(mask)
+    assert(len(inFnames)==1)
+    inFname = inFnames[0]
+    return inFname
+
+def parseEnsToSym(inDir):
+    " parse the protein.aliases file of string, return a dict ensProtId -> HGNC symbol "
+    logging.info("Parsing ensPep -> symbol")
+    inFname = findFile(inDir, "9606.protein.aliases.*.txt")
+    ensToHgnc = defaultdict(list)
+    # 9606    ENSP00000262374 ALG1    BLAST_KEGG_NAME 
+    duplGenes = set()
+    for line in open(inFname):
+        if line.startswith("#"):
+            continue
+        fields = line.rstrip("\n").split('\t')
+        taxId, protId, sym, tags = fields
+        tags = set(tags.split())
+        if not "BioMart_HUGO" in tags:
+            continue
+        #if not "Ensembl_HGNC_UniProt_ID_(mapped_data_supplied_by_UniProt)_GN" in tags:
+            #continue
+        #if protId in ensToHgnc and sym!=ensToHgnc[protId]:
+            #print protId, ensToHgnc[protId], sym
+            duplGenes.add(sym)
+        ensToHgnc[protId].append(sym)
+    #logging.info("%d symbols are not uniquely assigned to ensembld IDs" % len(duplGenes))
+    return ensToHgnc
+
+def readOkPairs(inDir, minScore, onlyExpDb):
+    " get list of gene pairs that have enough evidence and score > 400"
+    logging.info("getting list of only-text mining interactions")
+    okPairs = set()
+    fname = findFile(inDir, "9606.protein.links.*.txt")
+    allPairs = set()
+    for line in open(fname):
+        #protein1 protein2 neighborhood fusion cooccurence coexpression experimental database textmining combined_score
+        #9606.ENSP00000000233 9606.ENSP00000020673 0 0 0 0 0 0 176 176
+        if line.startswith("protein"):
+            continue
+        prot1, prot2, neighb, fusion, cooc, coexpr, exp, db, tm, combScore = line.rstrip("\n").split()
+        pair = tuple(sorted([prot1, prot2]))
+        allPairs.add(pair)
+        if int(combScore)<minScore:
+            continue
+        # skip if not accepted evidence
+        #nonTmEvidScores = set([neighb, fusion, cooc, coexpr, exp, db])
+        if onlyExpDb and exp=="0" and db=="0":
+            continue
+        okPairs.add(pair)
+    logging.info("%d pairs out of %d have good score and acceptable evidence" % (len(okPairs), len(allPairs)))
+    return okPairs
+
+def convStringDb(inDir, minScore, onlyExpDb):
+    """ convert string db, ignore imported interactions and text-mined interactions.
+    Also ignore interactions with score < 400 """
+    protIdToSym = parseEnsToSym(inDir)
+    okPairs = readOkPairs(inDir, minScore, onlyExpDb)
+
+    # get list of gene pairs that have not been imported by string
+    # have >400 score and are not only text mining based
+    logging.info("Parsing interactions, using only ones with score > 400")
+    pairs = set()
+    fname = findFile(inDir, "9606.protein.actions.detailed.*.txt")
+    #item_id_a            item_id_b            mode    action a_is_acting score sources transferred_sources
+    #9606.ENSP00000000233 9606.ENSP00000294179 binding        0           170           grid
+    i = 0
+    notMapIds = set()
+    notMapCount = 0
+    for line in open(fname):
+        if line.startswith("#"):
+            continue
+        fields = line.rstrip("\n").split("\t")
+        id1, id2, mode, action, aIsActing, score, sources, transfSources = fields
+        #sources = sources.split()
+        #transfSources = transfSources.split()
+        # we don't need directly imported ones, those that mention sources
+        if sources!="":
+            continue
+        score = int(score)
+        if score < 400:
+            continue
+        pair = tuple(sorted([id1, id2]))
+        if not pair in okPairs:
+            continue
+
+        syms1 = protIdToSym.get(id1.replace("9606.",""), None)
+        if syms1==None:
+            logging.debug("Could not map to sym, %s" % (id1))
+            notMapIds.add(id1)
+            notMapCount +=1
+            continue
+
+        syms2 = protIdToSym.get(id2.replace("9606.",""), None)
+        if syms2==None:
+            logging.warn("Could not map to sym, %s" % (id2))
+            notMapIds.add(id2)
+            notMapCount +=1
+            continue
+
+        for sym1 in syms1:
+            for sym2 in syms2:
+                #intId = "string%d" % i
+                #row = [intId, sym1, sym2, transfSources, str(score)]
+                if transfSources!="":
+                    desc = "mapped from "+transfSources
+                    
+                row = ("string%d"%i, "gene", "", sym1, "gene", "", sym2, "interaction", desc, "string", sym1+"%0A"+sym2, "interaction", "")
+                yield IntRec(*row)
+                i += 1
+    logging.info("Could not map %d identifiers, %d rows,  to symbols" % \
+        (len(notMapIds), notMapCount))
+
+def convQuickGo(tabFname):
+    " convert quickGO tab sep file "
+    compNames = {} # goId -> (complexName)
+    compGenes = defaultdict(list) # goId -> list of symbols
+    compRefs = defaultdict(list) # goId -> list of refs
+
+    for row in lineFileNext(open(tabFname)):
+        compGenes[row.GO_ID].append(row.Symbol)
+        if row.GO_ID not in compNames:
+            compNames[row.GO_ID] = row.GO_Name
+        if row.Reference.startswith("PMID:"):
+            compRefs[row.GO_ID].append(row.Reference.replace("PMID:",""))
+
+    i = 0
+    for goId, genes in compGenes.iteritems():
+        goName = compNames[goId]
+        ref = "|".join(set(compRefs[goId]))
+        genes = set(genes)
+        if len(genes)==1:
+            continue
+        row = ("go%d"%i, "complex", goName, "|".join(genes), "", "", "", "", "", "go", goId, goName, ref)
+        yield IntRec(*row)
+        i += 1
+        
+def convCorum(tabFname, hgncFname, upFname):
+    " convert corum semicolon-sep file "
+    upToSym = readUniprotToSym(hgncFname)
+    upToSym = allUpToSym(upFname, upToSym)
+
+    for row in lineFileNext(open(tabFname), sep=";"):
+        #Complex_id='1', Complex_name='BCL6-HDAC4 complex', Synonyms='', organism='Human', subunits_UniProt_IDs='P41182,P56524', subunits_Entrez_IDs='604,9759', protein_complex_purification_method='MI:0007- anti tag coimmunoprecipitation', PubMed_id='11929873', FunCat_categories='10.01.09.05,11.02.03.04.03,14.07.04,42.10.03,43.03.07.02.01.01,70.10', functional_comment='"Transcriptional repression by BCL6 is thought to be achieved in part by recruiting a repressor complex containing histone deacetylases."', disease_comment='""', subunit_comment='""')
+        if row.organism!="Human":
+            continue
+        syms = []
+        for upId in row.subunits_UniProt_IDs.split(","):
+            upId = upId.strip("(").strip(")").strip()
+            sym = upToSym.get(upId, None)
+            if sym==None:
+                logging.warn("No symbol for uniprot ID %s" % upId)
+                continue
+            syms.append(sym)
+        row = ("corum%s"%row.Complex_id, "complex", row.Complex_name, "|".join(syms), "", "", "", "", "", "corum", row.Complex_id, row.Complex_name, row.PubMed_id)
+        yield IntRec(*row)
+
+def convNegatome(tabFname, hgncFname, upFname):
+    " convert negatome dump file "
+    upToSym = readUniprotToSym(hgncFname)
+    upToSym = allUpToSym(upFname, upToSym)
+
+    i = 0
+    for row in lineFileNext(open(tabFname), headers=["upId1", "upId2", "pmid", "desc"]):
+        sym1 = upToSym.get(row.upId1, None)
+        sym2 = upToSym.get(row.upId2, None)
+        if sym1==None:
+            logging.warn("no symbol for %s" % row.upId1)
+            continue
+        if sym2==None:
+            logging.warn("no symbol for %s" % row.upId2)
+            continue
+        #print row
+        if "-" in row.desc:
+            desc = row.desc.split("-")[1].strip()
+        else:
+            desc = row.desc.split()[-1]
+        #print desc
+        desc = desc.replace("\r", "")
+        row = ("negatome%s"%i, "gene", "", sym1, "gene", "", sym2, "Absence of interaction", desc, "negatome", "", "", row.pmid)
+        yield IntRec(*row)
+        i+=1
 
 def main(args, options):
     if options.mysql:
@@ -437,6 +638,8 @@ def main(args, options):
     db, inPath = args
 
     ofh = sys.stdout
+
+    global outFields
 
     if db=="reactome":
         # reactom has to look like a pathway database
@@ -449,6 +652,16 @@ def main(args, options):
         reader = convMentha(inPath, options.hgncFile)
     elif db=="iref":
         reader = convIRef(inPath, options.hgncFile, options.upFile)
+    elif db=="stringFilt":
+        reader = convStringDb(inPath, 400, True)
+    elif db=="string":
+        reader = convStringDb(inPath, 0, False)
+    elif db=="quickgo":
+        reader = convQuickGo(inPath)
+    elif db=="corum":
+        reader = convCorum(inPath, options.hgncFile, options.upFile)
+    elif db=="negatome":
+        reader = convNegatome(inPath, options.hgncFile, options.upFile)
 
     else:
         logging.error("Unknown db %s" % db)
@@ -463,6 +676,7 @@ def main(args, options):
     rows.sort(key=operator.itemgetter(1))
 
     for row in rows:
+        row = [r.replace("\t", " ") for r in row] # make sure fields don't include a tab
         line = "\t".join(row)
         ofh.write(line+"\n")
 
