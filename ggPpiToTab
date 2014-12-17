@@ -8,39 +8,41 @@ HGNCFILE="/hive/data/outside/hgnc/111413/hgnc_complete_set.txt"
 UNIPROTFILE="/hive/data/inside/pubs/parsedDbs/uniprot.9606.tab"
 
 # output format:
-# geneA, geneB = HGNC symbols of genes, geneA is always lexically smaller 
-# relType: relation, as annotated in database, e.g. "physical interaction" etc
-# sourceDbs: |-sep list of databases
-# sourceIds: |-sep list of database identifiers for interactions (|-number must match sourceDbs)
-# assay: string to describe the evidence, only relevant for Imex databases like biogrid
-# pmids: |-sep list of PMIDs that support the interaction
 
-#outFields = "ppiId,geneA,geneB,relType,sourceDbs,sourceIds,assay,pmids".split(",")
 outFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
-    ",relType,relSubtype,sourceDbs,sourceIds,sourceDescs,pmids".split(",")
+    ",relType,relSubtype,sourceDb,sourceId,sourceDesc,pmids".split(",")
 # eventId: short form of database where download occured + number, like pwc1234 or mentha1234
 # causeType: gene or complex
 # causeName: name string in database
 # causeGenes: |-separated list of HGNC symbols
-# themeType, themeName, themeGenes: like three previous fields, (cause and theme are not directed in interaction databases)
-# sourceDescs: |-sep list of names for identifiers in interactions (|-number must match sourceDbs)
+# themeType, themeName, themeGenes: like three previous fields, 
+# NB: cause and theme are not directed in interaction databases, they're just called like this
+# to be compatible with pathway databases
+# NB2: if themeType=="": line describes a purified complex, genes are in "causeGenes"
+# (This is similar to the iref format of complexes)
 
-#longFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
-    #",relType,relSubtype,sourceDbs,sourceIds,sourceDescs,assay,pmids".split(",")
+# relType: relation, as annotated in database, e.g. "physical interaction" etc
+# relSubtype: subtype of relation, e.g. "yeast-two hybrid" 
+# sourceDb: source database
+# sourceId: ID in source database of interaction, for HTML links
+# sourceDesc: description of interaction in source database
+# pmids: |-sep list of PMIDs that support the interaction
+
 IntRec = namedtuple("IntRec", outFields)
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = optparse.OptionParser("""usage: %prog [options] db fileOrDir - convert a pathway database to a tab-sep file
+parser = optparse.OptionParser("""usage: %prog [options] db fileOrDir - convert a pathway database to a sorted tab-sep file
 
 possible DBs:
 - reactome: filename like homo_sapiens.interactions.txt  URL http://www.reactome.org/download/
 - biogrid:  filename like BIOGRID-ALL-3.2.114.tab2.txt   URL http://thebiogrid.org/download.php
 - mentha:   filename like 2014-07-27_MITAB-2.5           URL http://mentha.uniroma2.it/download.php
+
 - iref:     filename like 9606.mitab.08122013.txt        URL http://irefindex.org/download/irefindex/data/archive/release_13.0/psi_mitab/MITAB2.6/
 - quickgo:  filename like association.tsv                URL http://www.ebi.ac.uk/QuickGO/GTerm?id=GO:0043234#info=2 
-- string:   filenames in current dir                     URL http://string-db.org/newstring_cgi/show_download_page.pl
 - corum:    filename like allComplexes.csv               URL http://mips.helmholtz-muenchen.de/genre/proj/corum
 - negatome: filename like manual.txt                     URL http://mips.helmholtz-muenchen.de/proj/ppi/negatome/
+- string:   filenames in current dir                     URL http://string-db.org/newstring_cgi/show_download_page.pl
 - stringFilt: like string, but with score>400 and only converts "experiment" and "dataset"
   does not convert co-expression, text-mining, etc.
 
@@ -216,8 +218,6 @@ def convBiogrid(inPath):
         for a in assayWords:
             geneAssays[geneTup][a]=None
 
-    #outFields = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes"\
-    #",relType,relSubtype,sourceDb,sourceIds,sourceDesc,assays,pmids".split(",")
     eventId = 0
     for genePair, intIds in geneIntIds.iteritems():
         pmids = genePmids.get(genePair, [])
@@ -307,7 +307,7 @@ def printMysql():
     print "CREATE TABLE interactions ("
     for field in outFields:
         len = "255"
-        if field in ["assay", "pmids", "sourceDbs", "sourceIds"]:
+        if field in ["assay", "pmids", "sourceDb", "sourceId"]:
             len = "4000"
         print "%s VARCHAR(%s)," % (field, len)
     print "INDEX symAIdx (geneA),"

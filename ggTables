@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
-import logging, sys, optparse, glob, itertools, os, tempfile, gzip, operator, re
+import logging, sys, optparse, glob, itertools, os, tempfile, gzip, operator, re, cPickle, gc
 from collections import defaultdict, namedtuple, Counter
-from itertools import chain
+from itertools import chain, combinations
 from os.path import join, basename, dirname, isfile, expanduser
 
-LTPMAXMEMBERS=5 # maximum number of proteins in a complex for an interaction to quality for low throughput
-LTPMAX=12 # maximum number of interactions a PMID can have to be declared low throughput
+#LTPMAXMEMBERS=5 # maximum number of proteins in a complex for an interaction to quality for low throughput
+LTPMAX=5 # maximum number of interactions a PMID can have to be declared low throughput
 
 outFields = ["gene1", "gene2", "flags", "refs", "fwWeight", "revWeight", "snip"]
 
@@ -28,10 +28,12 @@ run it like this:
 
 %prog medline - to reduce the big medline table to something smaller, only needed once
 
-%prog build pathways/ ppi/ text/ out/
-%prog docs out/  # creates the ggDocs.tab file, slow
-%prog load hgFixed out
-""") 
+%prog build pathways ppi text mysql
+%prog docs mysql  # creates the ggDocs.tab file, slow
+%prog context mysql
+%prog load mysql publications
+%prog bigBed mysql hg19
+""")
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-t", "--test", dest="test", action="store_true", help="run tests") 
@@ -49,13 +51,32 @@ else:
     logging.basicConfig(level=logging.INFO)
 # ==== FUNCTIONs =====
     
-def lineFileNext(fh, headers=None):
+def parseAutoSql(asFname):
+    " parse auto sql file and return list of field names "
+    headers = []
+    for line in open(asFname):
+        line = line.replace("(","").replace(")","").strip()
+        if line.startswith('"') or line.startswith("\n"):
+            continue
+        if line.startswith("table"):
+            continue
+        if not ";" in line:
+            continue
+        parts = line.split(";")[0]
+        parts = parts.split()
+        assert(len(parts)>=2)
+        headers.append(parts[1])
+    return headers
+
+def lineFileNext(fh, headers=None, asFname=None):
     """ parses tab-sep file with headers as field names , assumes that file starts with headers
         yields collection.namedtuples
     """
     line1 = fh.readline()
     line1 = line1.strip("\n").strip("#")
-    if headers==None:
+    if headers==None and asFname!=None:
+        headers = parseAutoSql(asFname)
+    elif headers==None:
         headers = line1.split("\t")
         headers = [h.replace(" ", "_") for h in headers]
         headers = [h.replace("(", "") for h in headers]
@@ -78,7 +99,7 @@ def lineFileNext(fh, headers=None):
         # convert fields to correct data type
         yield rec
 
-def loadFiles(inDir):
+def loadFiles(inDir, prefix=None):
     """ load .tab files into dict fType -> list of rows and return tuple (ppiRows, textRows)
     """
     #typeRows = defaultdict(list)
@@ -91,34 +112,64 @@ def loadFiles(inDir):
         logging.info("Loading %s" % inFname)
         #fType = None
         for row in lineFileNext(open(inFname)):
+            if prefix!=None:
+                row = row._replace(eventId=prefix+row.eventId)
             rows.append(row)
     return rows
 
-def findLtRefs(rows):
-    """ count usage of PMIDs.  set of low-throughput PMIDS (those with less than LTPMAX interactions).
-    Return set of all refs with at least one low-throughput PMID.
+def getResultCounts(pairs):
+    """ for each PMID, count how many pairs are assigned to it. This is 
+    something like the "resultCount" of a paper, the lower, the better.
+    Then, for each pair, get the minimum resultCount and return as a dict
+    pair -> resultCount
     """
-    pmidToRefs = defaultdict(list)
-    for row in rows:
-        members = row.themeGenes.split("|")
-        members.extend(row.causeGenes.split("|"))
-        # interactions with more than 5 proteins are not low-throughput anymore
-        if len(members)>LTPMAXMEMBERS:
-            continue
+    logging.info("Getting low-throughput studies in PPI and pathway data")
 
-        pmids = row.pmids.split("|")
-        for pmid in pmids:
-            if pmid=='':
-               continue
-            pmid = int(pmid)
-            pmidToRefs[pmid].append(row.eventId)
+    # create dict doc -> set of gene pairs
+    docToPairs = defaultdict(set)
+    for pair, rows in pairs.iteritems():
+        print "pp", pair
+        for row in rows:
+            print "r", row
+            #members = row.themeGenes.split("|")
+            #members.extend(row.causeGenes.split("|"))
+            # complexes with more than 5 proteins are not low-throughput anyways
+            # skip these right away
+            #if len(members)>LTPMAXMEMBERS:
+                #continue
+            docIds = row.pmids.split("|")
+            for docId in docIds:
+                if docId=="":
+                    continue
+                docToPairs[docId].add(pair)
 
-    ltRefs = set()
-    for pmid, refList in pmidToRefs.iteritems():
-        if len(refList) <= LTPMAX:
-            ltRefs.update(refList)
+    pairMinResultCounts = {}
+    for pair, rows in pairs.iteritems():
+        print "pp", pair
+        resultCounts = []
+        docIds = row.pmids.split("|")
+        for docId in docIds:
+            if docId=="":
+                continue
+            print "di2", docId
+            print "d2p", docToPairs[docId]
+            resCount =len(docToPairs[docId])
+            print "rc", resCount
+            resultCounts.append(resCount)
+        print "min", min(resultCounts)
+        pairMinResultCounts[pair] = min(resultCounts)
+        
+    #ltPairs = set()
+    #ltDocs = []
+    #for pmid, pairList in docToPairs.iteritems():
+        #if len(pairList) <= LTPMAX:
+            #ltPairs.update(pairList)
+            #ltDocs.append(pmid)
 
-    return ltRefs
+    #logging.info("Found %d low-throughput studies out of %d" % (len(ltDocs), len(pmidToPairs)))
+    #logging.info("Found %d low-throughput interactions out of %d" % (len(ltPairs), len(pairs)))
+    #return ltPairs, ltDocs
+    return pairMinResultCounts, docToPairs
             
 def allSubPairs(pair):
     """ given a pair of two strings, where each can be a _-separate list of genes (a family), 
@@ -128,6 +179,10 @@ def allSubPairs(pair):
     xs = x.split("_")
     ys = y.split("_")
     for subPair in [(a, b) for a in xs for b in ys]:
+        a, b = subPair
+        if a=="" or b=="" or a=="-" or b=="-" or \
+                a.startswith("compound") or b.startswith("compound"):
+            continue
         yield subPair
     
 def iterAllPairs(row):
@@ -141,17 +196,7 @@ def iterAllPairs(row):
     type2 = row.themeType
     genes1 = set(row.causeGenes.split("|"))
     genes2 = set(row.themeGenes.split("|"))
-    # a gene can have multiple symbols. valid case like this:
-    # uniprot:P01233 has the gene symbols CGB, CGB5, CGB7, CGB8
-    #if type1=="gene" and len(genes1)!=1:
-        #print row
-        #raise Exception("more than one gene?")
-        #assert(len(genes1)==1)
-    #if type2=="gene" and len(genes2)!=1:
-        #print row
-        #raise Exception("more than one gene?")
-        #assert(len(genes2)==1)
-
+    # all genes of complexes interact in some way
     if type1=="complex":
         for pair in itertools.combinations(genes1, 2):
             # a complex can contain families
@@ -163,7 +208,7 @@ def iterAllPairs(row):
             for subPair in allSubPairs(pair):
                 yield tuple(subPair)
 
-    # genes2 can be empty if the experiment was a pulldown of complexes
+    # all genes from the left and the right side interact
     if type2!="":
         pairs = list([(aa, bb) for aa in genes1 for bb in genes2])
         for pair in pairs:
@@ -181,28 +226,28 @@ def indexPairs(ppiRows, desc):
     a dict with sorted (gene1, gene2) -> list of eventIds """
     logging.info("enumerating all interacting pairs: %s" % desc)
     pairs = defaultdict(list)
-    skipCount = 0
     for row in ppiRows:
         for pair in iterAllPairs(row):
             gene1, gene2 = pair
-            pairs[tuple(sorted(pair))].append(row.eventId)
+            if gene1.startswith("compound") or gene2.startswith("compound"):
+                continue
+            pairs[tuple(sorted(pair))].append(row)
     logging.info("got %d pairs" % len(pairs))
-    logging.info("skipped %d pairs because one gene was empty" % skipCount)
     return pairs
 
 def mergePairs(dicts):
-    " merge a list of defaultdict(list) into one defaultdict(list) "
-    logging.info("Merging all pairs")
+    " merge a list of defaultdict(list) into one defaultdict(set) "
+    logging.info("Merging pairs")
     data = defaultdict(set)
     for defDict in dicts:
         for key, valList in defDict.iteritems():
             data[key].update(valList)
     return data
 
-def countDocs(rows):
-    """ get weight of text mining pairs. given rows with cause and theme genes,
-    create a dict (a, b) -> int that indicates how many documents a given pair
-    references
+def directedPairToDocs(rows):
+    """ get documents of text mining pairs. a dict with pair -> text rows
+    create a dict pair -> set of document IDs. Note that these pairs are
+    DIRECTED - so they can be used to infer the direction of the interaction
     """
     # create a dict with pair -> pmids
     pairPmids = defaultdict(set)
@@ -213,19 +258,14 @@ def countDocs(rows):
         for cause, theme in pairs:
             pairPmids[(cause, theme)].add(row.pmid)
     
-    # count and return
-    pairCounts = {}
-    for pair, pmidSet in pairPmids.iteritems():
-        pairCounts[pair] = len(pmidSet)
+    return pairPmids
 
-    return pairCounts
-
-def writeGraphTable(allPairs, textWeights, dbWeights, ltRefs, pwDirPairs, bestSentences, outFname, outFname2):
+def writeGraphTable(allPairs, pairDocs, pairToDbs, pairMinResCounts, pwDirPairs, bestSentences, outFname, outFname2):
     " write the ggLink table "
     logging.info("writing merged graph to %s" % outFname)
     rows = []
     rows2 = []
-    for pair,refs in allPairs.iteritems():
+    for pair,pairRows in allPairs.iteritems():
         gene1, gene2 = pair
 
         dbs = set()
@@ -236,19 +276,24 @@ def writeGraphTable(allPairs, textWeights, dbWeights, ltRefs, pwDirPairs, bestSe
             flags.append("pwy")
         if pair in textPairs:
             flags.append("text")
-        if len(ltRefs.intersection(refs))!=0:
-            flags.append("low")
+        refs = [row.eventId for row in pairRows]
+        #if pairMinResultCounts:
+            #flags.append("low")
         # direction of interaction - only based on pathways
         if pair in pwDirPairs:
             flags.append("fwd")
         if tuple(reversed(pair)) in pwDirPairs:
             flags.append("rev")
             
-        forwWeight = textWeights.get(pair, 0)
-        revWeight = textWeights.get(tuple(reversed(pair)), 0)
-        dbWeight = dbWeights.get(pair, 0)
+        forwDocs = pairDocs.get(pair, [])
+        revDocs = pairDocs.get(tuple(reversed(pair)), [])
+        allDocs = set(forwDocs).union(set(revDocs))
+        pairMinResCount = pairMinResCounts.get(pair, 0)
+
+        pairDbs = "|".join(pairToDbs.get(pair, []))
         snippet = bestSentences.get(pair, "")
-        row = [gene1, gene2, ",".join(flags), str(forwWeight), str(revWeight), str(dbWeight), snippet]
+        row = [gene1, gene2, ",".join(flags), str(len(forwDocs)), str(len(revDocs)), \
+            str(len(allDocs)), pairDbs, str(pairMinResCount), snippet]
         rows.append(row)
 
         refs = list(refs)
@@ -312,9 +357,8 @@ def loadTable(db, tableDir, table):
 
     os.remove(tmpSqlFname)
 
-def loadTables(tableDir):
+def loadTables(tableDir, db):
     " load graph tables into mysql "
-    db = "publications"
 
     loadTable(db, tableDir, "ggDoc")
     loadTable(db, tableDir, "ggDocEvent")
@@ -334,6 +378,8 @@ def indexPmids(rowList, textRows):
             pmids = pmidStr.split("|")
             rowId = row.eventId
             for pmid in pmids:
+                if pmid=="":
+                    continue
                 pmidToIds[pmid].add(rowId)
 
     for row in textRows:
@@ -364,33 +410,28 @@ def writeEventTable(rowList, outFname, colCount=None):
             ofh.write("%s\n" % ("\t".join(row)))
     ofh.close()
 
-def countDbs(pairs, pwRows, dbRows):
+def pairToDbs(pairs):
     """ given pairs and data rows, return a dict pair -> int 
     that indicates how many DBs a pair is referenced in 
     """
     # first make dict event -> source dbs
-    eventDbs = defaultdict(set)
-    for row in pwRows:
-        eventDbs[row.eventId].add(row.sourceDb)
-    for row in dbRows:
-        sourceDbs = row.sourceDbs.split("|")
-        eventDbs[row.eventId].update(sourceDbs)
+    #eventDbs = defaultdict(set)
+    #for row in pwRows:
+        #eventDbs[row.eventId].add(row.sourceDb)
+    #for row in dbRows:
+        #sourceDbs = row.sourceDbs.split("|")
+        #eventDbs[row.eventId].update(sourceDbs)
 
     # construct a dict pair -> source dbs
     pairDbs = defaultdict(set)
-    for pair, eventIds in pairs.iteritems():
-        for eventId in eventIds:
-            if eventId in eventDbs:
-                pairDbs[pair].update(eventDbs[eventId])
+    for pair, rows in pairs.iteritems():
+        for row in rows:
+            pairDbs[pair].add(row.sourceDb)
 
-    # convert to pair -> int
-    pairCounts = {}
-    for pair, dbs in pairDbs.iteritems():
-        pairCounts[pair] = len(dbs)
-    return pairCounts
+    return pairDbs
 
-def parseDiseases(fname):
-    " given a medline trees file, return the list of disease names in it "
+def parseMeshContext(fname):
+    " given a medline trees file, return the list of disease and pathway names in it "
     # ex. filename is mtrees2013.bin (it's ascii)
     # WAGR Syndrome;C10.597.606.643.969
     terms = set()
@@ -399,9 +440,13 @@ def parseDiseases(fname):
         line = line.strip()
         term, code = line.split(";")
         term = term.strip()
+        # all disease terms start with C
         if code.startswith("C"):
             terms.add(term)
-    logging.info("Read %d disease MESH terms from %s" % (len(terms), fname))
+        # all signalling pathways a below a very specific branch
+        elif code.startswith("G02.149.115.800") and not code=="G02.149.115.800":
+            terms.add(term)
+    logging.info("Read %d disease/context MESH terms from %s" % (len(terms), fname))
     return terms
 
 
@@ -450,18 +495,20 @@ def parseShortNames(journalFname):
         logging.info("%s not found, not shortening journal names" % journalFname)
     return shortNames
 
-def writeDocsTable(pmidEventPath, medlinePath, shortNames, diseaseNames, outFname):
-    " join pmid-Event info and our shortened medline version "
+def writeDocsTable(pmidEventPath, medlinePath, shortNames, contextFilter, resCounts, outFname):
+    """ join pmid-Event info and our shortened medline version 
+    resCount is a set of docIds with low-throughput data (fewer than LTPMAX interactions per doc)
+    """
     # parse the PMIDs to export
     docIds = set()
     for row in lineFileNext(open(pmidEventPath), headers=["docId", "eventId"]):
         docIds.add(row.docId)
     logging.info("read %d document IDs from %s" %  (len(docIds), pmidEventPath))
 
+    docContexts = {}
+
     logging.info("Writing to %s" % outFname)
     ofh = open(outFname, "w")
-    #for row in lineFileNext(open(fname), headers=["docId", "authors", "year", "journal", "printIssn", "title"]):
-        #if row.docId in docIds:
     # fields are: docId, authors, year, journal, printIssn, title, abstract, keywords
     foundIds = set()
     for line in open(medlinePath):
@@ -475,9 +522,16 @@ def writeDocsTable(pmidEventPath, medlinePath, shortNames, diseaseNames, outFnam
 
             newKeywords = []
             for kw in fields[7].split("/"):
-                if kw in diseaseNames:
+                if kw in contextFilter:
                     newKeywords.append(kw)
-            fields[7] = "|".join(newKeywords)
+            docContext = "|".join(newKeywords)
+            fields[7] = docContext
+            if docContext!="":
+                docContexts[docId] = docContext
+
+            # add a field: how many gene-pairs are associated to this paper
+            fields.append(resCounts.get(docId, "0"))
+
             line = "\t".join(fields)+"\n"
 
             ofh.write(line)
@@ -487,6 +541,8 @@ def writeDocsTable(pmidEventPath, medlinePath, shortNames, diseaseNames, outFnam
     notFoundIds = docIds - foundIds
     logging.info("No info for %d documents" % len(notFoundIds))
     logging.debug("No info for these documents: %s" % notFoundIds)
+
+    return docContexts
 
 def sumBasic(sentences, commonWords):
     """ given probabilities of words, rank sentences by average prob
@@ -531,28 +587,257 @@ def sumBasic(sentences, commonWords):
 
     return topSent
 
-
-def runSumBasic(textRows, wordFname):
+def runSumBasic(textPairs, wordFname):
     """ Get all sentences for an interaction and use sumBasic to pick the best one 
     """
     # get list of very common English words
-    logging.info("Running SumBasic on sentences")
     bncWords = set([line.split()[0] for line in open(wordFname).read().splitlines()])
     logging.info("Loaded %d common English words from %s" % (len(bncWords), wordFname))
 
-    pairSentences = defaultdict(set)
-    for row in textRows:
-        for pair in iterAllPairs(row):
-            if row.sentence!="":
-                gene1, gene2 = sorted(pair)
-                pairSentences[(gene1, gene2)].add(row.sentence)
-
+    logging.info("Running SumBasic on sentences")
     bestSentences = {}
-    for pair, sentences in pairSentences.iteritems():
-        sentences = list(sentences)
+    for pair, rows in textPairs.iteritems():
+        sentSet = set()
+        for row in rows:
+            if row.sentence!="":
+                sentSet.add(row.sentence)
+
+        sentences = list(sentSet)
         bestSentences[pair] = sumBasic(sentences, bncWords)
     return bestSentences
 
+def readDictList(fname, reverse=False):
+    " read a key-value tab-sep table and return as a dict of key -> values"
+    logging.info("reading %s" % fname)
+    data = defaultdict(list)
+    for line in open(fname):
+        key, val = line.rstrip("\n").split("\t")
+        if reverse:
+            key, val = val, key
+        data[key].append(val)
+    return data
+
+def readDict(fname, reverse=False):
+    " read a key-value tab-sep table and return as a dict of key -> value"
+    logging.info("reading %s" % fname)
+    data = defaultdict(list)
+    for line in open(fname):
+        key, val = line.rstrip("\n").split("\t")
+        if reverse:
+            key, val = val, key
+        data[key] = val
+    return data
+
+def readPairEvent(fname):
+    """ read a tab-sep table in format (gene1, gene2, eventId) and return as
+    dict (gene1,gene2) -> list of eventId""" 
+    logging.info("reading %s" % fname)
+    data = defaultdict(list)
+    for line in open(fname):
+        gene1, gene2, val = line.rstrip("\n").split("\t")
+        data[(gene1, gene2)].append(val)
+    return data
+
+def addContext(ctFname, docEventFname, linkEventFname, linkFname):
+    " read the data from the first three files, and put it into the last field of linkFname "
+    docContext = readDict(ctFname)
+    eventDocs = readDictList(docEventFname, reverse=True)
+    pairEvents = readPairEvent(linkEventFname)
+    
+    logging.info("Reading %s" % linkFname)
+    newLines = []
+    for line in open(linkFname):
+        #print line
+        fields = line.rstrip("\n").split("\t")
+        pair = (fields[0], fields[1])
+
+        contextCounts = Counter()
+        for eventId in pairEvents[pair]:
+            #print "pair %s, event %s" % (pair, eventId)
+            for docId in eventDocs.get(eventId, []):
+                #print "doc %s" % docId
+                contexts = docContext.get(docId, "")
+                for context in contexts.split("|"):
+                    #print "context %s" % context
+                    if context=="" or context==" ":
+                        continue
+                    contextCounts[context]+=1
+        # take best three contexts and reformat as a string
+        suffix = ""
+        if len(contextCounts)>3:
+            suffix = "..."
+        bestContexts = contextCounts.most_common()
+        contextStrings = ["%s (%d)" % (ct, count) for ct, count in bestContexts]
+        contextStr = ", ".join(contextStrings)
+        fields.append(contextStr)
+        newLines.append("\t".join(fields))
+    return newLines
+
+def convGraph(outDir):
+    import networkx as nx
+    fname = join(outDir, "ggLink.tab")
+    G=nx.Graph()
+    for line in open(fname):
+        g1, g2 = line.split()[:2]
+        G.add_edge(g1, g2)
+    outFname = join(outDir, "graph.bin")
+    #nx.write_adjlist(G, outFname)
+    cPickle.dump(G, open(outFname, "w"), cPickle.HIGHEST_PROTOCOL)
+    logging.info("Wrote graph to %s" % outFname)
+
+def convGraph2(outDir):
+    import igraph as ig
+    fname = join(outDir, "ggLink.tab")
+    G=ig.Graph()
+    geneToId = {}
+    nextId = 0
+    edges = []
+    for line in open(fname):
+        g1, g2 = line.split()[:2]
+
+        if g1 not in geneToId:
+            id1 = geneToId[g1] = nextId
+            nextId += 1
+        else:
+            id1 = geneToId[g1]
+
+        if g2 not in geneToId:
+            id2 = geneToId[g2] = nextId
+            nextId += 1
+        else:
+            id2 = geneToId[g2]
+
+        edges.append( (id1, id2) )
+    print nextId
+    print edges
+    G.add_vertices(nextId+1)
+    G.add_edges(edges)
+    outFname = join(outDir, "graph2.bin")
+    #nx.write_adjlist(G, outFname)
+    cPickle.dump(G, open(outFname, "w"), cPickle.HIGHEST_PROTOCOL)
+    logging.info("Wrote graph to %s" % outFname)
+
+def loadGraph(outDir):
+    import networkx as nx
+    inFname = join(outDir, "graph.bin")
+    gc.disable() # no need for GC here, saves 2 seconds
+    G = cPickle.load(open(inFname))
+    gc.enable()
+    geneList = ["OTX2", "PITX2", "APOE", "TP53", "TNF", "SP1"]
+    foundPairs = set()
+    G2 = G.subgraph(geneList)
+    print nx.nodes(G)
+    #for g1, g2 in combinations(geneList, 2):
+        #path = nx.shortest_path(G, g1, g2)
+        #print path
+        #for i in range(0, len(path)-1):
+            #pair = tuple(sorted(path[i:i+2]))
+            #foundPairs.add(pair)
+    #print foundPairs
+        
+def loadGraph2(outDir):
+    import igraph as ig
+    inFname = join(outDir, "graph2.bin")
+    gc.disable() # no need for GC here, saves 2 seconds
+    G = cPickle.load(open(inFname))
+    gc.enable()
+    #geneList = ["OTX2", "PITX2", "APOE", "TP53", "TNF", "SP1"]
+    #foundPairs = set()
+    #G2 = G.subgraph(geneList)
+    #print nx.nodes(G)
+
+def parseLinkTargets(outDir, validSyms):
+    """ parse the ggLink table in outDir and return a dict gene -> Counter() of targetGenes -> count.
+    Count is either the article count or, if there is no text mining hit, the count of databases 
+    """
+    inFname = join(outDir, "ggLink.tab")
+    logging.info("Parsing %s" % inFname)
+    asPath = join(autoSqlDir, "ggLink.as")
+    targets = defaultdict(Counter)
+    errFh = open("ggLink.errors.tab", "w")
+    for row in lineFileNext(open(inFname), asFname=asPath):
+        gene1, gene2 = row.gene1, row.gene2
+        count = int(row.docCount)
+        if count==0:
+            count = len(row.dbList.split("|"))
+
+        if gene1 not in validSyms:
+            if gene2 not in validSyms:
+                errFh.write("BothSymsInvalid\t"+"\t".join(row)+"\n")
+                continue
+            errFh.write("sym1Invalid\t"+"\t".join(row)+"\n")
+            continue
+        if gene2 not in validSyms:
+            errFh.write("sym2Invalid\t"+"\t".join(row)+"\n")
+            continue
+
+        targets[gene1][gene2]=count
+        targets[gene2][gene1]=count
+        if "SIP1" in targets:
+            print row
+            asddf
+
+    return targets
+
+def makeBigBed(outDir, bedFname, db):
+    " create a file geneInteractions.<db>.bb in outDir from bedFname "
+    validSyms = set()
+    for line in open(bedFname):
+        sym = line.split("\t")[3].rstrip("\n")
+        validSyms.add(sym)
+
+    # get interactors from our ggLink table
+    geneCounts = parseLinkTargets(outDir, validSyms)
+
+    # get genes from knownGenes table and write to bed
+    #bedFname = join(outDir, "genes.%s.bed" % db)
+    #logging.info("Writing genes to %s" % bedFname)
+    #cmd = "hgsql %s -NBe 'select chrom, chromStart, chromEnd, geneSymbol from knownCanonical JOIN kgXref ON kgId=transcript' > %s" % (db, bedFname)
+    #runCmd(cmd)
+    #bedFname = "geneModels/gencode19.median.bed"
+
+    # rewriting bed file and fill with counts
+    bedOutFname = join(outDir, "geneInteractions.%s.bed" % db)
+    ofh = open(bedOutFname, "w")
+    logging.info("Rewriting %s to %s" % (bedFname, bedOutFname))
+    doneSymbols = set()
+    for line in open(bedFname):
+        row = line.rstrip("\n").split("\t")
+        gene = row[3]
+        counts = geneCounts.get(gene, None)
+        if counts==None:
+            # skip gene if not found
+            continue
+
+        # create the new name field
+        strList = []
+        for targetGene, count in counts.most_common(10):
+            strList.append("%s:%d" % (targetGene, count))
+        targetStr = ",".join(strList)
+        row[3] = gene+" "+targetStr # why a space? see linkIdInName trackDb statement
+
+        ofh.write("\t".join(row[:3]))
+        ofh.write("\n")
+        doneSymbols.add(gene)
+    ofh.close()
+
+    missingSyms = set(geneCounts) - set(doneSymbols)
+    logging.info("%d symbols in ggLink not found in BED file" % len(missingSyms))
+    logging.info("missing symbols written to missSym.txt")
+
+    ofh= open("missSym.txt", "w")
+    ofh.write("\n".join(missingSyms))
+    ofh.close()
+
+    cmd = "bedSort %s %s" % (bedOutFname, bedOutFname)
+    runCmd(cmd)
+
+    bbFname = join(outDir, "geneInteractions.%s.bb" % db)
+    chromSizeFname = "/hive/data/genomes/%s/chrom.sizes" % db
+    cmd = "bedToBigBed -tab %s %s %s"  % (bedOutFname, chromSizeFname, bbFname)
+    runCmd(cmd)
+    logging.info("bigBed file written to %s" % bbFname)
+    
 # ----------- MAIN --------------
 #if options.test:
     #import doctest
@@ -569,10 +854,9 @@ if cmd == "build":
 
     pathwayDir, dbDir, textDir, outDir = args[1:]
     # load the input files into memory
-    dbRows = loadFiles(dbDir) 
+    dbRows = loadFiles(dbDir, prefix="ppi_") 
     pwRows = loadFiles(pathwayDir)
     textRows = loadFiles(textDir)
-    bestSentences = runSumBasic(textRows, wordFname)
 
     # index and merge them
     dbPairs   = indexPairs(dbRows, "ppi databases")
@@ -580,18 +864,26 @@ if cmd == "build":
     textPairs = indexPairs(textRows, "text mining")
     pwDirPairs = getDirectedPairs(pwRows)
 
-    allPairs = mergePairs([dbPairs, pwPairs, textPairs])
+    curatedPairs = mergePairs([dbPairs, pwPairs])
+    pairMinResultCounts, docToPairs = getResultCounts(curatedPairs)
 
-    ltRefs = findLtRefs(dbRows)
+    bestSentences = runSumBasic(textPairs, wordFname)
+    allPairs = mergePairs([curatedPairs, textPairs])
 
-    textWeights = countDocs(textRows)
-    dbWeights = countDbs(allPairs, pwRows, dbRows)
+    #ltPairs, ltDocs = getResultCounts(curatedPairs)
+    # keep result counts for the "docs" step
+    ofh = open(join(outDir, "resultCounts.tmp.txt"), "w")
+    for docId, pairs in docToPairs.iteritems():
+        ofh.write("%s\t%d\n" % (docId, len(pairs)))
+    ofh.close()
 
-    #docContext = parseDocContext(join(outDir, "ggDoc.tab"))
+    pairDirDocs = directedPairToDocs(textRows)
+    pairDbs = pairToDbs(curatedPairs)
 
-    outFname = join(outDir, "ggLink.tab")
+    outFname = join(outDir, "ggLink.tmp.txt") # needs the addContext step to complete it
     eventFname = join(outDir, "ggLinkEvent.tab")
-    writeGraphTable(allPairs, textWeights, dbWeights, ltRefs, pwDirPairs, bestSentences, outFname, eventFname)
+    writeGraphTable(allPairs, pairDirDocs, pairDbs, pairMinResultCounts, pwDirPairs, \
+        bestSentences, outFname, eventFname)
 
     pmidToId = indexPmids([dbRows,pwRows], textRows)
     outFname = join(outDir, "ggDocEvent.tab")
@@ -603,6 +895,11 @@ if cmd == "build":
     outFname = join(outDir, "ggEventText.tab")
     writeEventTable([textRows], outFname)
 
+    # make sure we don't forget to update the link table with context
+    linkFname = join(outDir, "ggLink.tab")
+    if isfile(linkFname):
+        os.remove(linkFname)
+
 elif cmd == "medline":
     outDir = args[1]
     textDir = options.textDir
@@ -613,20 +910,78 @@ elif cmd == "docs":
     outDir = args[1]
     outFname = join(outDir, "ggDoc.tab")
     pmidEventPath = join(outDir, "ggDocEvent.tab")
-    medlineFname = join(outDir, allArtFname)
-    diseaseNames = parseDiseases(options.meshFname)
-    shortNames = parseShortNames(options.journalInfo)
-    writeDocsTable(pmidEventPath, medlineFname, shortNames, diseaseNames, outFname)
 
-if cmd=="test":
+    medlineFname = join(outDir, allArtFname)
+    meshTerms = parseMeshContext(options.meshFname)
+
+    shortNames = parseShortNames(options.journalInfo)
+
+    resCountFname = join(outDir, "resultCounts.tmp.txt")
+    resCounts = readDict(resCountFname)
+
+    docContext = writeDocsTable(pmidEventPath, medlineFname, shortNames, meshTerms, resCounts, outFname)
+
+    # write docContext to file
+    ctFname = join(outDir, "docContext.txt")
+    ofh = open(ctFname, "w")
+    for docId, context in docContext.iteritems():
+        ofh.write("%s\t%s\n" % (docId, context))
+    ofh.close()
+    logging.info("Written document contexts to %s for %d documents" % (ctFname, len(docContext)))
+
+elif cmd == "context":
+    outDir = args[1]
+    ctFname = join(outDir, "docContext.txt")
+    docEventFname = join(outDir, "ggDocEvent.tab")
+    linkEventFname = join(outDir, "ggLinkEvent.tab")
+    linkFname = join(outDir, "ggLink.tmp.txt")
+    newLines = addContext(ctFname, docEventFname, linkEventFname, linkFname)
+
+    outFname = join(outDir, "ggLink.tab")
+    ofh = open(outFname, "w")
+    for l in newLines:
+        ofh.write("%s\n" % l)
+    ofh.close()
+    logging.info("appended document context to %s" % outFname)
+
+elif cmd == "bigBed":
+    outDir = args[1]
+    geneBedFile = args[2]
+    db = args[3]
+    makeBigBed(outDir, geneBedFile, db)
+
+elif cmd == "load":
+    inDir = args[1]
+    db = args[2]
+    loadTables(inDir, db)
+
+# --- DEBUGGING / TESTING ----
+
+elif cmd=="sumBasic": # for debugging
     inFname = args[1]
     rows = []
     for row in lineFileNext(open(inFname)):
         rows.append(row)
-    for pair, sent in runSumBasic(rows, options.wordFname).iteritems():
+    textPairs = indexPairs(rows, "text mining")
+    for pair, sent in runSumBasic(textPairs, options.wordFname).iteritems():
         print pair, sent
     
+elif cmd == "graph":
+    outDir = args[1]
+    convGraph(outDir)
+
+elif cmd == "graph2":
+    outDir = args[1]
+    convGraph2(outDir)
+
 elif cmd == "load":
-    inDir = args[1]
-    loadTables(inDir)
+    outDir = args[1]
+    loadGraph(outDir)
+
+elif cmd == "load2":
+    outDir = args[1]
+    loadGraph2(outDir)
+
+else:
+    logging.error("unknown command %s" % cmd)
 
