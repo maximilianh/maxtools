@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+from math import log, exp
+
+MAXBIN = 8
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename - given a key-value tab-sep file, try to discretize the values to the range 0-255") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("", "--log", dest="log", action="store_true", help="take log of all values") 
+parser.add_option("-m", "--max", dest="max", action="store", type="float", help="max value to use, default is to take maximum of data") 
+parser.add_option("", "--min", dest="min", action="store", type="float", help="min value to use, default is to take minimum of data") 
+parser.add_option("-a", "--add", dest="add", action="store", type="float", help="add a number to all values") 
+parser.add_option("-e", "--exp", dest="exp", action="store_true", help="take exp of all values") 
+parser.add_option("", "--mult", dest="mult", action="store", type="float", help="multiply all values with a factor") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+data = {}
+
+for line in open(filename):
+    key, val = line.strip().split("\t")[:2]
+    origVal = val
+    val = float(val)
+
+    if options.mult:
+        val *= options.mult
+    if options.add:
+        val = val+options.add
+
+    if options.log:
+        val = log(val)
+    elif options.exp:
+        val = exp(val)
+
+    data[key] = (val, origVal)
+
+minVal, maxVal = 9999999999, -9999999999
+for val, origVal in data.values():
+    minVal = min(val, minVal)
+    maxVal = max(val, maxVal)
+
+if options.max:
+    maxVal = float(options.max)
+if options.min:
+    minVal = float(options.min)
+
+binSize = (maxVal-minVal)/MAXBIN
+sys.stderr.write("min %f max %f binSize %f\n" % (minVal, maxVal, binSize))
+#print minVal, maxVal, binSize
+
+for key, vals in data.iteritems():
+    val, origVal = vals
+    bin = int(round((val-minVal)/binSize))
+    bin = min(MAXBIN, bin)
+    bin = max(0, bin)
+    row = [key, origVal, bin, val]
+    row = [str(x) for x in row]
+    print "\t".join(row)

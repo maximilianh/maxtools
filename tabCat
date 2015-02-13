@@ -8,7 +8,7 @@ import os
 import glob
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = OptionParser("usage: %prog [options] filename filename ... - concat tab-sep files, keep headers only for first file") 
+parser = OptionParser("usage: %prog [options] filename filename ... - concat tab-sep files, keep headers only for first file. skips files that start with a 0-byte.") 
 
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
@@ -36,6 +36,9 @@ for dirName in dirNames:
 
 fileNo = 0
 for filename in filenames:
+    fdat = open(filename).read(1)
+    if len(fdat)>0 and ord(fdat[0])==0:
+        continue
     logging.debug("Reading file %s" % filename)
     if filename == "stdin":
         ifh = stdin
@@ -56,4 +59,6 @@ for filename in filenames:
             else:
                 print line,
             lno+=1
-    fileNo+=1
+    # zero byte files don't count
+    if lno!=0:
+        fileNo+=1

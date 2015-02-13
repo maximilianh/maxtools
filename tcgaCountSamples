@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] genomicMatrixFile - count tcga non-zero values or average value") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-a", "--avg", dest="avg", action="store_true", help="calculate averages, do not count non-null values")
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+for line in open(filename):
+    if line.startswith("Sample"):
+        continue
+    fields = line.strip().split()
+    gene = fields[0]
+    counts = fields[1:]
+    if options.avg:
+        counts = [float(x) for x in counts]
+        countSum = sum(counts)
+        countAvg = float(countSum) / len(counts)
+        print gene+"\t"+str(countAvg)
+    else:
+        mutCount = 0
+        for c in counts:
+            if c!="0.0":
+                mutCount+=1
+        if mutCount!=0:
+            print gene+"\t"+str(mutCount)

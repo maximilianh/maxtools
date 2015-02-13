@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import logging, sys, optparse, glob, itertools, os, tempfile, gzip, operator, re, cPickle, gc
+import marshal
 from collections import defaultdict, namedtuple, Counter
 from itertools import chain, combinations
 from os.path import join, basename, dirname, isfile, expanduser
@@ -38,7 +39,7 @@ run it like this:
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-t", "--test", dest="test", action="store_true", help="run tests") 
 parser.add_option("-t", "--textDir", dest="textDir", action="store", help="directory with the parsed copy of medline, default %default", default="/hive/data/inside/pubs/text/medline") 
-parser.add_option("-m", "--meshFile", dest="meshFname", action="store", help="An mtrees<year>.bin file, default %default", default="/cluster/home/max/projects/pubs/tools/scripts/data/rawData/mtrees2013.bin")
+parser.add_option("-m", "--meshFile", dest="meshFname", action="store", help="An mtrees<year>.bin file, default %default", default="/hive/data/outside/ncbi/mesh/mtrees2015.bin")
 parser.add_option("-j", "--journalInfo", dest="journalInfo", action="store", help="tab-sep file with journal info from the NLM Catalog converted by 'pubPrepCrawl publishers'. Used to shorten the journal names. Optional and not used if file is not found. Default %default", default="/cluster/home/max/projects/pubs/tools/data/journals/journals.tab")
 parser.add_option("-b", "--wordFname", dest="wordFname", action="store", help="a file with common English words", default="/hive/data/outside/pubs/wordFrequency/bnc/bnc.txt")
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -118,7 +119,9 @@ def loadFiles(inDir, prefix=None):
     return rows
 
 def getResultCounts(pairs):
-    """ for each PMID, count how many pairs are assigned to it. This is 
+    """ 
+    Input is a pair -> rows dictionary
+    for each PMID, count how many pairs are assigned to it. This is 
     something like the "resultCount" of a paper, the lower, the better.
     Then, for each pair, get the minimum resultCount and return as a dict
     pair -> resultCount
@@ -128,9 +131,9 @@ def getResultCounts(pairs):
     # create dict doc -> set of gene pairs
     docToPairs = defaultdict(set)
     for pair, rows in pairs.iteritems():
-        print "pp", pair
+        #print "pp", pair
         for row in rows:
-            print "r", row
+            #print "r", row
             #members = row.themeGenes.split("|")
             #members.extend(row.causeGenes.split("|"))
             # complexes with more than 5 proteins are not low-throughput anyways
@@ -143,21 +146,32 @@ def getResultCounts(pairs):
                     continue
                 docToPairs[docId].add(pair)
 
+    #print "d2p", docToPairs
+
     pairMinResultCounts = {}
     for pair, rows in pairs.iteritems():
-        print "pp", pair
+        #print "pp", pair
         resultCounts = []
-        docIds = row.pmids.split("|")
-        for docId in docIds:
+        # get all docIds in rows
+        docIds = []
+        for row in rows:
+            docIds.extend(row.pmids.split("|"))
+
+        # get the minimal resultCount of all docIds 
+        for docId in set(docIds):
             if docId=="":
                 continue
-            print "di2", docId
-            print "d2p", docToPairs[docId]
-            resCount =len(docToPairs[docId])
-            print "rc", resCount
+            #print "di2", docId
+            #print "d2p", docToPairs[docId]
+            resCount = len(docToPairs[docId])
+            #print "rc", resCount
             resultCounts.append(resCount)
-        print "min", min(resultCounts)
-        pairMinResultCounts[pair] = min(resultCounts)
+        if len(resultCounts)!=0:
+            minResCount = min(resultCounts)
+        else:
+            minResCount = 0
+        #print "min", minResCount
+        pairMinResultCounts[pair] = minResCount
         
     #ltPairs = set()
     #ltDocs = []
@@ -708,14 +722,52 @@ def convGraph2(outDir):
             id2 = geneToId[g2]
 
         edges.append( (id1, id2) )
-    print nextId
-    print edges
+    #print nextId
+    #print edges
     G.add_vertices(nextId+1)
     G.add_edges(edges)
-    outFname = join(outDir, "graph2.bin")
+    #outFname = join(outDir, "graph2.bin")
     #nx.write_adjlist(G, outFname)
-    cPickle.dump(G, open(outFname, "w"), cPickle.HIGHEST_PROTOCOL)
+    #cPickle.dump(G, open(outFname, "w"), cPickle.HIGHEST_PROTOCOL)
+    #logging.info("Wrote graph to %s" % outFname)
+    outFname = join(outDir, "graph.lgl")
+    G.write(outFname, "lgl")
     logging.info("Wrote graph to %s" % outFname)
+
+    outFname = join(outDir, "graph.genes.txt")
+    ofh = open(outFname, "w")
+    for gene, geneId in geneToId.iteritems():
+        ofh.write("%s\t%s\n" % (gene, geneId))
+    ofh.close()
+    logging.info("Wrote nodeId-symbol mapping to %s" % outFname)
+    #outFname = join(outDir, "graph.adj")
+    #G.write(outFname, "adjacency")
+    #outFname = join(outDir, "graph.leda")
+    #G.write(outFname, "leda")
+    #outFname = join(outDir, "graph.dot")
+    #G.write(outFname, "dot")
+    #outFname = join(outDir, "graph.pajek")
+    #G.write(outFname, "pajek")
+    #logging.info("Wrote graph to %s" % outFname)
+
+def convGraph3(outDir):
+    fname = join(outDir, "ggLink.tab")
+    geneLinks = defaultdict(set)
+    for line in open(fname):
+        g1, g2 = line.split()[:2]
+        geneLinks[g1].add(g2)
+        geneLinks[g2].add(g1)
+    geneLinks = dict(geneLinks)
+
+    outFname = join(outDir, "graph.txt")
+    ofh = open(outFname, "w")
+    for gene, neighbors in geneLinks.iteritems():
+        ofh.write("%s\t%s\n" % (gene, ",".join(neighbors)))
+    ofh.close()
+    logging.info("Wrote links to %s" % outFname)
+
+    outFname = join(outDir, "graph.bin")
+    marshal.dump(geneLinks, open(outFname, "w"), 2)
 
 def loadGraph(outDir):
     import networkx as nx
@@ -735,26 +787,79 @@ def loadGraph(outDir):
             #foundPairs.add(pair)
     #print foundPairs
         
+def parseGeneToId(inFname):
+    geneToId = {}
+    idToGene = {}
+    for l in open(inFname):
+        gene, geneId = l.rstrip("\n").split("\t")
+        geneId = int(geneId)
+        geneToId[gene] = geneId
+        idToGene[geneId] = gene
+    return geneToId, idToGene
+
 def loadGraph2(outDir):
     import igraph as ig
-    inFname = join(outDir, "graph2.bin")
-    gc.disable() # no need for GC here, saves 2 seconds
-    G = cPickle.load(open(inFname))
-    gc.enable()
+    inFname = join(outDir, "graph.lgl")
+    #gc.disable() # no need for GC here, saves 2 seconds
+    #G = cPickle.load(open(inFname))
+    #gc.enable()
+    #G=ig.Graph()
+    G = ig.load(inFname)
+    #print G
+
+    inFname = join(outDir, "graph.genes.txt")
+    geneToId, idToGene = parseGeneToId(inFname)
+
+    geneList = ["OTX2", "PITX2", "APOE", "TP53", "TNF", "SP1","ABCA1", "CD4", "BRCA2", "APP", "SRY", "GAST", "MYOD1"]
+    idList = [geneToId[g] for g in geneList]
+    allSyms = set()
+    for i in range(0, len(idList)-1):
+        fromId = idList[i]
+        fromGene = geneList[i]
+        toIds = idList[i+1:]
+        toGenes = geneList[i+1:]
+        print fromId, fromGene, toIds, toGenes
+        paths = G.get_shortest_paths(fromId, toIds, mode=ig.ALL) 
+        genePaths = []
+        for idPath in paths:
+            genePath = [idToGene[i] for i in idPath]
+            genePaths.append(genePath)
+            allSyms.update(genePath)
+        print "paths", genePaths
+        print ",".join(allSyms)
+        #for i in range(0, len(path)-1):
+            #pair = tuple(sorted(path[i:i+2]))
+            #foundPairs.add(pair)
+    #print foundPairs
     #geneList = ["OTX2", "PITX2", "APOE", "TP53", "TNF", "SP1"]
-    #foundPairs = set()
     #G2 = G.subgraph(geneList)
-    #print nx.nodes(G)
+
+def loadGraph3(outDir):
+    inFname = join(outDir, "graph.bin")
+    graph = marshal.load(open(inFname))
+
+    # reversing the list was 25% slower than reading it all from disk
+    # 1.1 seconds, so 20% slower than the marshal version
+    #inFname = join(outDir, "graph.links.txt")
+    #ofh = open(outFname, "w")
+    #graph = {}
+    #for line in open(inFname):
+        #gene, neighbors = line.rstrip("\n").split("\t")
+        #neighbors = set(neighbors.split(","))
+        #graph[gene] = neighbors
+    ##logging.info("Wrote links to %s" % outFname)
 
 def parseLinkTargets(outDir, validSyms):
     """ parse the ggLink table in outDir and return a dict gene -> Counter() of targetGenes -> count.
     Count is either the article count or, if there is no text mining hit, the count of databases 
     """
+    errFh = open("ggLink.errors.tab", "w")
+
     inFname = join(outDir, "ggLink.tab")
     logging.info("Parsing %s" % inFname)
+
     asPath = join(autoSqlDir, "ggLink.as")
     targets = defaultdict(Counter)
-    errFh = open("ggLink.errors.tab", "w")
     for row in lineFileNext(open(inFname), asFname=asPath):
         gene1, gene2 = row.gene1, row.gene2
         count = int(row.docCount)
@@ -764,18 +869,16 @@ def parseLinkTargets(outDir, validSyms):
         if gene1 not in validSyms:
             if gene2 not in validSyms:
                 errFh.write("BothSymsInvalid\t"+"\t".join(row)+"\n")
-                continue
-            errFh.write("sym1Invalid\t"+"\t".join(row)+"\n")
-            continue
+            else:
+                errFh.write("sym1Invalid\t"+"\t".join(row)+"\n")
         if gene2 not in validSyms:
             errFh.write("sym2Invalid\t"+"\t".join(row)+"\n")
-            continue
 
         targets[gene1][gene2]=count
         targets[gene2][gene1]=count
-        if "SIP1" in targets:
-            print row
-            asddf
+
+    errFh.close()
+    logging.info("Wrote rows from ggLink.tab with invalid symbols to ggLink.errors.tab")
 
     return targets
 
@@ -816,7 +919,7 @@ def makeBigBed(outDir, bedFname, db):
         targetStr = ",".join(strList)
         row[3] = gene+" "+targetStr # why a space? see linkIdInName trackDb statement
 
-        ofh.write("\t".join(row[:3]))
+        ofh.write("\t".join(row[:4]))
         ofh.write("\n")
         doneSymbols.add(gene)
     ofh.close()
@@ -974,13 +1077,21 @@ elif cmd == "graph2":
     outDir = args[1]
     convGraph2(outDir)
 
-elif cmd == "load":
+elif cmd == "graph3":
+    outDir = args[1]
+    convGraph3(outDir)
+
+elif cmd == "loadgraph":
     outDir = args[1]
     loadGraph(outDir)
 
 elif cmd == "load2":
     outDir = args[1]
     loadGraph2(outDir)
+
+elif cmd == "load3":
+    outDir = args[1]
+    loadGraph3(outDir)
 
 else:
     logging.error("unknown command %s" % cmd)
