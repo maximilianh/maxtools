@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] inFa outWholeFa outSplitFa - if sequence contains a 100bp gap: split at ~100N-gaps and write pieces to outSplitFa. If not, write it to outWholeFa.") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("", "--minSplitSize", dest="minSplitSize", action="store", type="int", help="minimum size of split pieces") 
+parser.add_option("", "--minWholeSize", dest="minWholeSize", action="store", type="int", help="minimum size of whole pieces") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+inFa, wholeFa, splitFa = args
+wholeFh = open(wholeFa, "w")
+splitFh = open(splitFa, "w")
+
+if inFa=="stdin":
+    inFh = sys.stdin
+else:
+    inFh = open(inFa, "rU")
+
+for rec in SeqIO.parse(inFh, "fasta") :
+    i = 0
+    seq = str(rec.seq)
+    start = 0
+    rows = []
+    for m in re.finditer("N+", seq, re.I):
+        #seqId = rec.id+"_%d" % i
+        seqId = rec.id
+        if (m.end()-m.start())!=100:
+            continue
+        seqId = rec.id
+        #row = [seqId, str(start), str(m.start()), seqId]
+        #print "\t".join(row)
+        rows.append((start, m.start()))
+        start = m.end()
+        i+=1
+    seqId = rec.id
+    #row = [seqId, str(start), str(len(seq)), seqId]
+    #print "\t".join(row)
+    rows.append((start, len(seq)))
+
+    if len(rows)==1:
+        if options.minWholeSize==None or len(rec.seq) > options.minWholeSize:
+            wholeFh.write(">%s\n%s\n" % (rec.id, rec.seq.upper()))
+    else:
+        for start, end in rows:
+            splitSeq = rec.seq[start:end]
+            #splitRec = SeqRecord(seq)
+            splitId = seqId+"_%d-%d" % (start, end)
+            #SeqIO.write(splitFh, splitRec, "fasta")
+            #print options.minSplitSize, len(splitSeq)
+            if options.minSplitSize==None or len(splitSeq) > options.minSplitSize:
+                #print "writing"
+                splitFh.write(">%s\n%s\n" % (splitId, splitSeq.upper()))
+                i+=1
+
+splitFh.close()
+wholeFh.close()

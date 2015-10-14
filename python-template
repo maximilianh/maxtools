@@ -4,7 +4,7 @@ import logging, sys, optparse
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
 
-# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+# === command line interface, options and help ===
 parser = optparse.OptionParser("usage: %prog [options] filename") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
@@ -16,9 +16,9 @@ if options.debug:
     logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.INFO)
-# ==== FUNCTIONs =====
+# ==== functions =====
     
-# ----------- MAIN --------------
+# ----------- main --------------
 if args==[]:
     parser.print_help()
     exit(1)

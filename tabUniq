@@ -80,7 +80,7 @@ for filename in filenames:
 values = values.items()
 
 if options.sort or options.ratio:
-    values.sort(key=operator.itemgetter(-1), reverse=True)
+    values.sort(key=operator.itemgetter(-1))
 
 for key, count in values:
     row = list(key)

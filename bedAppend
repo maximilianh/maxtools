@@ -9,7 +9,8 @@ import maxCommon
 parser = optparse.OptionParser("usage: %prog [options] bedFname tabFname tabNameFieldIdx outBed outAs - merge a bed file with a tab sep file on the name column and generate a auto sql file for it.") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
-parser.add_option("-t", "--addTab", dest="addTab", action="store", help="add an additional tab file, first column is index field") 
+parser.add_option("-t", "--addTab", dest="addTab", action="store", help="add an additional tab file, first column is index field")
+parser.add_option("-f", "--fields", dest="fields", action="store", help="read the field names and descriptions from this file, one per line, space-separated")
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
 #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
 (options, args) = parser.parse_args()
@@ -20,10 +21,12 @@ else:
     logging.basicConfig(level=logging.INFO)
 # ==== FUNCTIONs =====
     
-bedAs = """
-table bed12
-"Browser extensible data (12 fields) "
+asHead = """table bed
+"Browser extensible data (<=12 fields) "
     (
+"""
+
+asLines = """
     string chrom;      "Chromosome (or contig, scaffold, etc.)"
     uint   chromStart; "Start position in chromosome"
     uint   chromEnd;   "End position in chromosome"
@@ -36,7 +39,8 @@ table bed12
     int blockCount;    "Number of blocks"
     int[blockCount] blockSizes; "Comma separated list of block sizes"
     int[blockCount] chromStarts; "Start positions relative to chromStart"
-"""
+""".split("\n")
+
 # ----------- MAIN --------------
 if args==[]:
     parser.print_help()
@@ -46,7 +50,12 @@ bedFname, tabFname, tabFieldIdx, outBedFname, outAsFname = args
 
 tabFieldIdx = int(tabFieldIdx)
 
-fields = open(tabFname).readline().strip().strip("#").split("\t")
+if options.fields:
+    fields = []
+    for line in open(options.fields):
+        fields.append(line.strip().split()[0])
+else:
+    fields = open(tabFname).readline().strip().strip("#").split("\t")
 
 # read tab file
 data = {}
@@ -78,8 +87,10 @@ if options.addTab:
 bigCols = set() # col indexes of columns with > 255 chars
 
 fh = open("temp.bedAppend.bed", "w")
+bedColCount = 0
 for line in open(bedFname):
     row = line.strip("\n").split("\t")
+    bedColCount = len(row)
     name = row[3]
     addRow = data.get(name, [""]*colCount)
     row.extend(addRow)
@@ -97,7 +108,8 @@ os.remove("temp.bedAppend.bed")
 # generate autosql
 #print bigCols
 fh = open(outAsFname, "w")
-fh.write(bedAs)
+fh.write(asHead)
+fh.write("\n".join(asLines[:bedColCount+1]))
 for field in fields:
     name = field.replace(" ","")
     name = re.sub("[^a-zA-Z0-9]", "", name)
@@ -110,4 +122,4 @@ fh.write(")\n")
 fh.close()
 
 print ("run this command to convert to bigBed")
-print "bedToBigBed %s /hive/data/genomes/DB/chrom.sizes %s -tab -type=bed12+ -as=%s" % (outBedFname, outBedFname.replace(".bed", ".bb"), outAsFname)
+print "bedToBigBed %s /hive/data/genomes/DB/chrom.sizes %s -tab -type=bed%d+ -as=%s" % (outBedFname, outBedFname.replace(".bed", ".bb"), bedColCount, outAsFname)

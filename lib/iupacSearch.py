@@ -65,7 +65,7 @@ def revComp(seq):
     return "".join(newseq)
 
 
-def compileMotifs(motifs):
+def compileMotifs(motifs, ignoreCase=True):
     """ input: list of motifs as dict motif->IUPAC, 
     returns: tuple -- list of regex objects, list of strings, list of descriptions """
     reList = []
@@ -79,8 +79,10 @@ def compileMotifs(motifs):
         m = resolveIupac(m)
         strList.append(m)
         #print name, "+", m
-        regex = re.compile(m, re.IGNORECASE)
-        #regex = re.compile(m)
+        if ignoreCase:
+            regex = re.compile(m, re.IGNORECASE)
+        else:
+            regex = re.compile(m)
         revCompM = resolveIupac(revCompM)
 
         if m!=revCompM:

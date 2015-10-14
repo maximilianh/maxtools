@@ -341,7 +341,8 @@ def convAnc(inFname, outFlagFile):
 
         libDesc = [row.CENTER_NAME, row.CENTER_PROJECT, row.LIBRARY_ID, row.INSERT_SIZE, row.TRACE_TYPE_CODE]
         libDesc = [s.replace(":","-").replace("/", "-").replace(" ", "_").replace(".", "_") for s in libDesc]
-        if libDesc[1].startswith("H_"):
+        #if libDesc[1].startswith("H_") or libDesc[1].startswith("FAAB-"):
+        if libDesc[0]=="WUGSC" and "-" in libDesc[1] or "_" in libDesc[1]:
             # WUGSC has the weird habit of definining a "project" == "tube"
             libDesc[1] = ""
         outFname = ":".join(libDesc)
@@ -368,6 +369,7 @@ def convAnc(inFname, outFlagFile):
             # format = center:project:library:insertSize:cloneType
             # WUGSC:H_HD-0001B02:ABC18:40000:CLONEEND --> WUGSC:OTHER:OTHER:40000:CLONEEND
             # this is different from the merging of libraries done later
+            # print "too few clones", p
             fileName = "%s:::%s:%s" % (p[0], p[3], p[4])
 
         pairOutFname = os.path.join(outDir, "%s.%s.pairs" % (fileId, fileName))
@@ -1700,6 +1702,9 @@ if __name__=="__main__": # = run only if called from command line
       :RP11:::.psl (genbank-imported libraries have no center)
       MISC::::.psl (small libraries get all merged into a catch-all dummy center)
 
+      WUGSC::123000:CLONEEND.psl (WUGSC puts tube into project. Can lead to dropped library names.
+         Search code for "FAAB" to find the exclusion list)
+
     example:
     doBacEnds init gorGor3
     doBacEnds all
@@ -1774,6 +1779,7 @@ if __name__=="__main__": # = run only if called from command line
 
     if "filter" in steps:
         filterPsl(splitPslDir, pairDir, loadDir)
+        logging.info("Reminder: paired BED files are in %s" % pairDir)
         
     if "load" in steps:
         loadPairPsl(pairDir, loadDir)

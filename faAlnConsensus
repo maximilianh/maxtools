@@ -12,7 +12,7 @@ parser = optparse.OptionParser("usage: %prog [options] inFa outFa - make consens
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 parser.add_option("-m", "--matrix", dest="matrix", action="store_true", help="do not output fasta file, but a PSSM matrix in transfac format (you can use weblogo to plot it)") 
 parser.add_option("-g", "--keepGap", dest="keepGap", action="store_true", help="keep columns with more than 50% gap characters")
-parser.add_option("-t", "--threshold", dest="threshold", action="store", type="float", help="required percent of rows that have to have a certain character to call it in the consensus")
+parser.add_option("-t", "--threshold", dest="threshold", action="store", type="float", help="required percent of rows that have to have a certain character to call it in the consensus, default %default", default=0.7)
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
 #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
 (options, args) = parser.parse_args()
@@ -101,16 +101,20 @@ if options.matrix:
 
     #print dir(my_pssm.pssm)
     #print my_pssm.pssm.degenerate_consensus()
+
 else:
+
+    # see http://biopython.org/DIST/docs/api/Bio.Align.AlignInfo.SummaryInfo-class.html
     cons = summary_align.gap_consensus(threshold=options.threshold, ambiguous="N")
     if not options.keepGap:
         consSeq = str(cons).replace("-", "")
     if len(consSeq)==0:
         raise Exception("cannot get consensus for %s" % alnName)
-    print 'aln length', alignment.get_alignment_length(), "seqlen", len(consSeq), "N count", len(list(re.finditer("N", consSeq)))
+    print('aln length', alignment.get_alignment_length(), "seqlen", len(consSeq), "N count", len(list(re.finditer("N", consSeq))))
 
     consSeqWrap = "\n".join(textwrap.wrap(consSeq, 60))
     consFh = open(outFname, "w")
-    consName = basename(outFname)
+    #consName = basename(outFname)
+    consName = basename(alnName).split(".")[0]
     consFh.write(">%s\n%s\n" % (consName, consSeqWrap))
     consFh.close()
