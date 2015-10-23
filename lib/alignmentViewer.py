@@ -2,12 +2,11 @@ from array import *
 import sys
 import copy
 
-""" put bed files onto lines = dict with y-deplacement => list of bed features """
 def putOntoLines(beds, seqlen):
+""" put bed files onto lines. return dict with y-deplacement => list of bed features """
     lines = {}
     nextline = array('i', (seqlen+20) * [0])
     for h in beds :
-            lastline = 0
             maxline = 0
             if h.start < seqlen:
                 for i in range(h.start,max(h.end, h.start+len(h.name)+1)):

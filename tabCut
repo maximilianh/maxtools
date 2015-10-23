@@ -29,6 +29,7 @@ if len(filenames)==0:
     filenames=["stdin"]
 
 for filename in filenames:
+    logging.debug(filename)
     if filename=="stdin":
         fileObj = sys.stdin
     elif filename.endswith(".gz"):

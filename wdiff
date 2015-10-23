@@ -1,0 +1,68 @@
+#
+# Name: hair-of-the-diff
+# Note: This script hasn't been extensively tested, so beware the alpha bug :) 
+#   
+# Brief: Uses 'diff' to identify the differences between two lines of text
+#        $1 is a filename of a file which contains line pairs to be processed
+#
+#        If $1 is null "", then the sample pairs are processed (see below: Paris in the spring 
+#          
+# ║ = changed character
+# ^ = exists if first line, but not in second 
+# v = exists if second line, but not in first
+
+bname="$(basename "$0")"
+workd="/tmp/$USER/$bname"; [[ ! -d "$workd" ]] && mkdir -p "$workd"
+
+# Use $1 as the input file-name, else use this Test-data
+# Note: this test loop expands \t \n etc ...(my editor auto converts \t to spaces) 
+if [[ "$1" == '' ]] ;then
+  ifile="$workd/ifile"
+{ while IFS= read -r line ;do echo -e "$line" ;done <<EOF
+Paris in the spring 
+Paris in the the spring
+A cat on a hot tin roof.
+a cant on a hot in roof
+the quikc brown box jupps ober the laze dogs 
+The\tquickbrown fox jumps over the lazy dogs
+EOF
+} >"$ifile"
+else
+  ifile="$1"
+fi
+#
+[[ -f "$ifile" ]] || { echo "ERROR: Input file NOT found:" ;echo "$ifile" ;exit 1 ; }
+#  
+# Check for balanced pairs of lines
+ilct=$(<"$ifile" wc -l)
+((ilct%2==0)) || { echo "ERROR: Uneven number of lines ($ilct) in the input." ;exit 2 ; }
+#
+ifs="$IFS" ;IFS=$'\n' ;set -f
+ix=0 ;left=0 ;right=1
+while IFS= read -r line ;do
+  pair[ix]="$line" ;((ix++))
+  if ((ix%2==0)) ;then
+    # Change \x20 to \x02 to simplify parsing diff's output,
+    #+   then change \x02 back to \x20 for the final output. 
+    # Change \x09 to \x01 to simplify parsing diff's output, 
+    #+   then change \x01 into ☻ U+263B (BLACK SMILING FACE) 
+    #+   to the keep the final display columns in line. 
+    #+   '☻' is hopefully unique and obvious enough (otherwise change it) 
+    diff --text -yt -W 19  \
+         <(echo "${pair[0]}" |sed -e "s/\x09/\x01/g" -e "s/\x20/\x02/g" -e "s/\(.\)/\1\n/g") \
+         <(echo "${pair[1]}" |sed -e "s/\x09/\x01/g" -e "s/\x20/\x02/g" -e "s/\(.\)/\1\n/g") \
+     |sed -e "s/\x01/☻/g" -e "s/\x02/ /g" \
+     |sed -e "s/^\(.\) *\x3C$/\1 \x3C  /g" \
+     |sed -n "s/\(.\) *\(.\) \(.\)$/\1\2\3/p" \
+     >"$workd/out"
+     # (gedit "$workd/out" &)
+     <"$workd/out" sed -e "s/^\(.\)..$/\1/" |tr -d '\n' ;echo
+     <"$workd/out" sed -e "s/^..\(.\)$/\1/" |tr -d '\n' ;echo
+     <"$workd/out" sed -e "s/^.\(.\).$/\1/" -e "s/|/║/" -e "s/</^/" -e "s/>/v/" |tr -d '\n' ;echo
+    echo
+    ((ix=0))
+  fi
+done <"$ifile"
+IFS="$ifs" ;set +f
+exit
+#
