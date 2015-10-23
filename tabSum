@@ -3,7 +3,7 @@
 import logging, sys, optparse, maxTables, types
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = optparse.OptionParser("usage: %prog [options] inFile - sum up all rows") 
+parser = optparse.OptionParser("usage: %prog [options] - sum up all rows from stdin") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 parser.add_option("-f", "--field", dest="fieldList", action="append", type="int", help="only run on column X (zero-based), can be specified several times") 
@@ -18,12 +18,13 @@ else:
 # ==== FUNCTIONs =====
     
 # ----------- MAIN --------------
-if args==[]: 
+if args!=[]:
     parser.print_help()
     exit(1)
 
-fname = args[0]
-fh = maxTables.openFile(fname)
+#fname = args[0]
+#fh = maxTables.openFile(fname)
+fh = sys.stdin
 
 if options.fieldList:
     fieldList = [int(x) for x in options.fieldList]
@@ -43,9 +44,13 @@ for line in fh:
         if fields[i]=="":
             continue
         if "." in fields[i]:
-            sum += float(fields[i])
+            try:
+                sum += float(fields[i])
+            except ValueError:
+                print "skipping line %s" % line
+                
         else:
-            sum += int(fields[i])
+            sum += float(fields[i])
         count +=1
 
 logging.info("count %d" % count)
