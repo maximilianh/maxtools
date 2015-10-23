@@ -1,6 +1,6 @@
 #!/usr/bin/env python2.7
 
-import logging, sys, optparse, maxTables, types
+import logging, sys, optparse, types
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = optparse.OptionParser("usage: %prog [options] - sum up all rows from stdin") 
@@ -53,8 +53,8 @@ for line in fh:
             sum += float(fields[i])
         count +=1
 
-logging.info("count %d" % count)
-logging.info("avg %f" % (sum/float(count)))
+#logging.info("count %d" % count)
+#logging.info("avg %f" % (sum/float(count)))
 if type(sum)==types.FloatType:
     print "%f" % sum
 else:

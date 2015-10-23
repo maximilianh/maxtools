@@ -5,8 +5,8 @@ from optparse import OptionParser
 import tabfile, bed
 
 # -------- OPTIONS ------------
-parser = OptionParser("usage: %prog [options] transcriptBedFile transcriptGeneFile\nselects only the longest transcripts of each file, transcriptBedFile has format: transcriptID<tab>geneId") 
-#parser.add_option("-p", "--onlyCoding", dest="onlyCoding", action="store_true", help="only use lines which have protein_coding as their last field",default=False) 
+parser = OptionParser("usage: %prog [options] transcriptBedFile transcriptGeneFile\nselects only the longest or median-length transcript for each gene, transcriptBedFile has format: transcriptID<tab>geneId") 
+parser.add_option("-m", "--median", dest="median", action="store_true", help="use median-length transcript, instead of longest (which is the default)",default=False)
 (options, args) = parser.parse_args()
 if len(args)==0:
     parser.print_help()
@@ -30,17 +30,20 @@ sys.stderr.write("The following %d transcripts are not associated to any gene:\n
 sys.stderr.write(",".join(transNames))
 sys.stderr.write("\n")
 
-# iterate over gene and keep only longest transcript
-longestTransList = bed.Features()
+# iterate over gene and keep only best transcript
+bestTransList = bed.Features()
 for gene, transList in geneToTransList.iteritems():
-    transList.sort(key= lambda trans: trans.end - trans.start, reverse=True)
-    longestTrans = transList[0]
-    #longestTrans.name += ("|"+gene)
-    longestTrans.name = gene
-    longestTransList.append(longestTrans)
+    transList.sort(key= lambda trans: trans.end - trans.start)
+    if options.median:
+        bestTrans = transList[len(transList)/2]
+    else:
+        bestTrans = transList[-1] # -1 = last element in list
+    #bestTrans.name += ("|"+gene)
+    bestTrans.name = gene
+    bestTransList.append(bestTrans)
 
-for trans in longestTransList:
+for trans in bestTransList:
     print trans
-sys.stderr.write("%d longest transcripts found\n" % len(longestTransList))
+sys.stderr.write("%d best transcripts found\n" % len(bestTransList))
 sys.stderr.write("%d transcripts are not associated to any gene\n" % len(transNames))
     

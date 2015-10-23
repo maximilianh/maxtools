@@ -1,0 +1,64 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import maxbio
+
+# === command line interface, options and help ===
+parser = optparse.OptionParser("usage: %prog [options] filename - create html alignment view for fasta sequences")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== functions =====
+    
+# ----------- main --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+print "<html><body>"
+print """
+<style>
+table {
+    border-collapse: collapse;
+    border-spacing:0;
+    }
+tr, th, td {
+    padding: 0;
+    margin: 0;
+    border: 0;
+    vertical-align:bottom;
+    //display:inline-block;
+    white-space:nowrap;
+    }
+tbody {
+    line-height: 0;
+    font-size: 0;
+}
+tbody td {
+    line-height: 11px;
+    font-size: 12px;
+}
+</style>
+"""
+print "<table style='border-collapse:collapse; border:0px; margin:0px;' cellspacing='0' cellpadding='0' border='0'>"
+
+for seqId, seq in maxbio.parseFasta(filename):
+    print "<tr><td>"
+    print seqId
+    print "</td><td>"
+    print "<tt>%s</tt>" % seq
+    print "</td></tr>"
+print "</table></body></html>"
+    
+    

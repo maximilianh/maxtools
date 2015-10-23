@@ -28,6 +28,9 @@ evidToName = {
 # output file headers
 headers = "eventId,causeType,causeName,causeGenes,themeType,themeName,themeGenes,relType,relSubtype,sourceDb,sourceId,sourceDesc,pmids,evidence".split(",")
 
+# ID of event in output file, goes across input files, so global
+eventId = 0
+
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = optparse.OptionParser("""usage: %prog [options] filename - convert NCI PID xml files to tab-sep format
 
@@ -208,7 +211,8 @@ def parseXml(filename, accToSym):
                 name = names["AS"]
             idToMember[molId] = ("compound", name, sym)
 
-    logging.info("Could not resolve %d uniprot IDs, out of %d (debug-mode shows them)" % (len(skipSyms), len(idToMember)))
+    logging.info("Could not resolve %d uniprot IDs, out of %d (debug-mode shows them)" % \
+        (len(skipSyms), len(idToMember)))
     logging.debug("Unresolvable symbols: %s" %  ",".join(noSym))
     logging.info("%d molecules without an official symbol" % (len(noSym)))
 
@@ -279,7 +283,7 @@ def parseXml(filename, accToSym):
             intIdToName[pwCompEl.attrib["interaction_idref"]]=pwName
 
     # now iterate over interactions and output their components as pairs
-    eventId = 0
+    global eventId
     skipCount = 0
     for ic in root.findall("Model/InteractionList/Interaction"):
         intId = ic.attrib["id"]

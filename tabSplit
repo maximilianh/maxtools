@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import gzip
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] filename size outDir - split tab-sep file with header line into pieces of x lines, write to outDir.") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+    
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+inFname, chunkSize, outDir = args
+
+chunkSize= int(chunkSize)
+
+if inFname=="stdin":
+    ifh = sys.stdin
+elif inFname.endswith(".gz"):
+    ifh = gzip.open(inFname)
+else:
+    ifh = open(inFname)
+
+headerLine = ifh.readline()
+
+i = 0
+ofh = None
+lastChunkId = None
+
+for line in ifh:
+    chunkId = i / chunkSize
+    i+=1
+
+    if chunkId!=lastChunkId:
+        if ofh!=None:
+            ofh.close()
+        outFname = join(outDir, basename(inFname).split(".")[0]+"_%d" % chunkId+".tab")
+        ofh = open(outFname, "w")
+        ofh.write(headerLine)
+
+    ofh.write(line)
+    lastChunkId = chunkId
+
+ofh.close()
+
+
+
+    
+headerLine = open

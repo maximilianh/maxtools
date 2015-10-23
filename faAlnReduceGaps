@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+from collections import Counter
+
+import maxbio
+
+# === command line interface, options and help ===
+parser = optparse.OptionParser("usage: %prog [options] filename maxGapRatio - go over columns, remove gaps that are present in more than maxGapRatio of the sequences") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== functions =====
+    
+# ----------- main --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+maxGapRatio = float(args[1])
+
+ids = []
+seqs = []
+lens = []
+for seqId, seq in maxbio.parseFasta(filename):
+    ids.append(seqId)
+    seqs.append(seq)
+    lens.append(len(seq))
+
+lens = set(lens)
+assert(len(set(lens))==1) # all seqs must have same len
+alnLen = list(lens)[0]
+
+newSeqs = []
+for i in range(0, len(seqs)):
+    newSeqs.append([])
+
+for i in range(0, alnLen):
+    nucls = [s[i] for s in seqs]
+    nuclCounts = Counter(nucls)
+    gapRatio = float(nuclCounts["-"]) / len(nucls)
+    #print nucls, nuclCounts, gapRatio
+    if gapRatio < maxGapRatio:
+        for newSeq, nucl in zip(newSeqs, nucls):
+            newSeq.append(nucl)
+    else:
+        #print "too high, not adding"
+        pass
+
+newAlnLen = 0
+for seqId, newSeq in zip(ids, newSeqs):
+    print ">%s" % seqId
+    print "".join(newSeq)
+    newAlnLen = len(newSeq)
+        
+logging.info("Original alignment len: %d, new alignment len %d" % (alnLen, newAlnLen))

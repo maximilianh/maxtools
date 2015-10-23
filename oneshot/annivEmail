@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+import random
+hireMonths = {
+"Brian Raney" : (4, 2003),
+"Kate Rosenbloom" : (4, 2003),
+"Gary Moro" : (8, 2011),
+"Steve Heitner" : (8, 2011),
+"Hiram Clawson" : (5, 2003),
+"Jonathan Casper" : (5, 2013),
+"Angie Hinrichs" : (5, 2002),
+"Ann Zweig" : (5, 2005),
+"Bob Kuhn" : (5, 2003),
+"Matt Speir" : (5, 2013),
+"Galt Barber" : (3, 2004),
+"Melissa Cline" : (10, 2010),
+"Erich Weiler" : (10, 2007),
+"Jorge Garcia" : (1, 2001),
+"Donna Karolchik" : (1, 2002),
+"Luvina Guruvadoo" : (1, 2011),
+"Brian Lee" : (5, 2012)
+}
+
+import datetime
+now = datetime.datetime.now()
+todayMonth = datetime.datetime.now().month
+
+print "Subject: %s Anniversaries" % now.strftime("%B")
+print "Hi Everyone,"
+if random.random() < 0.5:
+    print "Congratulations to everyone who has a %s anniversary with our group!" % now.strftime("%B")
+else:
+    print "Congratulations to our team members with %s anniversaries!" % now.strftime("%B")
+
+for name, (month, year) in hireMonths.iteritems():
+    if (now.year-year)  > 10:
+        addText = "!"
+    else:
+        addText = ""
+    if todayMonth == month:
+        print " * %s: %d years%s" % (name, now.year - year, addText)
+
+print
+if random.random() < 0.5:
+    print "Congratulations!"
+else:
+    print "Thank you!"

@@ -8,6 +8,7 @@ parser = optparse.OptionParser("usage: %prog [options] file1(big) column1 file2(
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 parser.add_option("", "--noHead", dest="noHead", action="store_true", help="input file1 has no headers") 
+parser.add_option("", "-v", dest="invert", action="store_true", help="inVert, show only non-matching lines") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 (options, args) = parser.parse_args()
@@ -50,5 +51,7 @@ for line in fh:
     line = line.strip("\n")
     fs = line.strip("\n").split('\t')
     val = fs[column1]
-    if val in filterVals:
+    if not options.invert and val in filterVals:
+        print line
+    if options.invert and val not in filterVals:
         print line

@@ -4,49 +4,30 @@ import random
 import sys
 from popen2 import popen2
 from optparse import OptionParser
+import maxbio
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = OptionParser("usage: %prog [options] fastafile length: Choose any sequence at random from a multi-fasta file and return it. Optionally return a random part of a given length") 
+parser = OptionParser("usage: %prog [options] fastafile count: Choose any sequence at random from a multi-fasta file and return it. Optionally return a random part of a given length") 
 parser.add_option("-l", "--length", dest="length", action="store", help="cut out a part of length x of the randomly choosen sequence", type="int", metavar="NUMBER", default="0") 
-parser.add_option("-r", "--repeat", dest="repeat", action="store", help="repeat x times", type="int", metavar="NUMBER", default="1") 
+#parser.add_option("-r", "--repeat", dest="repeat", action="store", help="repeat x times", type="int", metavar="NUMBER", default="1") 
 (options, args) = parser.parse_args()
 if len(args)==0:
     parser.print_help()
     sys.exit(1)
 # -----------------
-length = options.length
-fname = args[0]
+fname, count = args
+count = int(count)
 # count sequences
-output, input = popen2("grep \> %s | wc -l " % fname )
-seqcount = int(output.readlines()[0])
+#output, input = popen2("grep \> %s | wc -l " % fname )
+#seqcount = int(output.readlines()[0])
+seqs = list(maxbio.parseFasta(fname))
+random.shuffle(seqs)
 
-for r in range(options.repeat):
-    if options.repeat>10:
-        sys.stderr.write("%d." % r)
-    # generate random number
-    rndseq = random.randrange(1,seqcount)
-    i=0
-    f = open(fname, "r")
-    # skip until nth sequence
-    flag=False
-    seq=[]
-    for l in f:
-        if l.startswith(">"):
-            i+=1
-            if i==rndseq:
-                #print l,
-                print ">GeneratedSequence"+str(r)
-                flag=True
-                continue
-            continue
-        # this will only be executed if line does not start with > and flag is set
-        if flag==True:
-            seq += l.strip()
-
+for seqId, seq in seqs[:count]:
+    print ">"+seqId
     # print out this sequence or part of it
     if options.length==0:
-        print "".join(seq)
+        print seq
     else:
         rndstart = random.randrange(0,len(seq)-options.length-1)
         print "".join(seq[rndstart:rndstart+options.length])
-

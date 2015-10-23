@@ -3,10 +3,12 @@
 from sys import *
 from optparse import OptionParser
 import tabfile, Fasta, iupacSearch
+from os.path import isfile
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = OptionParser("""usage: %prog [options] motifFile fafile fafile fafile... - scan fasta files for matches to motifs
+parser = OptionParser("""usage: %prog [options] motifFileOrMotif fafile fafile fafile... - scan fasta files for matches to motifs. If file does not exist, motifFileOrMotif is assumed to be a motif directly.
 
+matches are non-overlapping.
 motifFile is one motif per line
 output will go to stdout and is in bed format
 """) 
@@ -14,6 +16,8 @@ output will go to stdout and is in bed format
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 #parser.add_option("-f", "--fasta", dest="maf", action="store_false", help="force fasta format (if not specified, we assume UCSC .maf file format") 
+parser.add_option("-s", "--seq", dest="seq", action="store_true", help="show sequence of match, not the motif name") 
+parser.add_option("-c", "--case", dest="keepCase", action="store_true", help="do not ignore case when matching", default=False)
 (options, args) = parser.parse_args()
 
 # ==== FUNCTIONs =====
@@ -26,8 +30,14 @@ if args==[]:
 motifFile = args[0]
 files = args[1:]
 
-motifs = tabfile.slurpdict(motifFile, doNotCheckLen=True)
-motReList, motReStr, motDesc = iupacSearch.compileMotifs(motifs)
+if isfile(motifFile):
+    motifs = tabfile.slurpdict(motifFile, doNotCheckLen=True)
+else:
+    motifs = {motifFile:motifFile}
+
+#print options.keepCase, motifs
+motReList, motReStr, motDesc = iupacSearch.compileMotifs(motifs, ignoreCase=(not options.keepCase))
+#print motReList[0][2].pattern
 
 for f in files:
     faSeqs = Fasta.readFastaAsList(f)
@@ -36,7 +46,10 @@ for f in files:
         for motif, posList in matches.iteritems():
             motiflen = len(motif)
             for pos, strand in posList:
-                fs = [ faSeq.id, str(pos), str(pos+motiflen), motif, "0", strand ]
+                name = motif
+                if options.seq:
+                    name = faSeq.nucl[pos:pos+motiflen]
+                fs = [ faSeq.id, str(pos), str(pos+motiflen), name, "0", strand ]
                 print "\t".join(fs)
 
 

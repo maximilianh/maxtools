@@ -36,6 +36,7 @@ set1 = set (list1)
 
 for f2 in otherFiles:
     list2 = tabfile.slurplist(f2, check=False, field=otherField)
+    list2 = [e for e in list2 if not e.startswith("#")]
     set2 = set (list2)
     set1 = set1.difference(set2)
 

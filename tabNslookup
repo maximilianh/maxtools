@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-import logging, sys, optparse
+import logging, sys, optparse, socket
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
 
-# === command line interface, options and help ===
-parser = optparse.OptionParser("usage: %prog [options] filename") 
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] - resolve IP to hostname") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -16,15 +16,18 @@ if options.debug:
     logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.INFO)
-# ==== functions =====
+# ==== FUNCTIONs =====
     
-# ----------- main --------------
-if args==[]:
+# ----------- MAIN --------------
+if args!=[]:
     parser.print_help()
     exit(1)
 
-filename = args[0]
-print filename
-#if options.test:
-    #logging.debug("test is set")
-    #f = open(options.file, "r")
+for line in sys.stdin:
+    ip = line.split()[0]
+    try:
+        host = socket.gethostbyaddr(ip)[0]
+    except socket.herror:
+        host = "unknown"
+
+    print host+"\t"+line,
