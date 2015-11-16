@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import os, gzip
+
+gencodeDir = os.getenv("GENCODEDIR", "/hive/data/outside/gencode/release_22")
+
+# === command line interface, options and help ===
+parser = optparse.OptionParser("usage: %prog [options] filename - given a list of gene identifiers, annotate them with other identifiers") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+parser.add_option("-a", "--annotDir", dest="annotDir", action="store", help="use this gencode download directory for the .metadata.gz annotations, default %default, can be taken from environment variable GENCODEDIR", default=gencodeDir)
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== functions =====
+def parseDict(fname, rev=False, upKey=False):
+    logging.info("Parsing %s" % fname)
+    d = {}
+
+    if fname.endswith(".gz"):
+        fh = gzip.open(fname)
+    else:
+        fh = open(fname)
+
+    for line in fh:
+        key, val = line.rstrip("\n").split("\t")
+        if rev:
+            key, val = val, key
+        if upKey:
+            key = key.upper()
+        d[key] = val
+    return d
+
+def annotateField(idToId, transToGene, lines):
+    """
+    """
+    for line in lines:
+        row = line.strip("\n").split("\t")
+        idStr = row[0]
+        addId = idToId[idStr.upper()]
+        row.insert(1,addId)
+        geneId = transToGene[addId]
+        row.insert(2, geneId)
+        yield row
+
+# ----------- main --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+gencodeFname = join(options.annotDir, "gencode.v22.metadata.HGNC.gz")
+geneFname = join(options.annotDir, "transToGene.tab")
+idToId = parseDict(gencodeFname, rev=True, upKey=True)
+transToGene = parseDict(geneFname)
+
+for filename in args:
+    lines = open(filename)
+    for row in annotateField(idToId, transToGene, lines):
+        print "\t".join(row)
