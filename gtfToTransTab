@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import gzip, string
+
+# === command line interface, options and help ===
+parser = optparse.OptionParser("usage: %prog [options] filename - extract trans <-> gene -> <sym> info as tab from gtf")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== functions =====
+    
+# ----------- main --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+if filename.endswith(".gz"):
+    fh = gzip.open(filename)
+else:
+    fh = open(filename)
+
+print "transcriptId\tgeneId\tsymbol"
+# gene_id "ENSG00000223972.5"; transcript_id "ENST00000450305.2"; gene_type "transcribed_unprocessed_pseudogene"; gene_status "KNOWN"; gene_name "DDX11L1"; transcript_type "transcribed_unprocessed_pseudogene"; transcript_status "KNOWN"; transcript_name "DDX11L1-001"; exon_number 4; exon_id "ENSE00001799933.2"; level 2; ont "PGO:0000005"; ont "PGO:0000019"; tag "basic"; transcript_support_level "NA"; havana_gene "OTTHUMG00000000961.2"; havana_transcript "OTTHUMT00000002844.2";
+transToGene = {}
+for line in fh:
+    if line.startswith("#"):
+        continue
+    fs = line.split("\t")
+    infos = fs[8].split("; ")
+
+    infoDict = {}
+    for info in infos:
+        tag, val = string.split(info, maxsplit=1)
+        val = val.strip('"')
+        infoDict[tag] = val
+
+    transId = infoDict.get("transcript_id")
+    if transId is None:
+        continue
+    transToGene[transId] = (infoDict["gene_id"], infoDict["gene_name"])
+
+for transId, (geneId, sym) in transToGene.iteritems():
+    row = [transId, geneId, sym]
+    print "\t".join(row)

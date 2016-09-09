@@ -1,0 +1,47 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import maxCommon
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("""usage: %prog [options] fieldId filename - expand fields with separators into separate rows
+    
+    fieldId is 0-based
+    """)
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+    fieldId, filename = args
+    fieldId = int(fieldId)
+    sep = "|"
+
+    for row in maxCommon.iterTsvRows(filename):
+        if sep in row[fieldId]:
+            for val in row[fieldId].split("|"):
+                row = list(row)
+                row[fieldId] = val 
+                print "\t".join(row)
+        else:
+            print "\t".join(row)
+
+main()
