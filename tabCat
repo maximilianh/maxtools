@@ -22,7 +22,7 @@ else:
 # ==== FUNCTIONs =====
     
 # ----------- MAIN --------------
-if args==[]: 
+if args==[]:
     parser.print_help()
     exit(1)
 

@@ -7,6 +7,9 @@
 # grep 2191944440 01-conv/raw/*WUGSC*.pairs
 # http://www.ncbi.nlm.nih.gov/Traces/trace.cgi?&cmd=retrieve&val=2191944440&dopt=info&size=1&seeas=Show
 
+# !! CURRENTLY RP11-440N18 does not cover Myc - low ID on one end? 
+# this clone should appear!
+
 import logging, sys, optparse, gzip, collections, re, types, os, glob, subprocess, time, operator, marshal, string
 from itertools import chain
 from collections import defaultdict

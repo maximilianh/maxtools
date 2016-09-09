@@ -9,6 +9,8 @@ parser = optparse.OptionParser("usage: %prog [options] file1(big) column1 file2(
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 parser.add_option("", "--noHead", dest="noHead", action="store_true", help="input file1 has no headers") 
 parser.add_option("", "-v", dest="invert", action="store_true", help="inVert, show only non-matching lines") 
+parser.add_option("-s", "--skipShort", dest="skipShort", action="store_true", help="skip empty lines and lines that are too short for splitting") 
+parser.add_option("", "--len", dest="len", action="store", help="compare only the first x characters of the strings", type="int") 
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 (options, args) = parser.parse_args()
@@ -28,18 +30,20 @@ if args==[]:
     parser.print_help()
     exit(1)
 
-filename1, column1, filename2 = args
+filename1, column1, filename2 = args[:3]
 
 column1 = int(column1)
 
 column2 = 0
 if len(args)>3:
-    column2 = int(args[4])
+    column2 = int(args[3])
 
 filterVals = set()
 # parse file2 
 for line in openFile(filename2):
     val = line.strip("\n").split('\t')[column2]
+    if options.len:
+        val = val[:options.len]
     filterVals.add(val)
 
 # iterate over lines in file1
@@ -50,7 +54,12 @@ if not options.noHead:
 for line in fh:
     line = line.strip("\n")
     fs = line.strip("\n").split('\t')
+    if options.skipShort and len(fs) <= column1:
+        continue
     val = fs[column1]
+    if options.len:
+        val = val[:options.len]
+        
     if not options.invert and val in filterVals:
         print line
     if options.invert and val not in filterVals:

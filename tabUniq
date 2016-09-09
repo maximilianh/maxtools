@@ -5,7 +5,7 @@ from optparse import OptionParser
 import logging, collections, operator
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = OptionParser("usage: %prog [options] filename filename ... - print lines where a value occurs in a certain column for the first time, skip the others, ignoring comments") 
+parser = OptionParser("usage: %prog [options] filename filename ... - print lines where a value occurs in a certain column for the first time, skip the others, ignores comment lines that start with #") 
 
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 

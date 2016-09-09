@@ -43,6 +43,9 @@ def writeBeds(outf, chrom, posList, names, type):
     for i in range(0, len(names)):
         name = names[i]
         start, end = posList[i]
+        # skip 0-length features
+        if start==end:
+            continue
         outf.write("%s\t%d\t%d\t%s\n" % (chrom, start, end, name))
 
 def output(fh, left, right, upstream, limit, type, chromSizes=None):

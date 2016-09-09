@@ -4,27 +4,34 @@ import logging, sys, optparse
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
 
-# === command line interface, options and help ===
-parser = optparse.OptionParser("usage: %prog [options] filename") 
-
-parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
-#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
-#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
-(options, args) = parser.parse_args()
-
-if options.debug:
-    logging.basicConfig(level=logging.DEBUG)
-else:
-    logging.basicConfig(level=logging.INFO)
 # ==== functions =====
     
-# ----------- main --------------
-if args==[]:
-    parser.print_help()
-    exit(1)
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename")
 
-filename = args[0]
-print filename
-#if options.test:
-    #logging.debug("test is set")
-    #f = open(options.file, "r")
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    filename = args[0]
+    print filename
+    #if options.test:
+        #logging.debug("test is set")
+        #f = open(options.file, "r")
+
+main()
