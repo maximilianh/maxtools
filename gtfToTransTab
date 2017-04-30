@@ -6,7 +6,7 @@ from os.path import join, basename, dirname, isfile
 import gzip, string
 
 # === command line interface, options and help ===
-parser = optparse.OptionParser("usage: %prog [options] filename - extract trans <-> gene -> <sym> info as tab from gtf")
+parser = optparse.OptionParser("usage: %prog [options] filename - extract trans <-> gene -> <sym> info as tab from Gencode gtf file")
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 

@@ -1,0 +1,87 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict, Counter
+from os.path import join, basename, dirname, isfile
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename1 filename2 ... - summarize a few tab-sep files")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+
+def tabSummary(fname):
+    ifh = open(fname)
+    headers = ifh.readline().rstrip("\n").split("\t")
+    counters = []
+    for h in headers:
+        counters.append(Counter())
+
+    lineCount = 0
+    for line in ifh:
+        line = line.rstrip("\n")
+        if line=="":
+            continue
+        lineCount += 1
+        fields = line.split("\t")
+        assert(len(fields)==len(headers))
+        for i, f in enumerate(fields):
+            if len(f)>50:
+                f = f[:50]+"..."
+            if f=="":
+                f = "(empty string)"
+            counters[i][f]+=1
+
+    outputDesc = ["fieldNo", "fieldName", "isUnique", "distinctVals", "sampleVals"]
+    print "\t".join(outputDesc)
+
+    sampleCount = 3
+    i = 0
+    assert(len(headers)==len(counters))
+    for c in counters:
+        c
+    for fieldName, counter in zip(headers, counters):
+        i+=1
+        desc = ""
+        if len(counter)==lineCount:
+            desc = "uniqueId"
+
+        distinctCount = len(counter)
+
+        topFields = ["%s=%d"%(x,y) for (x, y) in counter.most_common(sampleCount)]
+        sampleStr = ", ".join(topFields)
+        if distinctCount > sampleCount:
+            sampleStr += ", ..."
+        row = [str(i), fieldName, desc, str(distinctCount), sampleStr]
+        print "\t".join(row)
+
+def main():
+    args, options = parseArgs()
+
+    fileNames = args
+
+    for fileName in fileNames:
+        if len(fileNames)!=1:
+            print "File: %s" % fileName
+            print
+        tabSummary(fileName)
+        if len(fileNames)!=1:
+            print
+
+main()

@@ -1,0 +1,252 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, gzip
+from collections import defaultdict, namedtuple
+from os.path import join, basename, dirname, isfile
+import itertools
+import re, unicodedata, string
+
+import pandas as pd
+import numpy as np
+
+from scipy.stats.stats import pearsonr
+import scipy.spatial.distance
+
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] inFname outFname - given a tab-sep matrix with headers and row names, do an all-against-all correlation, for all rows")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("-t", "--targetGenes", dest="targetGenes", action="store", help="do only correlations of a gene against all genes. Input is a list of geneIDs, one per line.")
+    parser.add_option("", "--syms", dest="symTable", action="store", help="annotate genIds with symbols, default %default", default="/cluster/home/max/projects/cirm/tsneViewer/static/gencode22.ens79-80.tab")
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def parseMatrix(inFname):
+    """ parse tab-sep matrix of float with headers and row names
+    Six times faster than pandas.
+    Returns list of sampleIds and dict with geneId -> numpy array
+    Strips Ensembl gene version ID
+    """
+    logging.info("Reading %s" % inFname)
+    if inFname.endswith(".gz"):
+        ifh = gzip.open(inFname)
+    else:
+        ifh = open(inFname)
+
+    rows = {}
+    i = 0
+    sampleIds = None
+    for line in ifh:
+        fields = line.rstrip("\n").split("\t")
+        if i==0:
+            sampleIds = fields[1:]
+        else:
+            row = [float(x) for x in fields[1:]]
+            row = np.array(row)
+            geneId = fields[0].split(".")[0]
+            rows[geneId] = row
+        i += 1
+    return sampleIds, rows
+
+def corrMat(mat, targetGenes):
+    """ yield tuples with the correlation for every target gene against all rows of matrix (=dict of string -> numpy array) """
+    allGenes = sorted(mat.keys())
+    #for g1 in ["ENSG00000257986"]:
+        #for g2 in ["ENSG00000173673", "ENSG00000166450", "ENSG00000152977", "ENSG00000170370", "ENSG00000121570"]:
+
+    # save a little bit of time
+    zeroGenes = set()
+    lowGenes = set()
+    for gene, row in mat.iteritems():
+        count = np.count_nonzero(row)
+        if count==0:
+            zeroGenes.add(gene)
+        if count<=10:
+            lowGenes.add(gene)
+        #if not np.any(row):
+            #zeroGenes.add(g1)
+
+    allGenes = set(allGenes) - zeroGenes
+    logging.info("Found %d all-zero genes, %d low genes. Removing all genes expressed in <= 10 samples. Comparing %d genes" % \
+            (len(zeroGenes), len(lowGenes), len(allGenes)))
+
+    #combs = list(itertools.combinations(allGenes, 2))
+    #logging.info("Doing %d comparisons" % len(combs))
+
+    if targetGenes is None:
+        targetGenes = allGenes
+        # do every pair only once
+        symmetric = True
+    else:
+        # we need all pairs
+        symmetric = False
+        logging.info("User supplied %d target genes" % len(targetGenes))
+
+    #for g1, g2 in itertools.combinations(allGenes, 2):
+    for g1 in targetGenes:
+        logging.info("Comparing gene %s against %d other genes" % (g1, len(allGenes)))
+        for g2 in allGenes:
+            if symmetric and g1>=g2:
+                continue
+            v1 = mat[g1]
+            v2 = mat[g2]
+            coeff, pVal = pearsonr(v1, v2)
+            if np.isnan(coeff):
+                continue
+            if pVal > 0.05:
+                continue
+            #dist = scipy.spatial.distance.jaccard(v1, v2)
+            row = (g1, g2, coeff, pVal)
+            #row = (g1, g2, dist)
+            #print r1
+            #print r2
+            #print row
+            yield row
+
+
+# ----------- main --------------
+def parseDict(fname):
+    """ parse text file in format key<tab>value and return as dict key->val """
+    d = {}
+
+    if fname.endswith(".gz"):
+        fh = gzip.open(fname)
+    else:
+        fh = open(fname)
+
+    for line in fh:
+        key, val = line.rstrip("\n").split("\t")
+        d[key] = val
+    return d
+
+def lineFileNextRow(inFile):
+    """
+    parses tab-sep file with headers in first line
+    yields collection.namedtuples
+    strips "#"-prefix from header line
+    """
+
+    if isinstance(inFile, str):
+        if inFile.endswith(".gz"):
+            fh = gzip.open(inFile, 'rb')
+        else:
+            fh = open(inFile)
+    else:
+        fh = inFile
+
+    line1 = fh.readline()
+    line1 = line1.strip("\n").lstrip("#")
+    headers = line1.split("\t")
+    headers = [re.sub("[^a-zA-Z0-9_]","_", h) for h in headers]
+    headers = [x if x!="" else "noName" for x in headers]
+
+    filtHeads = []
+    for h in headers:
+        if h[0].isdigit():
+            filtHeads.append("x"+h)
+        else:
+            filtHeads.append(h)
+    headers = filtHeads
+
+
+    Record = namedtuple('tsvRec', headers)
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        line = line.decode("latin1")
+        # map special chars in meta data to most similar ASCII equivalent
+        # XX
+        #print "before", repr(line)
+        line = unicodedata.normalize('NFKD', line).encode('ascii','ignore')
+        #print "after", repr(line)
+        line = line.rstrip("\n")
+        fields = string.split(line, "\t", maxsplit=len(headers)-1)
+        #print "fields", repr(fields)
+        try:
+            rec = Record(*fields)
+        except Exception, msg:
+            logging.error("Exception occured while parsing line, %s" % msg)
+            logging.error("Filename %s" % fh.name)
+            logging.error("Line was: %s" % line)
+            logging.error("Does number of fields match headers?")
+            logging.error("Headers are: %s" % headers)
+            raise Exception("header count: %d != field count: %d wrong field count in line %s" % (len(headers), len(fields), line))
+        yield rec
+
+def readGeneToSym(fname):
+    " given a file with geneId,symbol return a dict geneId -> symbol. Strips anything after . in the geneId "
+    if fname.lower()=="none":
+        return None
+
+    logging.info("Reading gene,symbol mapping from %s" % fname)
+
+    # Jim's files and CellRanger files have no headers, they are just key-value
+    line1 = open(fname).readline()
+    if "geneId" not in line1:
+        d = parseDict(fname)
+    # my new gencode tables contain a symbol for ALL genes
+    elif line1=="transcriptId\tgeneId\tsymbol":
+        for row in lineFileNextRow(fname):
+            if row.symbol=="":
+                continue
+            d[row.geneId.split(".")[0]]=row.symbol
+    # my own files have headers
+    else:
+        d = {}
+        for row in lineFileNextRow(fname):
+            if row.symbol=="":
+                continue
+            d[row.geneId.split(".")[0]]=row.symbol
+    return d
+
+def matCorrelate(inFname, outFname, options):
+    " correlate rows all-against-all "
+    # with pandas, it takes 30 seconds for a 270MB matrix. mmap, .gz did not change that.
+    #mat = pd.read_table(inFname, dtype=np.float64, header=0, index_col=0, converters={'GeneId':str}, engine="c")
+    targetGenes = None
+    if options.targetGenes:
+        targetGenes = open(options.targetGenes).read().splitlines()
+        targetGenes = [x.split(".")[0] for x in targetGenes]
+        logging.info("Read %s. Got %d genes" % (options.targetGenes, len(targetGenes)))
+
+    geneToSym = None
+    if options.symTable:
+        geneToSym = readGeneToSym(options.symTable)
+
+    sampleIds, mat = parseMatrix(inFname)
+
+    logging.info("Writing %s" % outFname)
+    ofh = open(outFname, "w")
+    #ofh.write("gene1\tgene2\tcorrelation\tpVal\tjaccardDist\n")
+    ofh.write("gene1\tgene2\tcorrelation\tpVal\n")
+
+    for row in corrMat(mat, targetGenes):
+        row = [str(x) for x in row]
+        if geneToSym is not None:
+            row[0] = row[0]+"/"+geneToSym.get(row[0], "NoSym?")
+            row[1] = row[1]+"/"+geneToSym.get(row[1], "NoSym?")
+        ofh.write("\t".join(row))
+        ofh.write("\n")
+    ofh.close()
+
+def main():
+    args, options = parseArgs()
+
+    inFname, outFname = args
+    matCorrelate(inFname, outFname, options)
+
+main()

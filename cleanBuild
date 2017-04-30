@@ -1,0 +1,14 @@
+#!/bin/csh -efx
+
+unsetenv COPT
+
+set cloneDir = `mktemp -d $TMPDIR/cleanBuild.$USER.XXXXXX`
+chmod 775 $cloneDir
+
+pushd $cloneDir
+git clone ~/kent/.git
+cd kent/src
+make -j10 > /dev/null
+make test > /dev/null
+popd
+rm -rf $cloneDir

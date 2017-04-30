@@ -1,0 +1,306 @@
+#!/usr/bin/env python
+
+# convert biosample.xml to tab-sep format.
+
+import logging, sys, optparse, json
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+from lxml.etree import tostring
+import re
+from itertools import chain
+from lxml import etree
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename - convert NCBI BioSample database XML to a tab-sep file")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    parser.add_option("", "--max", dest="max", action="store", type="int", help="parse only the first X records") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def treeToAsciiText(tree, _addtail=False, addNewlineTags=None):
+    textList = recursiveToAscii(tree, addNewlineTags=addNewlineTags)
+    return "".join(textList)
+
+def recursiveToAscii(tree, _addtail=True, addNewlineTags=None):
+    """ xml -> ascii tags: convert all text associated with all tags to a
+    space-sep. ASCII text string in utf8 
+    copied from http://code.activestate.com/recipes/498286/ 
+    Remove all tabstops.
+    Returns a list of text strings contained within an element and its sub-elements.
+    Helpful for extracting text from prose-oriented XML (such as XHTML or DocBook).
+    
+    Add a \n whenever one of the tags in addNewlineTags is found.
+    """
+    result = []
+    if tree.tag!=None and addNewlineTags!=None:
+        if tree.tag in addNewlineTags:
+            result.append("\n")
+    if tree.text is not None:
+        result.append(" ")
+        result.append(tree.text.replace("\t", "").replace("\n", "").strip())
+    for elem in tree:
+        result.extend(recursiveToAscii(elem,True, addNewlineTags))
+    if _addtail and tree.tail is not None:
+        result.append(" ")
+        result.append(tree.tail.replace("\t","").replace("\n", "").strip())
+    return result
+
+def tagText(el, tag):
+    " find tag or return empty string "
+    el2 = el.find(tag)
+    if el2==None:
+        return ""
+    else:
+        return el.text
+
+def biosampleToDict(fname, doneIds):
+    " parse a biosample XML and yield dicts "
+    #logFh = open("ids.log", "w")
+    for event, bsEl in etree.iterparse("biosample_set.xml", tag="BioSample"):
+        rec = {}
+
+        accession = bsEl.attrib.get("accession", "unknownAcc")
+        recId = bsEl.attrib.get("id", "unknownId")
+        if recId in doneIds:
+            logging.info("Already done, skipping record %s" % recId)
+            continue
+
+        rec["ID"] = recId
+        rec["Accession"] = accession
+
+        #logFh.write("- %s\n" % accession)
+
+        for att in ["submission_date", "publication_date", "last_update", "access"]:
+            if att in bsEl.attrib:
+                rec[att.title()] = bsEl.attrib[att]
+        idEls = bsEl.findall("Ids/Id")
+        for el in idEls:
+            if "db" in el.attrib:
+                dbName = el.attrib["db"]
+                fName = "ID_"+dbName
+                rec[fName] = el.text
+            else:
+                logging.warn("No db element for id %s" % recId)
+
+        #<Title>Alistipes putredinis DSM 17216</Title>
+        #<Organism taxonomy_id="445970" taxonomy_name="Alistipes putredinis DSM 17216"/>
+        #<Comment>
+        #<Paragraph>Alistipes putredinis (GenBank Accession Number for 16S rDNA gene: L16497) is a member of the Bacteroidetes divisi
+        #<Paragraph>Keywords: GSC:MIxS;MIGS:4.0</Paragraph>
+        #</Comment>
+
+        descEls = bsEl.find("Description")
+        rec["Title"] = descEls.find("Title").text
+        orgEl = bsEl.find("Organism")
+        if orgEl is not None:
+            if orgEl.text != "":
+                rec["Organism"] = orgEl.text
+            if "taxonomy_id" in orgEl.attrib:
+                rec["Organism_taxonId"] = orgEl.attrib["taxonomy_id"]
+            if "taxonomy_name" in orgEl.attrib:
+                rec["Organism_taxonName"] = orgEl.attrib["taxonomy_name"]
+
+        commEl = descEls.find("Comment")
+        if commEl != None:
+            rec["Comment"] = treeToAsciiText(commEl)
+
+        #<Owner>
+        #<Name abbreviation="WUGSC">Washington University, Genome Sequencing Center</Name>
+        #<Contacts>
+        #<Contact lab="European Nucleotide Archive"/>
+        #<Contact email="lims@genome.wustl.edu"/>
+        # <Contact email="a.amend@berkeley.edu" phone="8082252902" lab="Bruns">
+        #<Name>
+        #     <First>Anthony</First>
+        #     <Last>Amend</Last>
+        #   </Name>
+        #</Contacts>
+        #</Owner>
+
+        ownEl = bsEl.find("Owner")
+        if ownEl is not None:
+            nameEl = ownEl.find("Name")
+            if nameEl!=None:
+                rec["Owner_name"] = nameEl.text
+                if "abbreviation" in nameEl.attrib:
+                    rec["Owner_abbr"] = nameEl.attrib["abbreviation"]
+            contEls = ownEl.findall("Contacts/Contact")
+
+            emails = []
+            labs = []
+            names = []
+            phones = []
+            for contEl in contEls:
+                if "email" in contEl.attrib:
+                    emails.append(contEl.attrib["email"])
+                if "lab" in contEl.attrib:
+                    labs.append(contEl.attrib["lab"])
+                if "phone" in contEl.attrib:
+                    phones.append(contEl.attrib["phone"])
+                firstEl = contEl.find("Name/First")
+                lastEl = contEl.find("Name/Last")
+                parts = []
+                if firstEl is not None and firstEl.text is not None:
+                    parts.append(firstEl.text)
+                if lastEl is not None and lastEl.text is not None:
+                    parts.append(lastEl.text)
+                if len(parts)!=0:
+                    names.append(" ".join(parts))
+                
+            if len(emails)!=0:
+                rec["Contact_Emails"] = "|".join(emails)
+            if len(labs)!=0:
+                rec["Contact_Labs"] = "|".join(labs)
+            if len(phones)!=0:
+                rec["Contact_Phones"] = "|".join(phones)
+            if len(names)!=0:
+                rec["Contact_Names"] = "|".join(names)
+
+        #<Models>
+        #<Model>MIGS.ba</Model>
+        #</Models>
+        modEls = bsEl.findall("Models/Model")
+        models = []
+        for modEl in modEls:
+            if modEl.text!="":
+                models.append(modEl.text)
+        if len(models)!=0:
+            rec["Models"] = "|".join(models)
+
+        # <Package display_name="MIGS: cultured bacteria/archaea; version 4.0">MIGS.ba.4.0</Package>
+        packEl = bsEl.find("Package")
+        if packEl is not None:
+            if "display_name" in packEl.attrib:
+                rec["Package_display_name"] = packEl.attrib["display_name"]
+            rec["Package_name"] = packEl.text
+
+        #<Attributes>
+        # <Attribute attribute_name="finishing strategy (depth of coverage)">Level 3: Improved-High-Quality Draft11.6x;20</Attribute>
+        attrEls = bsEl.findall("Attributes/Attribute")
+        for attrEl in attrEls:
+            if "harmonized_name" in attrEl.attrib:
+                aName = attrEl.attrib["harmonized_name"]
+            else:
+                aName = attrEl.attrib["attribute_name"]
+
+            aName = re.sub('[^0-9a-zA-Z_ -]+', '', aName) # remove weird chars
+            aName = aName.strip().replace(" ", "_")
+            rec["Attr_"+aName] = attrEl.text
+
+        # <Links>
+        # <Link type="url" label="DNA Source">http://www.dsmz.de/catalogues/details/culture/DSM-17216</Link>
+        # <Link type="entrez" target="bioproject">19655</Link>
+        # </Links>
+        # <Status status="live" when="2013-08-05T10:18:49"/>
+        linkEls = bsEl.findall("Links/Link")
+        for linkEl in linkEls:
+            lType = linkEl.attrib["type"]
+            nameParts = [lType]
+            target = linkEl.attrib.get("target")
+            if target is not None:
+                nameParts.append(target)
+            if lType=="entrez":
+                label = linkEl.attrib.get("label")
+                if label is not None and target!="bioproject":
+                    nameParts.append(label)
+
+            linkName = "Link_" + "_".join(nameParts).replace(" ", "_")
+            rec[linkName] = linkEl.text
+
+        statEl = bsEl.find("Status").text
+        if statEl is not None:
+            if statEl.attrib["status"]=="live":
+                rec["Status_live"] = statEl.text
+
+        yield rec
+        
+
+def parseBioSample(fname, outFname, maxRecs):
+    " parse biosample XML to tab-sep out file "
+    fields = set()
+    recs = []
+    readCount = 0
+
+    jsonFname = outFname+".json"
+    jsonFh = open(jsonFname, "a")
+    idFname = outFname+".ids"
+
+    doneIds = set()
+    if isfile(idFname):
+        doneIds = set(open(idFname).read().splitlines())
+    idFh = open(idFname, "a")
+    print "Writing parsed records to %s and %s" % (jsonFh.name, idFh.name)
+
+    for rec in biosampleToDict(fname, doneIds):
+        fields.update(rec.keys())
+        recs.append(rec)
+        jsonFh.write("%s\n" % (json.dumps(rec)))
+        idFh.write("%s\n" % rec["ID"])
+        #print rec
+        readCount += 1
+        if maxRecs is not None and readCount == maxRecs:
+            break
+        if readCount % 1000 == 0:
+            print "Parsed %d records" % readCount
+        #fields.update(rec.keys())
+        #for field in sorted(fields):
+                #print field, rec.get(field, "").encode("utf8")
+
+    print "Parsing done. Now writing to %s" % outFname
+
+    ofh = open(outFname, "w")
+
+    sortedFields = list(sorted(fields))
+    sortedFields = [x.strip().replace(" ", "_").replace("\t", "").replace("\n", "").encode("utf8") for x in sortedFields]
+    print "Found %d fields" % len(sortedFields)
+
+    ofh.write("\t".join(sortedFields))
+    ofh.write("\n")
+
+    writeCount = 0
+    for rec in recs:
+        fs = []
+        for field in sortedFields:
+            #print "field", field
+            val = rec.get(field, None)
+            if val is None:
+                val = ""
+            else:
+                val = val.replace("\t", "").replace("\n", "").encode("utf8")
+            fs.append(val)
+
+        #print fs
+        ofh.write("\t".join(fs))
+        ofh.write("\n")
+
+        writeCount += 1
+        if writeCount % 1000 == 0:
+            print "Wrote %d records" % writeCount
+
+    print "Wrote %d records to %s" % (writeCount, outFname)
+
+def main():
+    args, options = parseArgs()
+
+    inName, outName = args
+    maxRecs = options.max
+    parseBioSample(inName, outName, maxRecs)
+
+
+main()
