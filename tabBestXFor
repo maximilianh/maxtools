@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename scoreColumn labelColumn - get the best scored rows for each label")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("-n", "--numBest", dest="numBest", action="store", type="int", help="how many best to show, default %default", default=1)
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    filename = args[0]
+    scoreField = args[1]
+    labelField = args[2]
+
+    headers = None
+
+    rows = defaultdict(list)
+
+    for line in open(filename):
+        row = line.rstrip("\n").split("\t")
+        if headers is None:
+            headers  = row
+            scoreIdx = headers.index(scoreField)
+            labelIdx = headers.index(labelField)
+            continue
+
+        label = row[labelIdx]
+        score = float(row[scoreIdx])
+        #print label, score, row
+        rows[label].append( ( score, row ) )
+
+    for label, labelRows in rows.iteritems():
+        labelRows.sort(reverse=True)
+
+    print "\t".join(headers)
+    for label, labelRows in rows.iteritems():
+        i = 0
+        for r in labelRows:
+            score, row = r
+            if i == options.numBest:
+                break
+            print "\t".join(row)
+            i+=1
+
+
+main()

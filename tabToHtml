@@ -32,11 +32,21 @@ if isdir(filenames[0]):
     outDir = args[1]
 
 ofh = sys.stdout
+ofh.write("""
+<!-- Latest compiled and minified CSS -->
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+
+<!-- Optional theme -->
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap-theme.min.css" integrity="sha384-rHyoN1iRsVXV4nD0JutlnGaslCJuC7uwjduW9SVrLvRYooPp2bWYgmgJQIXwl/Sp" crossorigin="anonymous">
+
+<!-- Latest compiled and minified JavaScript -->
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
+""")
 for filename in filenames:
     logging.info(filename)
     if outDir!=None:
         ofh = open(join(outDir, basename(filename).split(".")[0])+".html", "w")
-    ofh.write("<table>")
+    ofh.write("<table class='table table-bordered'>")
     for line in open(filename):
         fields = line.rstrip("\n").split("\t")
         if line.startswith("#"):

@@ -8,6 +8,7 @@ parser = optparse.OptionParser("usage: %prog [options] file1(small) column1 file
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-n", "--headerNames", dest="headerNames", action="store_true", help="pass through column headers") 
 parser.add_option("", "--outer", dest="outer", action="store_true", help="outer join: add NONE if not found") 
 (options, args) = parser.parse_args()
 
@@ -32,18 +33,35 @@ file1Idx, file2Idx = int(file1Idx), int(file2Idx)
 
 file1Data = {}
 # parse file1 into dict
+lCount = 0
 for line in openFile(filename1):
+    lCount +=1
     fs = line.strip("\n").split('\t')
     indexVal = fs[file1Idx]
-    otherVals = fs[0:file1Idx]
-    otherVals.extend(fs[file1Idx+1:])
+
+    otherVals = []
+    for i in range(0, len(fs)):
+        if i!=file1Idx:
+            otherVals.append(fs[i])
+
+    #otherVals.extend(fs[file1Idx+1:])
+    if lCount == 1 and options.headerNames:
+        otherNames = "\t".join(otherVals)
+        continue
     otherLine = "\t".join(otherVals)
 
     file1Data.setdefault(indexVal, []).append(otherLine)
 
 # iterate over lines in file2
+lCount = 0
 for line in openFile(filename2):
     line = line.strip("\n")
+    lCount += 1
+
+    if options.headerNames and lCount==1:
+        print line+"\t"+otherNames
+        continue
+
     fs = line.strip("\n").split('\t')
     indexVal = fs[file2Idx]
     if indexVal in file1Data:

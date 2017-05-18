@@ -1,0 +1,196 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict, OrderedDict
+from os.path import join, basename, dirname, isfile
+
+#import hgvs.parser
+#import hgvs.dataproviders.uta
+# /cluster/home/max/projects/pubs/tools/lib/varFinder.py
+import varFinder
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename - convert the rodrigo dienstmann cancer database to .bed")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def parseSymToRefseq(fname):
+    #" parse a table with name -> name2 from hg19.refGene, return dict sym -> (accAndVersion, chrom, start, end) "
+    res = dict() # sym -> (prefix, numerical part of ID)
+    for line in open(fname):
+        sym, accId, version, cds, chrom, start, end = line.strip().split("\t")
+        res[sym] = (chrom, start, end)
+        prefix, no = accId.split("_")
+        no = int(no)
+        infoTuple = (prefix, no, accId, version, cds, chrom, start, end)
+        res.setdefault(sym, infoTuple)
+        oldPrefix, oldNo, oldAccId = res[sym][:3]
+        if no < oldNo:
+            res[sym] = infoTuple
+
+    # convert to dict sym -> accId
+    symToAcc = {}
+    for sym, (prefix, no, accId, version, cds, chrom, start, end) in res.iteritems():
+        symToAcc[sym] = (accId+"."+version, chrom, start, end)
+    return symToAcc
+        
+def iterRowDicts(fname):
+    " iterate over .tsv lines, yield orderedDicts. Use preferably on small-ish files. "
+    ifh = open(fname)
+    headers = ifh.readline().rstrip("\n").split("\t")
+    assert(len(headers)==len(set(headers))) # duplicate field names not allowed in header
+    for line in ifh:
+        fields = line.rstrip("\n").split('\t')
+        fields = [x.strip() for x in fields]
+        rowDict = OrderedDict(zip(headers, fields))
+        yield rowDict
+
+def iterDienstmannRows(filename, doVars = True):
+    " parse variant or gene entries,  yields (variantDescInHgvs, originalRowAsDict)"
+    nonVars = set(['any', 'amplification', 'rearrangement', 'mut', 'exon', 'codon', 'domain', 'deletion', 'unknown', 'split', 'fusion', 'wild','HD'])
+    for row in iterRowDicts(filename):
+        if row["Gene"]=="AR-V7":
+            row["Gene"] = "AR"
+        if row["Gene"]=="INI1":
+            row["Gene"] = "SMARCB1"
+        if row["Gene"]=="MLL":
+            row["Gene"] = "KMT2A"
+        if row["Gene"]=="NF3":
+            row["Gene"] = "NF1"
+        if row["Gene"]=="RET-PTC1":
+            row["Gene"] = "RET-PTCH1"
+        varWords = set(row["Variant"].split())
+
+        mouseOver = "%s in %s: %s to %s" % (row["Variant"], row["Disease"], row["Association_1"], row["Therapeutic context_1"])
+        row["mouseOver"] = mouseOver
+
+        if len(varWords.intersection(nonVars)):
+            yield None, row
+            continue
+        alreadyYielded = False
+        for varStr in row["Variant"].split(", "):
+            varStr = varStr.strip()
+            varStr = varStr.split("/")[0]
+            if varStr in ["others (pending)", "splice variant mRNA", "pending", "A82P9"]:
+                if not alreadyYielded:
+                    yield None, row
+                    alreadyYielded = True
+                    continue
+            if "ins" in varStr or "del" in varStr or "_" in varStr or "-" in varStr:
+                if not alreadyYielded:
+                    yield None, row
+                    alreadyYielded = True
+                    continue
+            yield varStr, row
+
+def main():
+    args, options = parseArgs()
+
+    filename = args[0]
+    outFname = args[1]
+    # created by:
+    # hgsql hg19 -NB -e 'select name2, name from refGene' > refGeneSyms.tab
+    symToBestTrans = parseSymToRefseq("refGene.tab")
+
+    #parser = hgvs.parser.Parser()
+    #varRe = re.compile("([A-Z])([0-9])+")
+    #mapPosList = []
+    varFinder.loadDb(logging.DEBUG)
+    varFinder.allowTwoBpVariants = True
+    
+    #sys.exit(0)
+    invalidCount = 0
+    okCount = 0
+    ofh = open(outFname, "w")
+    for varDesc, row in iterDienstmannRows(filename):
+        # not a mappable variant
+        if varDesc is None:
+            for sym in row["Gene"].split("-"): # gene fusions!
+                transId, chrom, start, end = symToBestTrans[sym]
+                fakeBed = [chrom, start, end, row["Variant"]+":"+row["Disease"], "0", ".", start, end, "0"]
+                fakeBed.extend(row.values())
+                #fakeBed.append("")
+                fakeBed.append("not a mappable variant, mapped to gene location")
+                ofh.write("\t".join(fakeBed))
+                ofh.write("\n")
+            continue
+
+        if not varDesc[-1].isalpha():
+            varDesc += "X"
+        #varDesc = "p."+varDesc
+        beds, rnaDesc, codDesc = varFinder.groundSymbolVariant(row["Gene"], varDesc)
+        if len(beds)==0:
+            invalidCount += 1
+            # copied from above
+            sym = row["Gene"]
+            transId, chrom, start, end = symToBestTrans[sym]
+            fakeBed = [chrom, start, end, row["Variant"]+":"+row["Disease"], "0", ".", start, end, "0"]
+            fakeBed.extend(row.values())
+            #fakeBed.append("")
+            fakeBed.append("variant found, but sequence does not match. Mapped to gene location")
+            ofh.write("\t".join(fakeBed))
+            ofh.write("\n")
+            # end copy
+            continue
+            #print varDesc, row
+            #print beds
+        okCount += 1
+        firstBed = beds[0]
+
+        bed9 = firstBed[:9]
+
+        # shorten the name
+        dis = row["Disease"]
+        parts = dis.split("_")
+        # "hairy cell leukemia"
+        if len(parts)>1 and parts[-2]=="cell":
+            dis = parts[-1]
+        elif dis=="cancer_unspecified":
+            dis="unspec"
+        elif len(dis)>15:
+            dis=" ".join(dis.split("_")[-2:])
+        name = row["Variant"]+":"+dis
+        bed9[3] = name
+
+        bed9.extend(row.values())
+        #bed9.append("")
+        bed9.append(firstBed[-2]+" / "+firstBed[-1])
+        ofh.write("\t".join(bed9))
+        ofh.write("\n")
+
+    print "%d invalid variants found" % invalidCount
+    print "%d mappable variants found" % okCount
+    ofh.close()
+
+        #varDesc, row, 
+        #print row, varDesc
+
+        #refseqId, chrom, cds, start, end = symToAcc[row["Gene"]]
+        #pos = int(cds.split('.')[0])*3 + 
+        #var = parser.parse_hgvs_variant('%s:%s' % (refseqId, varDesc))
+        #hdp = hgvs.dataproviders.uta.connect()
+        #varmap = hgvs.variantmapper.VariantMapper(hdp)
+        #print varmap.p_to_g(var)
+
+
+                
+            
+
+
+     
+main()

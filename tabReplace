@@ -3,7 +3,6 @@
 from sys import *
 from optparse import OptionParser
 import logging
-import tabfile, maxTables
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = OptionParser("usage: %prog [options] replaceFile columnIndexOrName tableFile - replace values in a column with values from a 2nd <oldVal>tab<newVal>-file") 
@@ -23,6 +22,17 @@ else:
     logging.basicConfig(level=logging.INFO)
 # ==== FUNCTIONs =====
     
+def parseDict(fname, doInv):
+    " parse key-val tab-sep file and return as dict "
+    ret = {}
+    for line in open(fname):
+        key, val = line.rstrip("\n").split('\t')
+        if doInv:
+            ret[val] = key
+        else:
+            ret[key] = val
+    return ret
+
 # ----------- MAIN --------------
 if args==[]: 
     parser.print_help()
@@ -33,21 +43,16 @@ inverse = options.inverse
 
 replaceFilename, field, tableFilename = args
 logging.info("Reading replace values...\n")
-replaceValues = maxTables.parseDict(replaceFilename, inverse=options.inverse)
+replaceValues = parseDict(replaceFilename, options.inverse)
 
-tableFile = maxTables.openFile(tableFilename)
+tableFile = open(tableFilename)
 if not headers:
     fileType="numColumns"
 else:
     fileType=None
-tp = maxTables.TableParser(fileObj=tableFile, fileType=fileType)
-
-
-if field.isdigit():
-    field="col"+field
 
 lineNo = 0
-for row in tp.generateRows():
+for row in tp.iterTsvRows(tableFilename):
     key = row._asdict().get(field, None)
     if key==None:
         logging.error("field named %s not found in headers %s" % (field, row))

@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import urllib2, re
+
+def stripTag(line, tag):
+    " remove all html tags from a line " 
+    #remHtml = re.compile("<(.|\n)+?>")
+    remHtml = re.compile('<[^<]+>')
+    line = re.sub(remHtml, "", line)
+    #line = line.strip().replace("<%s>" % tag, "").replace("</%s>" % tag, "")
+    return line
+
+def getAbstract(pmid):
+    """ retrieve abstracts for pmid using NCBI Entrez API"""
+
+    logging.debug("Sending NCBI entrez request for PMID %s" % pmid)
+    url = '''http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&email=mhaeussl@ucsc.edu&retmode=xml&id=%s''' % pmid
+    req = urllib2.Request(url)
+    try:
+        html = urllib2.urlopen(req)
+    except urllib2.HTTPError:
+        raise Exception("Could not get article info for PMID %s" % pmid)
+        #return None
+    
+    journal, title, year= "","",""
+    abstract=""
+    lastNames = []
+    firstNames = []
+    inDate = False
+    authors=""
+    doi=""
+    pmcId=""
+    vol = ""
+    issue = ""
+    page = ""
+
+    for line in html:
+        line = line.strip()
+        if line.find("<Title>")!=-1:
+            journal = stripTag(line, "Title")
+        if line.find("<ISOAbbreviation>")!=-1:
+            journalShort = stripTag(line, "ISOAbbreviation")
+        if line.find("<ArticleTitle>")!=-1:
+            title = stripTag(line, "ArticleTitle")
+        if line.find("<LastName>")!=-1:
+            lastNames.append(stripTag(line, "LastName"))
+        if line.find("<FirstName>")!=-1 or line.find("ForeName")!=-1:
+            firstNames.append(stripTag(stripTag(line, "FirstName"), "ForeName"))
+        if line.find("ArticleDate")!=-1 or line.find("PubDate")!=-1:
+            inDate=True
+        if line.find("<Volume>")!=-1:
+            vol=stripTag(line, "Volume")
+        if line.find("<Issue>")!=-1:
+            issue=stripTag(line, "Issue")
+        if line.find("<MedlinePgn>")!=-1:
+            page=stripTag(line, "MedlinePgn")
+        if line.find("<Year>")!=-1 and inDate:
+            year=stripTag(line, "Year")
+            inDate=False
+        if line.find('ArticleId IdType="doi"')!=-1:
+            doi=stripTag(line, "ArticleId")
+        if line.find('ArticleId IdType="pmc"')!=-1:
+            pmcId=stripTag(line, "ArticleId")
+        if line.find("<AbstractText>")!=-1:
+            abstract=stripTag(line, "AbstractText")
+        authors = [last+" "+first for first, last in zip(firstNames, lastNames)]
+        authors = "; ".join(authors)
+    artData = {"year":year, "journal":journal, "authors":authors, \
+        "title":title, "abstract":abstract, "doi":doi, "journalShort":journalShort,
+        "pmcId":pmcId, "pmid":pmid, "volume":vol, "issue":issue, "page":page}
+    return artData
+        
+def formatHtml(pmid):
+    " output html given a pmid "
+    artData = getAbstract(pmid)
+    #print artData
+
+    if artData["pmcId"]!="":
+        artData["pmcHtml"] = 'PMC: <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/%(pmid)s/" target="_blank">%(pmcId)s</a>' % artData
+    else:
+        artData["pmcHtml"] = ""
+
+    html = """
+    <p>%(authors)s. <a href="http://dx.doi.org/%(doi)s" target="_blank">
+    %(title)s</a>. <em>%(journal)s</em>. %(year)s %(volume)s%(issue)s:%(page)s.
+    PMID: <a href="http://www.ncbi.nlm.nih.gov/pubmed/%(pmid)s" target="_blank">%(pmid)s</a>; %(pmcHtml)s </p>
+    """ % artData
+    return html
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    pmids = args
+
+    print("<!-- References created by: %s %s -->" % \
+        (basename(__file__), " ".join(pmids)))
+
+    for pmid in pmids:
+        print formatHtml(pmid)
+
+main()

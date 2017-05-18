@@ -8,7 +8,7 @@ from os.path import join, basename, dirname, isfile
     
 def parseArgs():
     " setup logging, parse command line arguments and options. -h shows auto-generated help page "
-    parser = optparse.OptionParser("usage: %prog [options] filename")
+    parser = optparse.OptionParser("usage: %prog [options] filename - check a tab-sep file, make sure that each line contains the same number of colums. Output the lines where there are problems.")
 
     parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
     #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -29,9 +29,18 @@ def main():
     args, options = parseArgs()
 
     filename = args[0]
-    print filename
-    #if options.test:
-        #logging.debug("test is set")
-        #f = open(options.file, "r")
+
+    headFieldCount = len(open(filename).readline().rstrip("\n").split("\t"))
+    print "header: %d fields" % headFieldCount
+
+    lNo = 0
+    for line in open(filename):
+        lNo += 1
+        fields = line.rstrip("\n").split("\t")
+        lineFieldCount = len(fields)
+        if headFieldCount != lineFieldCount:
+            print "line %d, field count: %d, first three fields: %s" % (lNo, lineFieldCount, fields[:3])
+
+    print "Total number of lines: %d" % lNo
 
 main()

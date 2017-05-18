@@ -15,6 +15,7 @@ parser.add_option("-n", "--colName", dest="colName", action="store", help="name 
 parser.add_option("-r", "--reverse", dest="reverse", action="store_true", help="inverse sort order")
 parser.add_option("-u", "--uniq", dest="uniq", action="store_true", help="remove lines with duplicate fields in the column <colName>")
 parser.add_option("", "--int", dest="int", action="store_true", help="use numerical (integer) sort")
+parser.add_option("-f", "--float", dest="float", action="store_true", help="use numerical (float) sort")
 (options, args) = parser.parse_args()
 
 if options.debug:
@@ -71,6 +72,8 @@ for filename in filenames:
                     val = 0
                 else:
                     val = int(val)
+            if options.float:
+                val = float(val)
             line[colIndex] = val
             lines.append(line)
         else:

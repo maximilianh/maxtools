@@ -238,6 +238,10 @@ if os.path.isdir(inDir):
 else:
     filenames = [inDir]
 
+# for refseq
+if len(filenames)==0:
+    filenames = glob.glob(os.path.join(inDir, "*.gbff"))
+
 for filename in filenames:
     # file opening
     logging.info("Parsing %s\n" % filename)
@@ -280,7 +284,7 @@ for filename in filenames:
         # add reference information to the two collection classes
         refIdx = 0
         refs = []
-        for ref in seq.annotations["references"]:
+        for ref in seq.annotations.get("references", []):
             refIdx+=1
             refInfo = getRefInfo(ref)
 

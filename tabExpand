@@ -3,12 +3,16 @@
 import logging, sys, optparse
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
+import maxCommon
 
 # ==== functions =====
     
 def parseArgs():
     " setup logging, parse command line arguments and options. -h shows auto-generated help page "
-    parser = optparse.OptionParser("usage: %prog [options] filename")
+    parser = optparse.OptionParser("""usage: %prog [options] fieldId filename - expand fields with separators into separate rows
+    
+    fieldId is 0-based
+    """)
 
     parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
     #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -27,11 +31,17 @@ def parseArgs():
 # ----------- main --------------
 def main():
     args, options = parseArgs()
+    fieldId, filename = args
+    fieldId = int(fieldId)
+    sep = "|"
 
-    filename = args[0]
-    print filename
-    #if options.test:
-        #logging.debug("test is set")
-        #f = open(options.file, "r")
+    for row in maxCommon.iterTsvRows(filename):
+        if sep in row[fieldId]:
+            for val in row[fieldId].split("|"):
+                row = list(row)
+                row[fieldId] = val 
+                print "\t".join(row)
+        else:
+            print "\t".join(row)
 
 main()

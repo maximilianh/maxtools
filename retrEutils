@@ -24,7 +24,7 @@ else:
     logging.basicConfig(level=logging.INFO)
 
 # ==== FUNCTIONs =====
-BASEURL = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+BASEURL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 MAXRATE = 3 # number of requests per second
 DELAY   = 1/MAXRATE
 

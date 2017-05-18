@@ -1,0 +1,122 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, gzip
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import itertools
+
+import pandas as pd
+import numpy as np
+
+from scipy.stats.stats import pearsonr
+import scipy.spatial.distance
+
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] inFname outFname - given a tab-sep matrix with headers and row names, output number of samples where gene is expressed, for all genes")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def parseMatrix(inFname):
+    """ parse tab-sep matrix of float with headers and row names 
+    Six times faster than pandas.
+    Returns list of sampleIds and dict with geneId -> numpy array 
+    Strips Ensembl gene version ID
+    """
+    logging.info("Reading %s" % inFname)
+    if inFname.endswith(".gz"):
+        ifh = gzip.open(inFname)
+    else:
+        ifh = open(inFname)
+
+    rows = {}
+    i = 0
+    sampleIds = None
+    for line in ifh:
+        fields = line.rstrip("\n").split("\t")
+        if i==0:
+            sampleIds = fields[1:]
+        else:
+            row = [float(x) for x in fields[1:]]
+            row = np.array(row)
+            geneId = fields[0].split(".")[0]
+            rows[geneId] = row
+        i += 1
+    return sampleIds, rows
+
+def corrMat(mat):
+    " yield tuples with the correlation for all rows of matrix (=dict of string -> numpy array) "
+    allGenes = sorted(mat.keys())
+    #for g1 in ["ENSG00000257986"]:
+        #for g2 in ["ENSG00000173673", "ENSG00000166450", "ENSG00000152977", "ENSG00000170370", "ENSG00000121570"]:
+
+    # save a little bit of time
+    zeroGenes = set()
+    for g1, row in mat.iteritems():
+        #if np.count_nonzero(row)==0:
+            #print g1
+        if not np.any(row):
+            zeroGenes.add(g1)
+
+    allGenes = set(allGenes) - zeroGenes
+    logging.info("Skipping %d all-zero genes, comparing %d genes" % (len(zeroGenes), len(allGenes)))
+
+    combs = list(itertools.combinations(allGenes, 2))
+    logging.info("Doing %d comparisons" % len(combs))
+
+    for g1, g2 in itertools.combinations(allGenes, 2):
+        v1 = mat[g1]
+        v2 = mat[g2]
+        coeff, pVal = pearsonr(v1, v2)
+        if np.isnan(coeff):
+            continue
+        dist = scipy.spatial.distance.jaccard(v1, v2)
+        row = (g1, g2, coeff, pVal, dist)
+        #row = (g1, g2, dist)
+        #print r1
+        #print r2
+        print row
+        yield row
+
+
+# ----------- main --------------
+def countSamples(inFname, outFname):
+    " count number of sample in which a gene is expressed"
+    # with pandas, it takes 30 seconds for a 270MB matrix. mmap, .gz did not change that.
+    #mat = pd.read_table(inFname, dtype=np.float64, header=0, index_col=0, converters={'GeneId':str}, engine="c")
+
+    sampleIds, mat = parseMatrix(inFname)
+
+    logging.info("Writing %s" % outFname)
+    ofh = open(outFname, "w")
+    #ofh.write("gene1\tgene2\tcorrelation\tpVal\tjaccardDist\n")
+    for geneId, row in mat.iteritems():
+        nonZeros = [x for x in row if x!=0]
+        row = [geneId, str(len(nonZeros))]
+        ofh.write("\t".join(row))
+        ofh.write("\n")
+    ofh.close()
+
+def main():
+    args, options = parseArgs()
+
+    inFname, outFname = args
+    countSamples(inFname, outFname)
+
+main()

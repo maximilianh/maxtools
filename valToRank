@@ -1,0 +1,59 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+from scipy.stats import rankdata
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename - given a list of integer values, make a conversion table to convert values to rank-percents")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("-m", "--method", dest="method", action="store", help="method, see http://docs.scipy.org/doc/scipy-0.16.0/reference/generated/scipy.stats.rankdata.html, default %default", default="max")
+    parser.add_option("-f", "--full", dest="full", action="store_true", help="output full table with original value, rank, rank-percent and percentile")
+    parser.add_option("-k", "--keepDupes", dest="duplicates", action="store_true", help="keep duplicates in the table")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    filename = args[0]
+
+    logging.info("Reading %s" % filename)
+    vals = [int(x) for x in open(filename).read().splitlines()]
+    valCount = len(vals)
+    logging.info("Ranking data")
+    ranks = rankdata(vals, method=options.method)
+
+    lastVal = None
+    for val, rank in zip(vals, ranks):
+        if not options.duplicates:
+            if val==lastVal:
+                continue
+            lastVal = val
+
+        rankPerc = float(rank)/valCount
+        percentile = int(round(100*rankPerc))
+        if options.full:
+            row = [val, rank, rankPerc, percentile]
+        else:
+            row = [val, percentile]
+        row = [str(x) for x in row]
+        print "\t".join(row)
+
+main()

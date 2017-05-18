@@ -22,7 +22,7 @@ def writeList(fname, list):
         of.write("\n")
     of.close()
         
-def slurpdict(fname, comments=False, valField=1, doNotCheckLen=False, asFloat=False, otherFields=False, asInt=False, headers=False, keyAsInt=False):
+def slurpdict(fname, comments=False, valField=1, doNotCheckLen=False, asFloat=False, otherFields=False, asInt=False, headers=False, keyAsInt=False, quiet=False):
     """ parse file with key -> value pair on each line, key/value has 1:1 relationship"""
     """ last field: set valField==-1, return as a dictionary key -> value """
     if fname==None or fname=="":
@@ -40,7 +40,8 @@ def slurpdict(fname, comments=False, valField=1, doNotCheckLen=False, asFloat=Fa
             continue
         if not len(fs)>1:
             if not doNotCheckLen:
-                sys.stderr.write("info: not enough fields, ignoring line %s\n" % l)
+                if not quiet:
+                    sys.stderr.write("info: not enough fields, ignoring line %s\n" % l)
                 continue
             else:
                 key = fs[0]
@@ -63,7 +64,8 @@ def slurpdict(fname, comments=False, valField=1, doNotCheckLen=False, asFloat=Fa
         if key not in dict:
             dict[key] = val
         else:
-            sys.stderr.write("info: file %s, hit key %s two times: %s -> %s\n" %(fname, key, key, val))
+            if not quiet:
+                sys.stderr.write("info: file %s, hit key %s two times: %s -> %s\n" %(fname, key, key, val))
     return dict
 
 def slurpdictlist(fname, reverse=False, filterComments=False, keyType=None, valType=None):

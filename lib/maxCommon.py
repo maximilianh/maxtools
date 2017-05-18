@@ -198,6 +198,34 @@ def iterTsvRowsDict(ifh):
             d[name] = val
         yield d
 
+def nextRow(inFile, encoding="utf", fieldSep="\t"):
+    """ 
+    simplified version of iterTsvRows, return rows from tab-sep file
+    """
+    fh = inFile
+
+    line1 = fh.readline()
+    line1 = line1.strip("\n").strip("#")
+    headers = line1.split("\t")
+    #headers = [re.sub("[^a-zA-Z0-9_]","_", h) for h in headers]
+
+    Record = collections.namedtuple('tsvRec', headers)
+    for line in fh:
+        line = line.strip("\n")
+        fields = line.split(fieldSep)
+        if encoding!=None:
+            fields = [f.decode(encoding) for f in fields]
+        try:
+            rec = Record(*fields)
+        except Exception, msg:
+            logging.error("Exception occured while parsing line, %s" % msg)
+            logging.error("Filename %s" % fh.name)
+            logging.error("Line was: %s" % line)
+            logging.error("Does number of fields match headers?")
+            logging.error("Headers are: %s" % headers)
+            raise Exception("wrong field count in line %s" % line)
+        # convert fields to correct data type
+        yield rec
 
 def iterTsvRows(inFile, headers=None, format=None, noHeaderCount=None, fieldTypes=None, encoding="utf8", fieldSep="\t", isGzip=False, skipLines=None, makeHeadersUnique=False, commentPrefix=None):
     """ 
