@@ -484,7 +484,7 @@ class Browser:
                 return []
             else:
                 log("%s: Trying outlink via DOI" % (pmid))
-                url = "http://dx.doi.org/"+doi
+                url = "https://doi.org/"+doi
                 return []
         else:
             #log("%s: Got %d outlinks: %s" % (pmid, len(outlinks), str(outlinks)))
