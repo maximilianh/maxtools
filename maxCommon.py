@@ -195,6 +195,16 @@ def fastIterTsvRows(inFname):
     for line in lines[1:]:
         yield Record(*line.split("\t")), line
 
+def iterTsvRowsDict(ifh):
+    " yield rows from a tab-sep table as OrderedDict "
+    headers = ifh.readline().rstrip("\n").split("\t")
+    for line in ifh:
+        d = OrderedDict()
+        row = line.rstrip("\n").split("\t")
+        for name, val in zip(headers, row):
+            d[name] = val
+        yield d
+
 def nextRow(inFile, encoding="utf", fieldSep="\t"):
     """ 
     simplified version of iterTsvRows, return rows from tab-sep file
