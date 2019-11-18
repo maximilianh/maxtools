@@ -4,7 +4,6 @@
 
 from sys import *
 from optparse import OptionParser
-import tabfile
 import logging
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
@@ -23,6 +22,53 @@ if options.debug:
     logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.INFO)
+
+def slurplist(fname, check=True, field=None, filterComments=False, valType=None, headers=False):
+    """ parse a file with one string per line and return as list"""
+    if fname==None:
+        return []
+    if fname=="stdin":
+        fh = sys.stdin
+    else:
+        fh = open(fname, "r")
+    list = []
+    if headers:
+        fh.readline()
+    for l in fh:
+        l = l.strip()
+        if filterComments and l.startswith("#"):
+            continue
+        if len(l)==0:
+            continue
+
+        if check and l in list:
+            sys.stderr.write("tabfile.py/slurplist: file=%s, duplicate key = %s, exiting\n" % (fname, l))
+            sys.exit(1)
+
+        if field==None:
+            value = l
+        else:
+            value = l.split()[field]
+
+        if valType:
+            value = valType(value)
+
+        list.append(value)
+    return list
+        
+def slurplistasdict(fname, split=False, default=True):
+    """ parse a file with one string per line and return as dict for faster access"""
+    dict = {}
+    for l in open(fname, "r"):
+        l = l.strip()
+        if split:
+            l = l.split("\t")[0]
+        if l in dict:
+            sys.stderr.write("tabfile.py: key already in dict!\n")
+            return None
+        dict[l.strip()] = default
+    return dict
+
 # ----------- MAIN --------------
 field = options.field
 otherField = options.otherField
@@ -44,7 +90,7 @@ for line in open(f1):
         logging.debug("Could not find field %d in line %s" % (field, line))
 
 for f2 in otherFiles:
-    list2 = tabfile.slurplist(f2, check=False, field=otherField)
+    list2 = slurplist(f2, check=False, field=otherField)
     set2 = set (list2)
     diff = set(file1Lines).difference(set2)
     for diffEl in diff:

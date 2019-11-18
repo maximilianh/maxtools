@@ -6,6 +6,8 @@ from collections import defaultdict
 
 CLOSE = 10
 
+STRIPVERSION = True
+
 def main():
     if len(sys.argv)==1:
         print "genePredComp file1 file2: compare two gene pred files and output some stats"
@@ -35,6 +37,14 @@ def parseGp(inFname):
         row = row[:10]
         #name = row[0].split(".")[0]
         name = row[0]
+        if STRIPVERSION:
+            name = name.split(".")[0]
+
+        if row[1].isdigit() or row[1]=="Y" or row[1]=="X":
+            row[1] = "chr"+row[1]
+        if row[1]=="MT":
+            row[1]="chrM"
+
         data[name].append(tuple(row[1:]))
     return data
 
@@ -65,11 +75,13 @@ def genePredComp(fname1, fname2, gp1, gp2):
     print "%d common IDs" % (len(commonIds))
 
     print "For the common IDs:"
-    diffCount = 0
+    diffTransCount = 0
+    diffTransList = []
     exactMatch = 0
     overlapCount = 0
     noOverlap = 0
     txMatch = 0
+    txMatchList = []
     txNonMatch = 0
     txClose = 0
     txStartClose = 0
@@ -83,7 +95,8 @@ def genePredComp(fname1, fname2, gp1, gp2):
         tList1 = gp1[id]
         tList2 = gp2[id]
         if len(tList1)!=1 or len(tList2)!=1:
-            diffCount +=1
+            diffTransCount +=1
+            diffTransList.append(id)
         t1 = tList1[0]
         t2 = tList2[0]
         
@@ -98,6 +111,7 @@ def genePredComp(fname1, fname2, gp1, gp2):
             txStart2, txEnd2 = int(t2[2]), int(t2[3])
             if txStart1==txStart2 and txEnd1==txEnd2:
                 txMatch += 1
+                txMatchList.append(id)
             else:
                 txNonMatch +=1
                 diffOfh.write(id+"\t"+"\t".join(t1)+"\n")
@@ -121,12 +135,18 @@ def genePredComp(fname1, fname2, gp1, gp2):
                     ofh.write("%s\t%s\n" % (id, "\t".join(t1)))
                     ofh.write("%s\t%s\n" % (id, "\t".join(t2)))
 
-    print "  - %d IDs ignored because number of transcripts/id is > 1" % diffCount
+    print "  - %d IDs ignored because number of transcripts/id is > 1, e.g. %s" % (diffTransCount, diffTransList[:3])
     #print "  - %d IDs ignored because different version" % diffVerCount
+    if len(commonIds)==0:
+        print "Error: Nothing in common. "
+        print "First set of keys: %s " % list(keys1)[:3]
+        print "Second set of keys: %s " % list(keys2)[:3]
+        sys.exit(1)
+
     exactMatchShare = 100*float(exactMatch)/float(len(commonIds))
     print "  - %d transcripts (%0.00f%%) are exactly identical" % (exactMatch, exactMatchShare)
     print "For those %d that are not exactly identical:" % (len(commonIds)-exactMatch)
-    print "  - %d transcripts have identical txStart,txEnd" % txMatch
+    print "  - %d transcripts have identical txStart,txEnd (e.g. %s)" % (txMatch, txMatchList[:3])
     print "  - %d transcripts have a different txStart,txEnd (written to different.gp)" % txNonMatch
     print "For those %d that don't have identical txStart,txEnd:" % txNonMatch
     print "  - %d transcripts have identical cdsStart,cdsEnd" % cdsMatch

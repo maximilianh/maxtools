@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, re, os
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import maxCommon
+
+# === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
+parser = optparse.OptionParser("usage: %prog [options] inTsv outBed outAs - convert tab-sep to BED and create an auto-Sql file for it")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+parser.add_option("-t", "--type", dest="type", action="store", help="number of BED columns, default %default", default=12)
+#parser.add_option("-t", "--addTab", dest="addTab", action="store", help="add an additional tab file, first column is index field")
+#parser.add_option("-f", "--fields", dest="fields", action="store", help="read the field names and descriptions from this file, one per line, space-separated")
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== FUNCTIONs =====
+asHead = """table bed
+"Browser extensible data (<=12 fields) "
+    (
+"""
+
+asLines = """
+    string chrom;      "Chromosome (or contig, scaffold, etc.)"
+    uint   chromStart; "Start position in chromosome"
+    uint   chromEnd;   "End position in chromosome"
+    string name;       "Name of item"
+    uint   score;      "Score from 0-1000"
+    char[1] strand;    "+ or -"
+    uint thickStart;   "Start of where display should be thick (start codon)"
+    uint thickEnd;     "End of where display should be thick (stop codon)"
+    uint reserved;     "Used as itemRgb as of 2004-11-22"
+    int blockCount;    "Number of blocks"
+    int[blockCount] blockSizes; "Comma separated list of block sizes"
+    int[blockCount] chromStarts; "Start positions relative to chromStart"
+""".split("\n")
+
+# ----------- MAIN --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+tsvFname, outBedFname, outAsFname = args
+
+#if options.fields:
+    #fields = []
+    #for line in open(options.fields):
+        #fields.append(line.strip().split()[0])
+#else:
+    #fields = open(tabFname).readline().strip().strip("#").split("\t")
+
+# read tab file
+#data = {}
+#colCount = 0
+#for row in maxCommon.iterTsvRows(tabFname, encoding="latin1"):
+    #data[row[tabFieldIdx]]= list(row)
+    #colCount = len(row)
+    
+#if options.addTab:
+    #addFields = open(options.addTab).readline().strip().strip("#").split("\t")
+    #fields.extend(addFields[1:])
+    #colCount += len(addFields)-1
+#
+    #addData = {}
+    #addCount = 0
+    #for row in maxCommon.iterTsvRows(options.addTab, encoding="latin1"):
+        #key = row[0]
+        #val = row[1:]
+        #addCount = len(val)
+        #addData[key] = val
+    #for key, val in data.iteritems():
+        #if key in addData:
+            #data[key].extend(addData[key])
+        #else:
+            #data[key].extend([""]*addCount)
+    
+# join and output merged bed
+bigCols = set() # col indexes of columns with > 255 chars
+
+fh = open("temp.tabToBed.bed", "w")
+fields = None
+for line in open(tsvFname):
+    row = line.strip("\n").split("\t")
+    if row[0].isdigit() or row[0] in ["X", "Y"]:
+        row[0] = "chr"+row[0]
+    if fields is None:
+        fields = row
+        continue
+    #name = row[3]
+    #addRow = data.get(name, [""]*colCount)
+    #row.extend(addRow)
+    for colName, colData in zip(fields, row):
+        if len(colData)>255:
+            bigCols.add(colName)
+    fh.write( ("\t".join(row)))
+    fh.write("\n")
+fh.close()
+
+cmd = "sort -k1,1 -k2,2n temp.tabToBed.bed > %s" % outBedFname
+assert(os.system(cmd)==0)
+os.remove("temp.tabToBed.bed")
+
+# generate autosql
+#print bigCols
+bedColCount = int(options.type.replace("bed", "").replace("+" , ""))
+fh = open(outAsFname, "w")
+fh.write(asHead)
+fh.write("\n".join(asLines[:bedColCount+1]))
+fh.write("\n")
+
+fields = fields[bedColCount:]
+for field in fields:
+    name = field.replace(" ","")
+    name = field.replace("%","perc_")
+    name = re.sub("[^a-zA-Z0-9]", "", name)
+    name = name[0].lower()+name[1:]
+    fType = "string"
+    if field in bigCols:
+        fType = "lstring"
+    fh.write('      %s %s; " %s " \n' % (fType, name, field))
+fh.write(")\n")
+fh.close()
+
+print ("run this command to convert to bigBed")
+print ("bedToBigBed %s /hive/data/genomes/DB/chrom.sizes %s -tab -type=bed%d+ -as=%s" % (outBedFname, outBedFname.replace(".bed", ".bb"), bedColCount, outAsFname))

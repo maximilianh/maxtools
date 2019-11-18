@@ -1,0 +1,92 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, gzip
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === command line interface, options and help ===
+parser = optparse.OptionParser("usage: %prog [options] exprMatrix - output some basic info about an expression matrix")
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== functions =====
+    
+# ----------- main --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+filename = args[0]
+
+if filename.endswith(".gz"):
+    ifh = gzip.open(filename)
+else:
+    ifh = open(filename)
+
+fieldCount = None
+zeroCount = 0
+maxVal = 0
+minVal = 9999
+gExprBins = [0]*11
+sampleZeroCounts = None # list of non-zero genes, one per sample
+
+for lno, line in enumerate(ifh):
+    row = line.rstrip("\n").split("\t")
+    if lno==0:
+        headers = row
+        headCount = len(headers)
+        sampleCount = headCount - 1
+        sampleZeroCounts = [0]*sampleCount
+        continue
+    # paranoia-check of the number of fields
+    if fieldCount is not None:
+        assert(len(row)==headCount)
+
+    geneZeroCount = 0
+    for i, val in enumerate(row[1:]):
+        val = float(val)
+        if val==0.0:
+            geneZeroCount += 1
+            sampleZeroCounts[i] += 1
+
+        maxVal = max(val, maxVal)
+        minVal = min(val, minVal)
+    zeroCount += geneZeroCount
+
+    gExprCount = sampleCount - geneZeroCount
+    gExprShare = float(gExprCount) / sampleCount
+    gExprBin = int(gExprShare / 0.1)
+    gExprBins[gExprBin] += 1
+
+valCount = (headCount-1) * (lno-1)
+
+gExprBins = [str(x) for x in gExprBins]
+
+geneCount = lno-1
+
+#lowExprSamples500 = [x for x in sampleZeroCounts if geneCount-x < 500]
+
+exprCounts = []
+#for maxCount in range(0, geneCount, 5000):
+for maxCount in [100,500,1000,1000,50000]:
+    sampleCount = len([x for x in sampleZeroCounts if geneCount-x < maxCount])
+    exprCounts.append( (maxCount, sampleCount) )
+
+print "Number of samples", headCount - 1
+print "Number of genes", geneCount
+print "Number of values", valCount
+print "Number of zeros ", zeroCount
+print "Share of zeros", float(zeroCount)/valCount
+print "minimum", minVal
+print "maximum", maxVal
+print "Gene Histogram: percent of samples per gene bin", " - ".join(gExprBins)
+#print "Number of samples with less than 500 non-zero genes", len(lowExprSamples500)
+for cutoff, sampleCount in exprCounts:
+    print "Number of samples with less than %d non-zero genes" % cutoff, sampleCount

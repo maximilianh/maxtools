@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
-import logging, sys, optparse
+import logging, sys, optparse, gzip
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
 
@@ -11,6 +11,7 @@ def parseArgs():
     parser = optparse.OptionParser("usage: %prog [options] filename - check a tab-sep file, make sure that each line contains the same number of colums. Output the lines where there are problems.")
 
     parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("-e", "--encoding", dest="encoding", action="store", help="Encoding, usually utf8 (default) or latin1", default="utf8")
     #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
     #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
     (options, args) = parser.parse_args()
@@ -30,17 +31,27 @@ def main():
 
     filename = args[0]
 
-    headFieldCount = len(open(filename).readline().rstrip("\n").split("\t"))
-    print "header: %d fields" % headFieldCount
+    if filename.endswith(".gz"):
+        ifh = gzip.open(filename, "r")
+    else:
+        ifh = open(filename)
+
+    headFieldCount = len(ifh.readline().decode("utf8").rstrip("\n").split("\t"))
+    print("header: %d fields" % headFieldCount)
 
     lNo = 0
-    for line in open(filename):
+    for line in ifh:
+        try:
+            line= line.decode(options.encoding)
+        except UnicodeDecodeError, ex:
+            print("Can't decode line %s" % line)
+            raise
         lNo += 1
         fields = line.rstrip("\n").split("\t")
         lineFieldCount = len(fields)
         if headFieldCount != lineFieldCount:
-            print "line %d, field count: %d, first three fields: %s" % (lNo, lineFieldCount, fields[:3])
+            print("line %d, inv. field count: %d, first three fields: %s" % (lNo, lineFieldCount, fields[:3]))
 
-    print "Total number of lines: %d" % lNo
+    print("Total number of lines: %d" % lNo)
 
 main()

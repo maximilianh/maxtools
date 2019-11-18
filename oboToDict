@@ -1,0 +1,99 @@
+#!/usr/bin/env python2
+
+import logging, sys, optparse, string
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] fname1 fname2 ... - extract a table of names and synonyms from .obo files. If a term or synonym appears multiple times, it will be assigned to the first occurence.")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def oboToDict(inFnames, outFname):
+    " convert .obo file to name<tab>syn1|syn2|syn3...<newline> "
+    doneTerms = set() # global list of synonyms we have already seen in another file
+    outData = defaultdict(set)
+    name = None
+    syns = []
+    skipStanza = False
+    for inFname in inFnames:
+        for line in open(inFname):
+            line = line.rstrip("\n")
+            if line=="":
+                continue
+            if line=="[Typedef]":
+                skipStanza = True
+                continue
+            if line=="[Term]":
+                outData[name].update(syns)
+                doneTerms.update(syns)
+                name = None
+                syns = []
+                skipStanza = False
+                continue
+
+            if skipStanza:
+                continue
+            fs = string.split(line, ": ", maxsplit=1)
+            key, val = fs
+
+            if key=="name" and val!="cell" and val!="obsolete cell by class":
+                name = val
+                if name.startswith("obsolete "):
+                    name = name.replace("obsolete ", "")
+                syns = [name]
+                syns.append(name+"s")
+            elif key=="synonym":
+                assert("|" not in val)
+                val = val.split('"')[1]
+                # do not add terms we have already seen before
+                if val not in doneTerms:
+                    syns.append(val)
+                val = val+"s"
+                if val not in doneTerms:
+                    syns.append(val+"s")
+        if name is not None:
+            outData[name] = syns
+
+    shortNames = set()
+    ofh = open(outFname, "w")
+    for name, syns in outData.iteritems():
+        goodSyns = []
+        for s in syns:
+            if len(s)<=3:
+                shortNames.add(s)
+            else:
+                goodSyns.append(s)
+        ofh.write("%s\t%s\n" % (name, "|".join(goodSyns)))
+    logging.warn("Very short terms that were removed: %s" % shortNames)
+
+    ofh.close()
+
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    infns = args[:-1]
+    outfn = args[-1]
+    oboToDict(infns, outfn)
+    #if options.test:
+        #logging.debug("test is set")
+        #f = open(options.file, "r")
+
+main()

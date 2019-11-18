@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 
+
 import logging, sys, optparse
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
 import gzip, string
 
 # === command line interface, options and help ===
-parser = optparse.OptionParser("usage: %prog [options] filename - extract trans <-> gene -> <sym> info as tab from Gencode gtf file")
+parser = optparse.OptionParser("usage: %prog [options] inFile outBase - extract trans <-> gene -> <sym> info as tab from Gencode gtf file. Output files: <outBase>.symbols.tsv, <outBase>.transToGene.tsv, <outBase>.genes.bed")
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -25,19 +26,38 @@ if args==[]:
     exit(1)
 
 filename = args[0]
+outBase = args[1]
+
+
+print("Parsing %s" % filename)
 
 if filename.endswith(".gz"):
     fh = gzip.open(filename)
 else:
     fh = open(filename)
 
-print "transcriptId\tgeneId\tsymbol"
+transFh = open(outBase+".transToGene.tsv", "w")
+symFh = open(outBase+".symbols.tsv", "w")
+bedFh = open(outBase+".genes.bed", "w")
+
+transFh.write("transcriptId\tgeneId\n")
+symFh.write("geneId\tsymbol\n")
+# chr1    HAVANA  gene    11869   14409   .       +       .       
 # gene_id "ENSG00000223972.5"; transcript_id "ENST00000450305.2"; gene_type "transcribed_unprocessed_pseudogene"; gene_status "KNOWN"; gene_name "DDX11L1"; transcript_type "transcribed_unprocessed_pseudogene"; transcript_status "KNOWN"; transcript_name "DDX11L1-001"; exon_number 4; exon_id "ENSE00001799933.2"; level 2; ont "PGO:0000005"; ont "PGO:0000019"; tag "basic"; transcript_support_level "NA"; havana_gene "OTTHUMG00000000961.2"; havana_transcript "OTTHUMT00000002844.2";
+
 transToGene = {}
+geneToSym = {}
+geneToLocs = defaultdict(list)
+
 for line in fh:
     if line.startswith("#"):
         continue
     fs = line.split("\t")
+    chrom = fs[0]
+    start = int(fs[3])-1
+    end = int(fs[4])
+    score = fs[5]
+    strand = fs[6]
     infos = fs[8].split("; ")
 
     infoDict = {}
@@ -49,8 +69,29 @@ for line in fh:
     transId = infoDict.get("transcript_id")
     if transId is None:
         continue
-    transToGene[transId] = (infoDict["gene_id"], infoDict["gene_name"])
+    geneId = infoDict["gene_id"]
+    transToGene[transId] = infoDict["gene_id"]
+    geneToSym[geneId] = infoDict["gene_name"]
 
-for transId, (geneId, sym) in transToGene.iteritems():
-    row = [transId, geneId, sym]
-    print "\t".join(row)
+    geneToLocs[geneId].append( (chrom, start, end, transId, score, strand) )
+
+print("Writing output files")
+
+for transId, geneId in transToGene.iteritems():
+    row = [transId, geneId]
+    transFh.write("\t".join(row))
+    transFh.write("\n")
+
+for geneId, sym in geneToSym.iteritems():
+    row = [geneId, sym]
+    symFh.write("\t".join(row))
+    symFh.write("\n")
+
+for geneId, bedRows in geneToLocs.iteritems():
+    bedRows.sort(key=lambda x: x[2]-x[1], reverse=True) # sort by length
+    row = list(bedRows[0]) # take longest
+    row[3] = geneId
+    #sym = geneToSym[geneId]
+    row = [str(x) for x in row]
+    bedFh.write("\t".join(row))
+    bedFh.write("\n")

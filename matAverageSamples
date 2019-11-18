@@ -1,0 +1,112 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, gzip
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# === command line interface, options and help ===
+parser = optparse.OptionParser("usage: %prog [options] sampleAssignment inMatrix outMatrix - given expression matrix with genes as the rows and tab-sep file with (oldSampleName, newSampleName), create a new matrix with the average of the samples") 
+
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+#parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+#parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+(options, args) = parser.parse_args()
+
+if options.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+# ==== functions =====
+    
+def parseDict(fname):
+    " parse key-val tab-sep file "
+    lines = open(fname).read().splitlines()
+    lines = [l for l in lines if not l.startswith("#")]
+    rows = [l.split("\t") for l in lines]
+    rows = [(r[0], r[1]) for r in rows]
+    rows = rows[1:] # remove header line
+    oldToNew = dict(rows)
+    return oldToNew
+
+def groupSamples(oldToNew, matFname, outMatFname):
+    " create new matrix from matFname with averages of sample groups "
+    ofh = open(outMatFname, "wb")
+    outSamples = sorted(set(oldToNew.values()))
+
+    # prefix with "cluster", if all output names are just numbers
+    outHeaders = tuple(outSamples)
+    isAllNum = True
+    for h in outHeaders:
+        if not h.isdigit():
+            isAllNum = False
+            break
+    if isAllNum:
+        outHeaders = ["cluster_"+h for h in outHeaders]
+
+    line1 = "#geneId\t" + "\t".join(outHeaders)
+    ofh.write(line1+"\n")
+
+    fieldCount = None
+    inFields = None
+
+    if matFname.endswith(".gz"):
+        ifh = gzip.open(matFname)
+    else:
+        ifh = open(matFname)
+
+    for i, line in enumerate(ifh):
+        if i%1000==0:
+            logging.info("%d genes done" % i)
+        row = line.rstrip("\n").split("\t")
+        if i==0:
+            inSamples = row[1:]
+            # make sure that samples in the map are the same as the samples in the matrix
+            mapInSamples = set(oldToNew.keys())
+            if not(mapInSamples == set(inSamples)):
+                logging.warn("mapping file has %d keys, but input matrix has %d samples" % \
+                        (len(mapInSamples), len(set(inSamples))))
+            # create an array that points from the in sample index to the out sample index
+            oldToNewIndex = []
+            # create an array that contains the number of out samples, for every in sample index
+            sampleCounts = [0]*len(outSamples)
+            for i, inSample in enumerate(inSamples):
+                if inSample not in oldToNew:
+                    newIndex = None
+                else:
+                    newIndex = outSamples.index(oldToNew[inSample])
+                    sampleCounts[newIndex] += 1
+                oldToNewIndex.append( newIndex )
+            continue
+
+        geneId = row[0]
+
+        sums = [0]*len(outSamples)
+        for i, val in enumerate(row[1:]):
+            newIndex = oldToNewIndex[i]
+            if newIndex is not None:
+                sums[newIndex] += float(val)
+
+        # take the average
+        sums = [s/c for s, c in zip(sums, sampleCounts)]
+        sums = ["%.3g"%x for x in sums]
+
+        ofh.write(geneId)
+        ofh.write("\t")
+        ofh.write("\t".join(sums))
+        ofh.write("\n")
+
+    print "Wrote %s" % ofh.name
+
+# ----------- main --------------
+if args==[]:
+    parser.print_help()
+    exit(1)
+
+mapFname, inMatFname, outFname = args
+#if options.test:
+    #logging.debug("test is set")
+    #f = open(options.file, "r")
+oldToNew = parseDict(mapFname)
+
+groupSamples(oldToNew, inMatFname, outFname)
+

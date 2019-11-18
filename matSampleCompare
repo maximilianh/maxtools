@@ -1,0 +1,206 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, subprocess, gzip, string
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+import scipy.stats
+
+import numpy as np
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] matrix1 matrix2 - given two different expression matrices, output the correlations between all samples from matrix1 against all samples from matrix2")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("", "--transFile", dest="transFile", action="store", help="the text file with the mapping transcript-gene-symbol (sym is not used), one per line. default %default", default="/hive/data/outside/gencode/release_22/transToGene.tab")
+    parser.add_option("", "--vals", dest="vals", action="store", help="write the homogenized matrix to this file")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def wccount(filename):
+    " get line count of file "
+    # from https://gist.github.com/zed/0ac760859e614cd03652
+    out = subprocess.Popen(['wc', '-l', filename],
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT
+                         ).communicate()[0]
+    return int(out.partition(b' ')[0])
+
+def loadMatrix(fname):
+    logging.info("Parsing %s" % fname)
+    ifh = open(fname)
+    headers = ifh.readline().rstrip("\n").split("\t")
+    sampleNames = headers[1:]
+
+    dtArr = [str]
+    for s in sampleNames:
+        dtArr.append(float)
+
+    mat = np.genfromtxt(fname, dtype=dtArr, names=True)
+    logging.info("Done reading %s" % fname)
+
+    npyFname = fname+".npy"
+    logging.info("Writing%s" % npyFname)
+    ofh = open(npyFname, "wb+")
+    np.save(npyFname, mat, allow_pickle=False)
+
+def parseMatrixIndexBySample(fname, anyToSym, onlyGenesSet, onlyGenes, valFh):
+    " parse a matrix into memory, return as a dict sample -> numpy array of genes "
+    logging.info("Parsing %s" % fname)
+    ifh = open(fname)
+    headers = ifh.readline().rstrip("\n").split("\t")
+    sampleNames = headers[1:]
+    logging.info("%d sample names" % len(sampleNames))
+    sampleCount = len(sampleNames)
+
+    # use/create a cache the count of genes to get some little bit of speed
+    #countFname = fname+".geneCount"
+    #if isfile(countFname):
+        #geneCount = int(open(countFname).read().rstrip("\n"))
+    #else:
+        #geneCount = wccount(fname)-1
+        #open(countFname, "w").write(str(geneCount))
+
+    #sampleArrs = [np.empty(geneCount, dtype="i") for x in sampleNames]
+    sampleDicts = []
+    for s in sampleNames:
+        sampleDicts.append({})
+
+    ignGenes = []
+    for i, line in enumerate(ifh):
+        #if (i % 1000)==0:
+            #logging.info("read %d genes..." % i)
+
+        row = line.rstrip().split("\t")
+        geneId = row[0]
+        geneId = geneId.split(".")[0]
+        sym = anyToSym.get(geneId)
+        if sym is None:
+            ignGenes.append(geneId)
+            continue
+        if sym not in onlyGenesSet:
+            ignGenes.append(geneId)
+            continue
+
+        vals = [float(x) for x in row[1:]]
+        assert(len(vals)==sampleCount)
+        # dumb and stupid slow... 
+        for val, sampleDict in zip(vals, sampleDicts):
+            sampleDict[sym]=val
+
+
+    logging.info("Skipped %d genes that were not found in gene mapping file or in second matrix, e.g. %s" % (len(ignGenes), ", ".join(ignGenes[:10])))
+
+    if valFh:
+        valFh.write("genes %s\n" % (",".join(onlyGenes)))
+
+    ret = {}
+    assert(len(sampleNames)==len(sampleDicts))
+    for sampleName, symToVal in zip(sampleNames, sampleDicts):
+        logging.info("rearranging %s" % sampleName)
+        orderedVals = []
+        for sym in onlyGenes:
+            orderedVals.append(symToVal[sym])
+        #sortedVals = useRanks(sortedVals)
+        ranks = scipy.stats.rankdata(orderedVals)
+        ret[sampleName] = ranks
+
+        if valFh:
+            valFh.write("%s %s\n" % (sampleName, ",".join([str(x) for x in orderedVals])))
+
+    return ret
+
+def parseGenes(fname, stripDot=True, notEnsembl=False):
+    """ open (gzip) file with trans-gene-symbol, one per line and return as dict 
+    trans/gene/symbol -> symbol. strips version IDs.
+    """
+    if fname.endswith(".gz"):
+        ifh = gzip.open(fname)
+    else:
+        ifh = open(fname)
+
+    ret = {}
+    for line in ifh:
+        if line.startswith("#") or line.startswith("transcriptId"):
+            continue
+        fs = line.rstrip("\n").split()
+        transId = fs[0]
+        geneId = fs[1]
+        sym = fs[2]
+        assert(notEnsembl or ("T" in transId)) # Ensembl transcript identifiers always have a T in them
+        assert(notEnsembl or ("G" in geneId))  # Ensembl gene identifiers always have a G in them
+        if stripDot:
+            transId = transId.split('.')[0]
+            geneId = geneId.split('.')[0]
+        ret[transId] = sym
+        ret[geneId] = sym
+        ret[sym] = sym
+    return ret
+
+def parseMatrixGenes(fname, anyToSym):
+    logging.info("Parsing %s to get genes" % fname)
+    ifh = open(fname)
+    ifh.readline()
+
+    allSyms = []
+    skipCount = 0
+    for i, line in enumerate(ifh):
+        geneId, rest = string.split(line, "\t", 1)
+        geneId = geneId.split(".")[0]
+        sym = anyToSym.get(geneId)
+        if sym is None:
+            skipCount += 1
+            continue
+        allSyms.append(sym)
+    allSyms = tuple(allSyms)
+    logging.info("Found %d genes, could not map %d genes to symbols and they were skipped" % (len(allSyms), skipCount))
+    return allSyms
+
+        
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+    fname1, fname2 = args
+    transFile = options.transFile
+    anyToSym = parseGenes(transFile)
+
+    genes1 = parseMatrixGenes(fname1, anyToSym)
+    genes2 = parseMatrixGenes(fname2, anyToSym)
+    commonSymSet = set(genes1).intersection(genes2)
+    logging.info("Using only %d common genes as symbols" % len(commonSymSet))
+    commonSyms = sorted(commonSymSet)
+
+    valFh = None
+    if options.vals:
+        valFh = open(options.vals, "w")
+        logging.info("Writing compared values to %s" % options.vals)
+
+    mat1 = parseMatrixIndexBySample(fname1, anyToSym, commonSymSet, commonSyms, valFh)
+    mat2 = parseMatrixIndexBySample(fname2, anyToSym, commonSymSet, commonSyms, valFh)
+
+    for sampleName1, vec1 in mat1.iteritems():
+        for sampleName2, vec2 in mat2.iteritems():
+            assert(len(vec1)==len(vec2))
+            corr, pVal = scipy.stats.pearsonr(vec1, vec2)
+            row = [sampleName1, sampleName2, corr, pVal]
+            row = [str(x) for x in row]
+            print "\t".join(row)
+
+    #mat1 = loadMatrix(fname1)
+    #mat1 = loadMatrix(fname2)
+
+
+main()

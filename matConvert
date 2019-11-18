@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, subprocess, string, gzip
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+import numpy as np
+from scipy.io import savemat, loadmat
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] inMat.tsv outMat.mat - convert tab-sep matrix to matlab format")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("-i", "--int", dest="int", action="store_true", help="assume integer data in the matrix, default is float")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def parseMatrix(fname, isInt=False):
+    " return the matrix[geneIdx][sampleIdx] and the geneIds and sampleNames "
+    dataType = np.dtype('float64') # double
+    if isInt:
+        logging.info("Data type is integer")
+        dataType = np.dtype('uint32') # unsigned integer 32 bit
+
+    logging.info("Parsing %s" % fname)
+    ifh = open(fname)
+
+    headers = ifh.readline().rstrip("\n").split("\t")
+    sampleNames = headers[1:]
+    sampleCount = len(sampleNames)
+
+    rows = []
+    geneIds = []
+    for geneIdx, line in enumerate(ifh):
+        if (geneIdx % 1000)==0:
+            logging.info("read %d genes..." % geneIdx)
+            #if geneIdx>2000:
+                #break
+
+        geneId, valStr = string.split(line.rstrip(), "\t", 1)
+        row = np.fromstring(valStr, sep="\t", dtype=dataType, count=sampleCount)
+        rows.append(row)
+        geneIds.append(geneId)
+
+    logging.info("Creating a matrix in memory")
+    mat = np.concatenate(rows)
+
+    return mat, geneIds, sampleNames
+
+def writeMatlab(mat, geneIds, sampleNames, outFname):
+    if outFname.endswith(".gz"):
+        ofh = gzip.open(outFname, "wb")
+    else:
+        ofh = open(outFname, "wb")
+
+    logging.info("Writing matlab matrix to %s" % ofh.name)
+    geneIds = np.array(geneIds)
+    sampleNames = np.array(sampleNames)
+
+    data = {"matrix" : mat, "geneIds" : geneIds, "sampleNames" : sampleNames}
+    savemat(ofh, mdict=data)
+
+def writeNpy(mat, geneIds, sampleNames, fname):
+    " write our own matrix format "
+    idxFname = fname+".index"
+    logging.info("Writing %s" % idxFname)
+    shapeLine = "%d %d" % (len(geneIds), len(sampleNames))
+    typeLine = mat.dtype.char
+    geneLine = ",".join(geneIds)
+    sampleLine = ",".join(sampleNames)
+
+    ofh = open(idxFname, "wb")
+
+    ofh.write(shapeLine)
+    ofh.write("\n")
+    ofh.write(typeLine)
+    ofh.write("\n")
+    ofh.write(geneLine)
+    ofh.write("\n")
+    ofh.write(sampleLine)
+    ofh.write("\n")
+    ofh.close()
+
+    logging.info("Writing %s" % fname)
+    fp = np.memmap(fname, dtype=mat.dtype, mode='w+', shape=mat.shape)
+    fp[:] = mat[:]
+    del fp
+
+def convertMatrix(fname, outFname, isInt):
+    mat, geneIds, sampleNames = parseMatrix(fname, isInt)
+
+    if fname.replace(".gz","").endswith(".mat"):
+        writeMatlab(mat, geneIds, sampleNames, outFname)
+    else:
+        writeNpy(mat, geneIds, sampleNames, outFname)
+
+
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+    inFname = args[0]
+    outFname = args[1]
+    convertMatrix(inFname, outFname, options.int)
+
+main()

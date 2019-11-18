@@ -1,5 +1,12 @@
 import logging, os, sys, tempfile, csv, collections, types, codecs, gzip, \
-    os.path, re, glob, time, urllib2, doctest, httplib, socket, StringIO, subprocess, shutil, atexit
+    os.path, re, glob, time, doctest, socket, subprocess, shutil, atexit
+try:
+    from urllib2 import urlopen
+    from StringIO import StringIO
+except:
+    from urllib.request import urlopen
+    from io import StringIO
+
 from types import *
 from os.path import isfile, isdir
 from collections import defaultdict
@@ -207,7 +214,7 @@ def nextRow(inFile, encoding="utf", fieldSep="\t"):
             fields = [f.decode(encoding) for f in fields]
         try:
             rec = Record(*fields)
-        except Exception, msg:
+        except(Exception, msg):
             logging.error("Exception occured while parsing line, %s" % msg)
             logging.error("Filename %s" % fh.name)
             logging.error("Line was: %s" % line)
@@ -217,7 +224,7 @@ def nextRow(inFile, encoding="utf", fieldSep="\t"):
         # convert fields to correct data type
         yield rec
 
-def iterTsvRows(inFile, headers=None, format=None, noHeaderCount=None, fieldTypes=None, encoding="utf8", fieldSep="\t", isGzip=False, skipLines=None, makeHeadersUnique=False, commentPrefix=None):
+def iterTsvRows(inFile, headers=None, format=None, noHeaderCount=None, fieldTypes=None, encoding=None, fieldSep="\t", isGzip=False, skipLines=None, makeHeadersUnique=False, commentPrefix=None):
     """ 
         parses tab-sep file with headers as field names 
         yields collection.namedtuples
@@ -275,6 +282,14 @@ def iterTsvRows(inFile, headers=None, format=None, noHeaderCount=None, fieldType
         headers = line1.split(fieldSep)
         headers = [re.sub("[^a-zA-Z0-9_]","_", h) for h in headers]
 
+    newHeaders = []
+    for i, h in enumerate(headers):
+        if h=="":
+            newHeaders.append("col"+str(i))
+        else:
+            newHeaders.append(h)
+    headers = newHeaders
+
     if makeHeadersUnique:
         newHeaders = []
         headerNum = defaultdict(int)
@@ -302,7 +317,7 @@ def iterTsvRows(inFile, headers=None, format=None, noHeaderCount=None, fieldType
             fields = [f(x) for f, x in zip(fieldTypes, fields)]
         try:
             rec = Record(*fields)
-        except Exception, msg:
+        except(Exception, msg):
             logging.error("Exception occured while parsing line, %s" % msg)
             logging.error("Filename %s" % fh.name)
             logging.error("Line was: %s" % line)
@@ -367,8 +382,8 @@ def iterTsvJoin(files, **kwargs):
 
     return:
         yield tuples (groupId, [file1Recs, file2Recs])
-    >>> f1 = StringIO.StringIO("id\ttext\n1\tyes\n2\tunpaired middle\n3\tno\n5\tnothing either\n")
-    >>> f2 = StringIO.StringIO("id\ttext\n0\tnothing\n1\tvalid\n3\tnot valid\n")
+    >>> f1 = StringIO("id\ttext\n1\tyes\n2\tunpaired middle\n3\tno\n5\tnothing either\n")
+    >>> f2 = StringIO("id\ttext\n0\tnothing\n1\tvalid\n3\tnot valid\n")
     >>> files = [f1, f2]
     >>> list(iterTsvJoin(files, groupFieldNumber=0))
     [(1, [[tsvRec(id='1', text='yes')], [tsvRec(id='1', text='valid')]]), (3, [[tsvRec(id='3', text='no')], [tsvRec(id='3', text='not valid')]])]
@@ -478,7 +493,7 @@ class ProgressMeter:
             sys.stderr.flush()
         self.i += count
         if self.i==self.taskCount:
-            print ""
+            print("")
 
 def test():
     pm = ProgressMeter(2000)
@@ -532,8 +547,8 @@ def retryHttpRequest(url, params=None, repeatCount=15, delaySecs=120, userAgent=
             #ret = urllib2.urlopen(url, params, 20)
         except urllib2.HTTPError as ex:
             count = handleEx(ex, count)
-        except httplib.HTTPException as ex:
-            count = handleEx(ex, count)
+        #except httplib.HTTPException as ex:
+            #count = handleEx(ex, count)
         except urllib2.URLError as ex:
             count = handleEx(ex, count)
         except socket.timeout as ex:

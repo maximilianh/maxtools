@@ -1,3 +1,4 @@
+#!/cluster/software/bin/python2.7
 #!/usr/bin/env python
 
 import logging, sys, optparse, gzip
@@ -6,7 +7,7 @@ from os.path import join, basename, dirname, isfile
 import itertools
 import re, unicodedata, string
 
-import pandas as pd
+#import pandas as pd
 import numpy as np
 
 from scipy.stats.stats import pearsonr
@@ -20,6 +21,7 @@ def parseArgs():
     parser = optparse.OptionParser("usage: %prog [options] inFname outFname - given a tab-sep matrix with headers and row names, do an all-against-all correlation, for all rows")
 
     parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("", "--both", dest="both", action="store_true", help="By default, only (a,b), not (b,a) is calculated. This option suppresses the check and calculates both directions. Only makes sense if --targetGenes is set.")
     parser.add_option("-t", "--targetGenes", dest="targetGenes", action="store", help="do only correlations of a gene against all genes. Input is a list of geneIDs, one per line.")
     parser.add_option("", "--syms", dest="symTable", action="store", help="annotate genIds with symbols, default %default", default="/cluster/home/max/projects/cirm/tsneViewer/static/gencode22.ens79-80.tab")
     #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
@@ -62,7 +64,7 @@ def parseMatrix(inFname):
         i += 1
     return sampleIds, rows
 
-def corrMat(mat, targetGenes):
+def corrMat(mat, targetGenes, doBoth):
     """ yield tuples with the correlation for every target gene against all rows of matrix (=dict of string -> numpy array) """
     allGenes = sorted(mat.keys())
     #for g1 in ["ENSG00000257986"]:
@@ -87,27 +89,25 @@ def corrMat(mat, targetGenes):
     #combs = list(itertools.combinations(allGenes, 2))
     #logging.info("Doing %d comparisons" % len(combs))
 
-    if targetGenes is None:
-        targetGenes = allGenes
-        # do every pair only once
-        symmetric = True
-    else:
-        # we need all pairs
-        symmetric = False
-        logging.info("User supplied %d target genes" % len(targetGenes))
+    onlyOnePair = True
+
+    # we need all pairs
+    if doBoth:
+        onlyOnePair = False
+    logging.info("User supplied %d target genes" % len(targetGenes))
 
     #for g1, g2 in itertools.combinations(allGenes, 2):
     for g1 in targetGenes:
         logging.info("Comparing gene %s against %d other genes" % (g1, len(allGenes)))
         for g2 in allGenes:
-            if symmetric and g1>=g2:
+            if onlyOnePair and g1>=g2:
                 continue
             v1 = mat[g1]
             v2 = mat[g2]
             coeff, pVal = pearsonr(v1, v2)
             if np.isnan(coeff):
                 continue
-            if pVal > 0.05:
+            if pVal > 1e-09:
                 continue
             #dist = scipy.spatial.distance.jaccard(v1, v2)
             row = (g1, g2, coeff, pVal)
@@ -234,7 +234,7 @@ def matCorrelate(inFname, outFname, options):
     #ofh.write("gene1\tgene2\tcorrelation\tpVal\tjaccardDist\n")
     ofh.write("gene1\tgene2\tcorrelation\tpVal\n")
 
-    for row in corrMat(mat, targetGenes):
+    for row in corrMat(mat, targetGenes, options.both):
         row = [str(x) for x in row]
         if geneToSym is not None:
             row[0] = row[0]+"/"+geneToSym.get(row[0], "NoSym?")

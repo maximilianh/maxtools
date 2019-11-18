@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] inFname outFname - remove all columns from tab file that have only a single value")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def tabRemoveEmptyCols(inFname, outFname):
+
+    ifh = open(inFname)
+    headLine = ifh.readline() # remove headers line
+    headers = headLine.rstrip("\n").split("\t")
+
+    colCounts = []
+    for i in range(len(headLine.split("\t"))):
+        colCounts.append(  defaultdict(int) )
+
+    rows = []
+    rows.append(headers)
+    for line in ifh:
+        row = line.rstrip("\n").split("\t")
+        rows.append(row)
+        for i, val in enumerate(row):
+            colCounts[i][val]+=1
+
+    keepCols = set()
+    for idx, colVals in enumerate(colCounts):
+        if len(colVals)>1:
+            keepCols.add(idx)
+        else:
+            print("Removing column %s. Only value:  %s" % (headers[idx], colVals.keys()[0]))
+
+    ofh = open(outFname, "w")
+
+    for row in rows:
+        newRow = []
+        for i, val in enumerate(row):
+            if i in keepCols:
+                newRow.append(val)
+        ofh.write("\t".join(newRow))
+        ofh.write("\n")
+
+    ofh.close()
+
+
+
+
+    
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    inFname, outFname = args
+    tabRemoveEmptyCols(inFname, outFname)
+
+main()

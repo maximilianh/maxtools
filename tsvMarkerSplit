@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# split a tsv table into many small files, named by the first field
+
 import logging, sys, optparse
 from collections import defaultdict
 from os.path import join, basename, dirname, isfile
@@ -8,7 +10,7 @@ from os.path import join, basename, dirname, isfile
     
 def parseArgs():
     " setup logging, parse command line arguments and options. -h shows auto-generated help page "
-    parser = optparse.OptionParser("usage: %prog [options] filename")
+    parser = optparse.OptionParser("usage: %prog [options] filename outDir - split a tsv (tab) file into small files, named by the first field")
 
     parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
     #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -21,20 +23,36 @@ def parseArgs():
 
     if options.debug:
         logging.basicConfig(level=logging.DEBUG)
-        logging.getLogger().setLevel(logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
-        logging.getLogger().setLevel(logging.INFO)
-
     return args, options
 # ----------- main --------------
 def main():
     args, options = parseArgs()
 
-    filename = args[0]
-    print filename
-    #if options.test:
-        #logging.debug("test is set")
-        #f = open(options.file, "r")
+    filename, outDir = args
+
+    ifh = open(filename)
+
+    headers = ifh.readline().rstrip("\n").split('\t')
+    otherHeaders = headers[1:]
+
+    data = defaultdict(list)
+    for line in ifh:
+        row = line.rstrip("\n").split('\t')
+        field1 = row[0]
+        otherFields = row[1:]
+        data[field1].append(otherFields)
+
+    for key, rows in data.iteritems():
+        outFname = join(outDir, key+".tsv")
+        print "Writing %s" % outFname
+        ofh = open(outFname, "w")
+        ofh.write("\t".join(otherHeaders))
+        ofh.write("\n")
+        for row in rows:
+            ofh.write("\t".join(row))
+            ofh.write("\n")
+        ofh.close()
 
 main()

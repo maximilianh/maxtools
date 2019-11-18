@@ -49,7 +49,7 @@ for line in openFile(filename2):
 # iterate over lines in file1
 fh = openFile(filename1)
 if not options.noHead:
-    print fh.readline(),
+    print(fh.readline()),
 
 for line in fh:
     line = line.strip("\n")
@@ -61,6 +61,6 @@ for line in fh:
         val = val[:options.len]
         
     if not options.invert and val in filterVals:
-        print line
+        print(line)
     if options.invert and val not in filterVals:
-        print line
+        print(line)

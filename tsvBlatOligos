@@ -1,0 +1,167 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, os
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+import twobitreader # not found? -> pip2.7 install twobitreader
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename outFname - add rows to table with location and longer version of oligos in column X")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    parser.add_option("-c", "--col", dest="col", action="store", type="int", help="column with oligo, 0-based, default %default", default=1)
+    parser.add_option("", "--col2", dest="col2", action="store", type="int", help="column with 2nd part of oligo, 0-based, default %default", default=None)
+    parser.add_option("", "--nameCol", dest="nameCol", action="store", type="int", help="column with ologiName, 0-based, default %default", default=0)
+    parser.add_option("", "--db", dest="db", action="store", help="DB to blat on, default %default", default="hg19")
+    parser.add_option("-l", "--leftAdd", dest="leftAdd", action="store", help="how many nucleotides to add on the 5' side", default=1, type="int")
+    parser.add_option("-r", "--rightAdd", dest="rightAdd", action="store", help="how many nucleotides to add on 3' side", default=3, type="int")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def revComp(seq):
+    table = { "a":"t", "A":"T", "t" :"a", "T":"A", "c":"g", "C":"G", "g":"c", "G":"C", "N":"N", "n":"n", 
+            "Y":"R", "R" : "Y", "M" : "K", "K" : "M", "W":"W", "S":"S",
+            "H":"D", "B":"V", "V":"B", "D":"H", "y":"r", "r":"y","m":"k",
+            "k":"m","w":"w","s":"s","h":"d","b":"v","d":"h","v":"b","y":"r","r":"y" }
+    newseq = []
+    for nucl in reversed(seq):
+       newseq += table[nucl]
+    return "".join(newseq)
+
+def tsvMapOligos(inFname, outFname, options):
+    colIdx = options.col
+    col2Idx = options.col2
+    nameColIdx = options.nameCol
+    db = options.db
+    leftAdd = options.leftAdd
+    rightAdd = options.rightAdd
+
+    # write oligos to fasta file
+    tmpFaFname = "tsvBlatOligos.tmp.fa"
+    tempOfh = open(tmpFaFname, "w")
+    i = 0
+    allSeqs = set()
+    for line in open(inFname):
+        if line[0]!="#":
+            row = line.rstrip("\n").split("\t")
+            oligoSeq = row[colIdx]
+            if col2Idx != None:
+                oligoSeq += row[col2Idx]
+            seqId = "row%d" % i
+            tempOfh.write(">%s\n%s\n" % (seqId, oligoSeq))
+            allSeqs.add(seqId)
+        i+=1
+    tempOfh.close()
+    print "Wrote %d sequences to fasta file" % i
+
+    # run blat
+    tmpPslFname = "tsvBlatOligos.tmp.psl"
+    cmd = "blat -stepSize=3 -tileSize=11 -minMatch=1 -minScore=19 -repMatch=10000000 -maxIntron=0 -noHead /gbdb/%s/%s.2bit %s temp.psl" % (db, db, tmpFaFname)
+    print "running: "+cmd
+    assert(os.system(cmd)==0)
+    
+    cmd = "pslCDnaFilter temp.psl -minId=1.0 -minCover=1.0 -globalNearBest=0 %s " % (tmpPslFname)
+    print "running: "+cmd
+    assert(os.system(cmd)==0)
+
+    # parse psl file
+    foundSeqs = set()
+    qMatches = defaultdict(list)
+    for line in open(tmpPslFname):
+        row = line.rstrip("\n").split("\t")
+        matches, mismatches, repMatches, nCount, qNumInsert, qBaseInsert, tNumInsert, tBaseInsert, strand, qName, qSize, qStart, qEnd, tName, tSize, tStart, tEnd, blockCount, blockSizes, qStarts, tStarts = row
+        if mismatches!="0" or qNumInsert!="0" or qBaseInsert!="0":
+            print "Weird match: "," ".join(row)
+            continue
+        foundSeqs.add(qName)
+        qMatches[qName].append( (tName, int(tStart), int(tEnd), strand) )
+
+    print ("Found %d sequences in PSL file" % len(foundSeqs))
+    missSeqs = allSeqs - foundSeqs
+    if len(missSeqs)!=0:
+        #print("Warning: %d sequences were not found by BLAT" % len(missSeqs))
+        print("Warning: Not found by BLAT: %s" % ",".join(missSeqs))
+
+    # open 2bit file
+    twoBitFname = "/gbdb/%s/%s.2bit" % (db, db)
+    tbf = twobitreader.TwoBitFile(twoBitFname)
+    
+    # write to output file, adding position and extended sequence
+    ofh = open(outFname, "w")
+    for lineNo, line in enumerate(open(inFname)):
+        if line.startswith("#"):
+            i += 1
+            continue
+        qName = "row%d" % lineNo
+        i += 1
+        qHits = qMatches[qName]
+        if len(qHits)>1:
+            print("warning: %s has %d best hits: %s" % ("/".join(line.strip().split("\t")), len(qHits), qHits))
+        if len(qHits)==0:
+            print("warning: %s has no single hit" % (line))
+
+        row = line.rstrip("\n").rstrip("\t").split("\t")
+        if qHits==0:
+            row.extend(["notFound", "-", "-", "-", "-", "-"])
+        else:
+            chroms = []
+            starts = []
+            ends = []
+            strands = []
+            seqs = []
+            for chrom, start, end, strand in qHits:
+                chroms.append(chrom)
+                starts.append(str(start))
+                ends.append(str(end))
+                strands.append(strand)
+
+                if strand=="+":
+                    start = int(start) - leftAdd
+                    end   = int(end) +  rightAdd
+                else:
+                    start = int(start) - rightAdd
+                    end   = int(end) +  leftAdd
+
+                seq = tbf[chrom][start:end]
+                if strand=="-":
+                    seq = revComp(seq)
+                seqs.append(seq)
+
+            row.append(",".join(chroms))
+            row.append(",".join(starts))
+            row.append(",".join(ends))
+            row.append(",".join(strands))
+            row.append(",".join(seqs))
+
+        ofh.write("\t".join(row))
+        ofh.write("\n")
+
+    os.remove(tmpFaFname)
+    os.remove(tmpPslFname)
+
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    inFname, outFname = args
+    tsvMapOligos(inFname, outFname, options)
+    #if options.test:
+        #logging.debug("test is set")
+        #f = open(options.file, "r")
+
+main()

@@ -1,0 +1,96 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse, struct
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("usage: %prog [options] filename - convert coordinates to binary file for cluster cell browser. See ~/projects/cirm/tsneViewer/data/10xMegacell/analysis/tsne/2_components for an example.")
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    if args==[]:
+        parser.print_help()
+        exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    return args, options
+
+def writeTwoNumbers(ofh, x, y):
+    #ofh.write(struct.pack("<f", x))
+    #ofh.write(struct.pack("<f", y))
+    ofh.write(struct.pack("<H", x))
+    ofh.write(struct.pack("<H", y))
+
+
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    filename, outFname = args
+    
+    ifh = open(filename)
+    sep = "\t"
+    headers = ifh.readline().rstrip().split(sep)
+    xIdx = headers.index("x")
+    yIdx = headers.index("y")
+    minX, minY = 1000000,1000000
+    maxX, maxY = -1E6, -1E6
+    vals = []
+    for line in ifh:
+        row = line.rstrip("\n").split(sep)
+        x = float(row[xIdx])
+        y = float(row[yIdx])
+        minX = min(minX, x)
+        maxX = max(maxX, x)
+        minY = min(minY, y)
+        maxY = max(maxY, y)
+
+        vals.append((x,y))
+
+    spanX = maxX-minX
+    spanY = maxY-minY
+    pxVals = []
+    for x, y in vals:
+        pxX = int((x-minX)/spanX * 65535) # result must not be 65536
+        pxY = int((y-minY)/spanY * 65535)
+        pxVals.append( (pxX, pxY) )
+
+    ofh = open(outFname, "wb")
+
+    # write number of elements
+    elCount = len(vals)
+    writeTwoNumbers(ofh, elCount/65536, elCount%65536)
+    print "Count of (x,y) tuples: %d" % elCount
+    #elStr = struct.pack(">I", elCount)
+    #ofh.write(elStr)
+    #ofh.write(elStr)
+
+    # write min and max'es
+    print ("X min/max: %f, %f" % (minX, maxX))
+    print ("Y min/max: %f, %f" % (minY, maxY))
+
+    #writeTwoNumbers(ofh, minX, maxX)
+    #writeTwoNumbers(ofh, minY, maxY)
+    writeTwoNumbers(ofh, 0, 65535)
+    writeTwoNumbers(ofh, 0, 65535)
+
+    for x, y in pxVals:
+        writeTwoNumbers(ofh, x, y)
+
+    ofh.close()
+
+    #if options.test:
+        #logging.debug("test is set")
+        #f = open(options.file, "r")
+
+main()

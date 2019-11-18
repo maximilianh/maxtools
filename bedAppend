@@ -6,9 +6,9 @@ from os.path import join, basename, dirname, isfile
 import maxCommon
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = optparse.OptionParser("usage: %prog [options] bedFname tabFname tabNameFieldIdx outBed outAs - merge a bed file with a tab sep file on the name column and generate a auto sql file for it.") 
+parser = optparse.OptionParser("usage: %prog [options] bedFname tabFname tabNameFieldIdx outBed outAs - merge a bed file with a tab sep file on the name column and generate a auto sql file for it.")
 
-parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
+parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
 parser.add_option("-t", "--addTab", dest="addTab", action="store", help="add an additional tab file, first column is index field")
 parser.add_option("-f", "--fields", dest="fields", action="store", help="read the field names and descriptions from this file, one per line, space-separated")
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -20,7 +20,6 @@ if options.debug:
 else:
     logging.basicConfig(level=logging.INFO)
 # ==== FUNCTIONs =====
-    
 asHead = """table bed
 "Browser extensible data (<=12 fields) "
     (

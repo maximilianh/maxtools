@@ -3,6 +3,7 @@
 from sys import *
 from optparse import OptionParser
 import logging
+from maxCommon import *
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = OptionParser("usage: %prog [options] replaceFile columnIndexOrName tableFile - replace values in a column with values from a 2nd <oldVal>tab<newVal>-file") 
@@ -10,8 +11,9 @@ parser = OptionParser("usage: %prog [options] replaceFile columnIndexOrName tabl
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
-parser.add_option("", "--headers", dest="headers", action="store_true", help="use headers in tabfile", default=False) 
+#parser.add_option("", "--headers", dest="headers", action="store_true", help="use headers in tabfile", default=False) 
 parser.add_option("", "--inverse", dest="inverse", action="store_true", help="inverse key, value columns order") 
+parser.add_option("-n", "--name", dest="isName", action="store_true", help="second argument is a field name, not the field index") 
 parser.add_option("-s", "--skip", dest="skip", action="store_true", help="skip lines without replacement values") 
 #parser.add_option("", "--integers", dest="integers", action="store_true", help="assume that replacement values are all integers and use an array for the replacement (a lot faster)") 
 (options, args) = parser.parse_args()
@@ -38,7 +40,7 @@ if args==[]:
     parser.print_help()
     exit(1)
 
-headers = options.headers
+#headers = options.headers
 inverse = options.inverse
 
 replaceFilename, field, tableFilename = args
@@ -46,17 +48,23 @@ logging.info("Reading replace values...\n")
 replaceValues = parseDict(replaceFilename, options.inverse)
 
 tableFile = open(tableFilename)
-if not headers:
-    fileType="numColumns"
-else:
-    fileType=None
+#if headers:
+    #fileType=None
+#else:
+    #fileType="numColumns"
 
 lineNo = 0
-for row in tp.iterTsvRows(tableFilename):
-    key = row._asdict().get(field, None)
-    if key==None:
-        logging.error("field named %s not found in headers %s" % (field, row))
-        exit(1)
+for row in iterTsvRows(tableFilename):
+    if lineNo==0:
+        print("\t".join(row._fields))
+
+    if options.isName:
+        key = row._asdict().get(field, None)
+        if key==None:
+            logging.error("field named %s not found in headers %s" % (field, row))
+            exit(1)
+    else:
+        key = row[int(field)]
 
     if key in replaceValues:
         replaceValue = replaceValues[key]
@@ -66,8 +74,13 @@ for row in tp.iterTsvRows(tableFilename):
         if options.skip:
             continue
 
-    replDict = {}
-    replDict[field]=replaceValue
-    row = row._replace(**replDict)
-    print "\t".join(row)
+    if options.isName:
+        replDict = {}
+        replDict[field]=replaceValue
+        row = row._replace(**replDict)
+    else:
+        row = list(row)
+        row[int(field)] = replaceValue
+
+    print("\t".join(row))
     lineNo+=1
