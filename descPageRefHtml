@@ -84,7 +84,7 @@ def formatHtml(pmid):
         artData["pmcHtml"] = ""
 
     html = """
-    <p>%(authors)s. <a href="http://dx.doi.org/%(doi)s" target="_blank">
+    <p>%(authors)s. <a href="https://doi.org/%(doi)s" target="_blank">
     %(title)s</a>. <em>%(journal)s</em>. %(year)s %(volume)s%(issue)s:%(page)s.
     PMID: <a href="http://www.ncbi.nlm.nih.gov/pubmed/%(pmid)s" target="_blank">%(pmid)s</a>; %(pmcHtml)s </p>
     """ % artData
