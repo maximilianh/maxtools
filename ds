@@ -1,0 +1,86 @@
+#!/usr/bin/env python
+
+import logging, sys, optparse
+from collections import defaultdict
+from os.path import join, basename, dirname, isfile, expanduser
+import os
+
+# ==== functions =====
+    
+def parseArgs():
+    " setup logging, parse command line arguments and options. -h shows auto-generated help page "
+    parser = optparse.OptionParser("""usage: %prog [options] filename - manage my directory stack
+            %prog add - add current directory
+            %prog list - list all directories
+            %prog rm <idx> - remove a directory
+            %prog go <idx> - go a directory
+            """)
+
+    parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages")
+    #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
+    #parser.add_option("", "--test", dest="test", action="store_true", help="do something") 
+    (options, args) = parser.parse_args()
+
+    #if args==[]:
+        #parser.print_help()
+        #exit(1)
+
+    if options.debug:
+        logging.basicConfig(level=logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger().setLevel(logging.INFO)
+
+    return args, options
+# ----------- main --------------
+def main():
+    args, options = parseArgs()
+
+    fname = expanduser("~/.directories")
+
+    if len(args)>0:
+        cmd = args[0]
+    else:
+        cmd = "l"
+
+    if cmd[0]=='a':
+        fh = open(fname, "a")
+
+        dirName = os.getcwd()
+        fh.write(dirName)
+        if len(args)>1:
+            name = args[1]
+            fh.write("\t"+name)
+        fh.write("\n")
+        fh.close()
+
+    elif cmd[0]=='g':
+        idx = int(args[1])
+        fh = open(fname)
+        for i, line in enumerate(fh):
+            if i!=idx:
+                pass
+                # write cd to bashrc and run bash ?
+
+    elif cmd[0]=='l':
+        fh = open(fname)
+        for i, line in enumerate(fh):
+            print(str(i)+" : "+line.rstrip("\n"))
+
+    elif cmd[0]=='r':
+        delIdx = int(args[1])
+        dirs = []
+        fname2 = fname+".tmp"
+        fh = open(fname)
+        ofh = open(fname2, "w")
+        for i, line in enumerate(fh):
+            if i!=delIdx:
+                ofh.write(line)
+        ofh.close()
+        os.rename(fname2, fname)
+
+    else:
+        print("Unknown command: ", repr(cmd))
+
+main()
