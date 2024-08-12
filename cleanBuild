@@ -2,13 +2,22 @@
 
 unsetenv COPT
 
-set cloneDir = `mktemp -d $TMPDIR/cleanBuild.$USER.XXXXXX`
-chmod 775 $cloneDir
+set TMPDIR = /scratch/tmp/max/
+set cloneDir = $TMPDIR/kent
+#chmod 775 $cloneDir
+mkdir -p $TMPDIR
 
+cd $TMPDIR
+if ( -f $cloneDir/README ) then
+   cd $cloneDir
+   git pull
+else
+   git clone /cluster/home/max/kent/ $cloneDir
+endif
 pushd $cloneDir
-git clone ~/kent/.git
-cd kent/src
-make -j10 > /dev/null
+
+cd src
+make -j50 > /dev/null
 make test > /dev/null
 popd
-rm -rf $cloneDir
+#rm -rf $cloneDir

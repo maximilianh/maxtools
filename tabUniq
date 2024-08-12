@@ -12,6 +12,7 @@ parser = OptionParser("usage: %prog [options] filename filename ... - print line
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 parser.add_option("-c", "--count", dest="count", action="store_true", help="add count") 
 parser.add_option("-s", "--sort", dest="sort", action="store_true", help="add count and sort") 
+parser.add_option("-S", "--sortRev", dest="sortRev", action="store_true", help="add count and reverse-sort") 
 parser.add_option("-r", "--ratio", dest="ratio", action="store_true", help="add count and ratio and sort")
 parser.add_option("", "--minCount", dest="minCount", action="store", type="int", help="output only with at least these many counts", default=None)
 parser.add_option("", "--maxCount", dest="maxCount", action="store", type="int", help="output only with no more than these many counts", default=None)
@@ -81,10 +82,12 @@ values = values.items()
 
 if options.sort or options.ratio:
     values.sort(key=operator.itemgetter(-1))
+if options.sortRev:
+    values.sort(key=operator.itemgetter(-1), reverse=True)
 
 for key, count in values:
     row = list(key)
-    if options.count or options.sort or options.ratio:
+    if options.count or options.sort or options.ratio or options.sortRev:
         row.append(str(count))
         if options.ratio:
             row.append("%0.3f%%" % (100*float(count)/lineCount))

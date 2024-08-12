@@ -16,4 +16,5 @@ curl -s -o "$file" -z "$file.time" "$uri"
 if [[ "$file" -nt "$file.time" ]]
 then
     printf "File $file has been updated.\n"
+    /hive/data/genomes/wuhCor1/bed/uniprot/doUpdate.sh
 fi

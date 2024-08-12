@@ -2,8 +2,10 @@
 
 from sys import *
 from optparse import OptionParser
-import logging, maxbio
+from os.path import join, dirname
+path.append(join(dirname(__file__), "lib"))
 
+import logging, maxbio
 possChars = set("ACDEFGHIKLMNPQRSTVWYBXZJUO")
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===

@@ -190,7 +190,7 @@ def makeBb(headers, rows, bbFname):
                 oc = "<a target=_blank href='%s'>%s</a>" % (oc, oc)
             newRow.append(oc[:MAXFIELDLEN])
 
-        newRow = [str(x) for x in newRow]
+        newRow = [str(x).replace("\n", " ").replace("\r", " ") for x in newRow]
 
         bedFh.write("\t".join(newRow))
         bedFh.write("\n")
@@ -199,11 +199,13 @@ def makeBb(headers, rows, bbFname):
 
     bbTmp = bbFname+".tmp"
     cmd = ["bedToBigBed", "-tab", "-type=bed9+", "-as="+asFname, bedFname, chromSizes, bbTmp]
+    logging.debug(" ".join(cmd))
+    cmdStr = " ".join(cmd)
 
     fnull = open(os.devnull, 'w')
     proc = subprocess.run(cmd, stderr=fnull)
     if proc.returncode != 0:
-        print("could not convert to bigBed")
+        print("could not convert to bigBed. Run %s and check the output" % cmdStr)
         sys.exit(1)
 
     os.rename(bbTmp, bbFname)

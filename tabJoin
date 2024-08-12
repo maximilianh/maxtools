@@ -59,7 +59,7 @@ for line in openFile(filename2):
     lCount += 1
 
     if options.headerNames and lCount==1:
-        print line+"\t"+otherNames
+        print(line+"\t"+otherNames)
         continue
 
     fs = line.strip("\n").split('\t')
@@ -71,4 +71,4 @@ for line in openFile(filename2):
     else:
         otherLines = []
     for otherLine in otherLines:
-        print line+"\t"+otherLine
+        print(line+"\t"+otherLine)

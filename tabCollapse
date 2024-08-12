@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 import logging, sys, optparse
 from collections import defaultdict
@@ -61,10 +61,10 @@ for row in maxCommon.iterTsvRows(ifh, encoding="latin1", makeHeadersUnique=True)
     data[key] = valRow
 
 headerLine = "\t".join(headers)
-print headerLine
+print(headerLine)
 
 for key, fields in data.iteritems():
     newRow = []
     for fieldList in fields:
         newRow.append(sep.join(fieldList))
-    print (u'\t'.join(newRow)).encode("latin1")
+    print ('\t'.join(newRow))

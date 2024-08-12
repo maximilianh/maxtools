@@ -7,7 +7,12 @@ from os.path import join, basename, dirname, isfile
 import gzip, string
 
 # === command line interface, options and help ===
-parser = optparse.OptionParser("usage: %prog [options] inFile outBase - extract trans <-> gene -> <sym> info as tab from Gencode gtf file. Output files: <outBase>.symbols.tsv, <outBase>.transToGene.tsv, <outBase>.genes.bed")
+parser = optparse.OptionParser("""usage: %prog [options] inFile outBase - extract trans <-> gene -> <sym> info as tab from Gencode gtf file. Output files: <outBase>.symbols.tsv, <outBase>.transToGene.tsv, <outBase>.genes.bed
+
+Example:
+    cd /hive/data/outside/gencode
+    gtfToTransTab gencode.v28.annotation.gtf.gz release_28/release_28
+""")
 
 parser.add_option("-d", "--debug", dest="debug", action="store_true", help="show debug messages") 
 #parser.add_option("-f", "--file", dest="file", action="store", help="run on file") 
@@ -32,7 +37,7 @@ outBase = args[1]
 print("Parsing %s" % filename)
 
 if filename.endswith(".gz"):
-    fh = gzip.open(filename)
+    fh = gzip.open(filename, "rt")
 else:
     fh = open(filename)
 
@@ -62,7 +67,8 @@ for line in fh:
 
     infoDict = {}
     for info in infos:
-        tag, val = string.split(info, maxsplit=1)
+        #tag, val = string.split(info, maxsplit=1)
+        tag, _, val = info.partition(" ")
         val = val.strip('"')
         infoDict[tag] = val
 
@@ -77,20 +83,20 @@ for line in fh:
 
 print("Writing output files")
 
-for transId, geneId in transToGene.iteritems():
+for transId, geneId in transToGene.items():
     row = [transId, geneId]
     transFh.write("\t".join(row))
     transFh.write("\n")
 
-for geneId, sym in geneToSym.iteritems():
+for geneId, sym in geneToSym.items():
     row = [geneId, sym]
     symFh.write("\t".join(row))
     symFh.write("\n")
 
-for geneId, bedRows in geneToLocs.iteritems():
+for geneId, bedRows in geneToLocs.items():
     bedRows.sort(key=lambda x: x[2]-x[1], reverse=True) # sort by length
     row = list(bedRows[0]) # take longest
-    row[3] = geneId
+    row[3] = geneId.split(".")[0]
     #sym = geneToSym[geneId]
     row = [str(x) for x in row]
     bedFh.write("\t".join(row))

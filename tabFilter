@@ -3,7 +3,7 @@
 import logging, sys, optparse
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
-parser = optparse.OptionParser("usage: %prog [options] file1(big) column1 file2(small) [column2] - show only lines from file1 that have a value in column1 which appears in column2 in file2. column2 defaults to 0") 
+parser = optparse.OptionParser("usage: %prog [options] file1(big) column1 file2(small) [column2] - show only lines from file1 that have a value in column1 (0-based) which appears in column2 in file2. column2 defaults to 0") 
 
 #parser.add_option("-l", "--wordlength", dest="motiflength", action="store", help="length of word [default: %default, hexamers]", type="int", metavar="NUMBER", default="6") 
 #parser.add_option("-m", "--maf", dest="maf", action="store_true", help="force maf format [default: %default]", default=True) 
@@ -45,6 +45,7 @@ for line in openFile(filename2):
     if options.len:
         val = val[:options.len]
     filterVals.add(val)
+logging.info("Loaded %s filter values" % len(filterVals))
 
 # iterate over lines in file1
 fh = openFile(filename1)

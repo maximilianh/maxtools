@@ -5,6 +5,7 @@
 from sys import *
 from optparse import OptionParser
 import logging
+import gzip
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
 parser = OptionParser("usage: %prog [options] file1 otherFile1 otherFile2 ... - intersect lists, output all lines from file1 which contains a value that is also part of all otherFiles") 
@@ -81,7 +82,13 @@ otherFiles = args[1:]
 #set1 = set (list1)
 #inters = set1
 file1Lines = {}
-for line in open(f1):
+
+if not f1.endswith(".gz"):
+    ifh = open(f1)
+else:
+    ifh = gzip.open(f1)
+
+for line in ifh:
     fs = line.strip("\n").split(options.splitChar)
     if field < len(fs):
         f1Field = fs[field]

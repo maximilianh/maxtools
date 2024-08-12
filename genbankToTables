@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 import sys
 from optparse import OptionParser
@@ -48,7 +48,7 @@ def writeDict(fname, dict, valLimit):
     of.close()
     
 # RECORDS
-RecordInfo = collections.namedtuple("RecordInfo", "gi, accession, description, year, seqLen, organism, taxonId, seqVersion, clone, clone_lib, cell_line, cell_type, dev_stage, tissue_type, organelle, mol_type, isolate")
+RecordInfo = collections.namedtuple("RecordInfo", "accession, description, year, seqLen, organism, taxonId, seqVersion, clone, clone_lib, cell_line, cell_type, dev_stage, tissue_type, organelle, mol_type, isolate,country")
 
 RefInfo = collections.namedtuple("ReferenceInfo", "pmid, medlineId, authors, title, journal, comment")
 
@@ -77,7 +77,6 @@ def getRecordInfo(seq):
         annot = seq.annotations
         #accs = annot["accessions"]
         id = seq.id
-        gi = annot["gi"]
         seqLen = len(seq.seq)
         desc = seq.description
         #xrefs = seq.dbxrefs
@@ -86,6 +85,7 @@ def getRecordInfo(seq):
 
         # parse from source feature (the first one)
         clone, clone_lib, cell_line, cell_type, taxonId, dev_stage, tissue_type = "", "", "", "", "", "", ""
+        country = ""
         if  seq.features[0].type=="source":
             srcFt = seq.features[0]
             quals = srcFt.qualifiers
@@ -110,8 +110,10 @@ def getRecordInfo(seq):
             organelle = quals.get("organelle",[""])[0]
             mol_type = quals.get("mol_type",[""])[0]
             isolate = quals.get("isolate",[""])[0]
+            country = quals.get("country",[""])[0]
+            isolate = quals.get("isolate",[""])[0]
 
-        data = RecordInfo(str(gi), id, desc, year, str(seqLen), annot["organism"], taxonId, str(annot["sequence_version"]), clone, clone_lib, cell_line, cell_type, dev_stage, tissue_type, organelle, mol_type, isolate)
+        data = RecordInfo(id, desc, year, str(seqLen), annot["organism"], taxonId, str(annot["sequence_version"]), clone, clone_lib, cell_line, cell_type, dev_stage, tissue_type, organelle, mol_type, isolate, country)
         #print "\t".join(data)
         return data
 
@@ -143,14 +145,14 @@ class GiRefMap:
     def __init__(self):
         self.giRefMap = []
 
-    def add(self, gi, refId, refIdx):
-        self.giRefMap.append( (gi, refId, refIdx) )
+    def add(self, acc, refId, refIdx):
+        self.giRefMap.append( (acc, refId, refIdx) )
 
     def writeToFile(self, fname):
         sys.stderr.write("Writing record <-> ref links to %s\n" % fname)
         fh = open(fname, "w")
-        for gi, authorId, index in self.giRefMap:
-            fh.write(str(gi)+"\t"+str(authorId)+"\t"+str(index)+"\n")
+        for acc, authorId, index in self.giRefMap:
+            fh.write(acc+"\t"+str(authorId)+"\t"+str(index)+"\n")
         fh.close()
 
 def getRefInfo(ref):
@@ -234,7 +236,7 @@ else:
     taxonNames = None
 
 if os.path.isdir(inDir):
-    filenames = glob.glob(os.path.join(inDir, "*.seq"))
+    filenames = glob.glob(os.path.join(inDir, "*.seq.gz"))
 else:
     filenames = [inDir]
 
@@ -292,7 +294,7 @@ for filename in filenames:
                 refs.append(refInfo)
             else:
                 refId = refMap.getRefId(refInfo)
-                giRefMap.add(recInfo.gi, refId, refIdx)
+                giRefMap.add(id, refId, refIdx)
 
         if onlySubmitter:
             submitRef = findSubmitRef(refs)

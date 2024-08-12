@@ -38,9 +38,9 @@ else:
 header='http://%s/biomart/martservice?query=<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query virtualSchemaName = "default" header = "0"  %s datasetConfigVersion = "0.6" uniqueRows="1"><Dataset name = "%s" interface = "default" >' % (biomartServer, format, dataset)
 footer='</Dataset></Query>'
 
-attributes=[('<Attribute name = "%s" />' % attr) for attr in attributes]
+xmlAttrs=[('<Attribute name = "%s" />' % attr) for attr in attributes]
 
-url = header + "".join(attributes) + footer
+url = header + "".join(xmlAttrs) + footer
 url = url.replace(" ", "%20")
 
 stderr.write("Downloading data from Ensembl, dataset %s..." % dataset)
@@ -53,6 +53,9 @@ else:
         ofh = open(outfile, "a")
     else:
         ofh = open(outfile, "w")
+
+ofh.write("\t".join(attributes))
+ofh.write("\n")
 
 inCount = 0
 outCount= 0

@@ -4,7 +4,6 @@
 
 from sys import *
 from optparse import OptionParser
-import tabfile
 import logging
 
 # === COMMAND LINE INTERFACE, OPTIONS AND HELP ===
@@ -23,6 +22,97 @@ if options.debug:
     logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.INFO)
+
+def openSpec(fname, mode="r"):
+    """ open and return filehandle, open stdin if fname=="stdin", do nothing if none """
+    if fname=="stdin":
+        return sys.stdin
+    elif fname=="stdout":
+        return sys.stdout
+    elif fname=="none" or fname==None:
+        return None
+    else:
+        return open(fname, mode)
+
+def slurplist(fname, check=True, field=None, filterComments=False, valType=None, headers=False):
+    """ parse a file with one string per line and return as list"""
+    if fname==None:
+        return []
+    if fname=="stdin":
+        fh = sys.stdin
+    else:
+        fh = open(fname, "r")
+    list = []
+    if headers:
+        fh.readline()
+    for l in fh:
+        l = l.strip()
+        if filterComments and l.startswith("#"):
+            continue
+        if len(l)==0:
+            continue
+
+        if check and l in list:
+            sys.stderr.write("tabfile.py/slurplist: file=%s, duplicate key = %s, exiting\n" % (fname, l))
+            sys.exit(1)
+
+        if field==None:
+            value = l
+        else:
+            value = l.split()[field]
+
+        if valType:
+            value = valType(value)
+
+        list.append(value)
+    return list
+        
+def slurpdict(fname, comments=False, valField=1, doNotCheckLen=False, asFloat=False, otherFields=False, asInt=False, headers=False, keyAsInt=False, quiet=False):
+    """ parse file with key -> value pair on each line, key/value has 1:1 relationship"""
+    """ last field: set valField==-1, return as a dictionary key -> value """
+    if fname==None or fname=="":
+        return {}
+    dict = {}
+    f = openSpec(fname)
+    if not f:
+        return dict
+
+    if headers:
+        headers = f.readline()
+    for l in f:
+        fs = l.strip().split("\t")
+        if comments and l.startswith("#"):
+            continue
+        if not len(fs)>1:
+            if not doNotCheckLen:
+                if not quiet:
+                    sys.stderr.write("info: not enough fields, ignoring line %s\n" % l)
+                continue
+            else:
+                key = fs[0]
+                val = None
+        else:
+            key = fs[0]
+
+            if keyAsInt:
+                key = int(key)
+
+            if not otherFields:
+                val = fs[valField]
+            else:
+                val = fs[1:]
+            
+            if asFloat:
+                val = float(val)
+            elif asInt:
+                val = int(val)
+        if key not in dict:
+            dict[key] = val
+        else:
+            if not quiet:
+                sys.stderr.write("info: file %s, hit key %s two times: %s -> %s\n" %(fname, key, key, val))
+    return dict
+
 # ----------- MAIN --------------
 field = options.field
 otherField = options.otherField
@@ -31,11 +121,11 @@ otherField = options.otherField
 f1 = args[0]
 otherFiles = args[1:]
 
-list1 = tabfile.slurplist(f1, check=False, field=field)
+list1 = slurplist(f1, check=False, field=field)
 set1 = set (list1)
 
 for f2 in otherFiles:
-    list2 = tabfile.slurplist(f2, check=False, field=otherField)
+    list2 = slurplist(f2, check=False, field=otherField)
     list2 = [e for e in list2 if not e.startswith("#")]
     set2 = set (list2)
     set1 = set1.difference(set2)
